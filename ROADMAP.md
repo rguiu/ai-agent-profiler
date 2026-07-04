@@ -29,10 +29,10 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 
 ### M2 — Raw capture
 
-- [ ] Async tee → per-session NDJSON trace files; never blocks the client stream.
-- [ ] Session/request IDs derived from the URL; unattributed-session fallback.
-- [ ] Redaction of `authorization` / `x-api-key` before persistence.
-- [ ] SQLite index: session/request/response rows with trace pointers + timing.
+- [x] Async tee → per-session NDJSON trace files; never blocks the client stream.
+- [x] Session/request IDs derived from the URL; unattributed-session fallback.
+- [x] Redaction of `authorization` / `x-api-key` before persistence.
+- [x] SQLite index: session + request rows with trace pointers + timing (detailed response parsing lands in M3).
 
 **Done when:** every request in a session is captured with zero data loss versus the raw stream.
 

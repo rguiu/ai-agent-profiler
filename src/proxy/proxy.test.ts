@@ -48,6 +48,7 @@ async function startStack(): Promise<{ proxyPort: number }> {
   const config: Config = {
     server: { port: 0, host: "127.0.0.1" },
     sessions: { idleTimeoutMs: 300_000 },
+    storage: { dir: "data" },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
   };

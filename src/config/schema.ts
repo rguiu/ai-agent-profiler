@@ -13,9 +13,14 @@ export const sessionsSchema = z.object({
   idleTimeoutMs: z.number().int().positive().default(300_000),
 });
 
+export const storageSchema = z.object({
+  dir: z.string().default("data"),
+});
+
 export const configSchema = z.object({
   server: serverSchema.prefault({}),
   sessions: sessionsSchema.prefault({}),
+  storage: storageSchema.prefault({}),
   providers: z
     .record(z.string(), providerSchema)
     .refine((p) => Object.keys(p).length > 0, {

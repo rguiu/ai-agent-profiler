@@ -3,6 +3,7 @@ notes/
 
 # Runtime capture data
 traces/
+data/
 data.sqlite
 data.sqlite-*
 *.sqlite

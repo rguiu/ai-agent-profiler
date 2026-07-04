@@ -4,7 +4,9 @@ import http, {
   type ServerResponse,
 } from "node:http";
 import https from "node:https";
+import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
+import type { Capture, RequestTrace } from "../capture/index.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import { parseRoute } from "./route.js";
 
@@ -22,10 +24,11 @@ const HOP_BY_HOP: ReadonlySet<string> = new Set([
 export function createProxyServer(
   config: Config,
   registry: SessionRegistry,
+  capture?: Capture,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
   return http.createServer((req, res) => {
-    handle(req, res, config, providers, registry);
+    handle(req, res, config, providers, registry, capture);
   });
 }
 
@@ -35,13 +38,14 @@ function handle(
   config: Config,
   providers: ReadonlySet<string>,
   registry: SessionRegistry,
+  capture?: Capture,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
   const pathname = queryStart === -1 ? rawUrl : rawUrl.slice(0, queryStart);
   const search = queryStart === -1 ? "" : rawUrl.slice(queryStart);
 
-  if (handleControl(req, res, pathname, registry)) return;
+  if (handleControl(req, res, pathname, registry, capture)) return;
 
   const route = parseRoute(pathname, providers);
   if (!route) {
@@ -55,7 +59,22 @@ function handle(
     return;
   }
 
-  forward(req, res, provider.upstream, route.upstreamPath + search);
+  let trace: RequestTrace | undefined;
+  if (capture) {
+    const sessionId = route.sessionId ?? capture.nextUnattributedSession();
+    trace = capture.begin({
+      sessionId,
+      requestId: randomUUID(),
+      provider: route.provider,
+      method: req.method ?? "GET",
+      path: pathname + search,
+      httpVersion: req.httpVersion,
+      headers: req.headers,
+      startedAt: Date.now(),
+    });
+  }
+
+  forward(req, res, provider.upstream, route.upstreamPath + search, trace);
 }
 
 function handleControl(
@@ -63,6 +82,7 @@ function handleControl(
   res: ServerResponse,
   pathname: string,
   registry: SessionRegistry,
+  capture?: Capture,
 ): boolean {
   if (pathname === "/health") {
     sendJson(res, 200, { status: "ok" });
@@ -74,7 +94,7 @@ function handleControl(
       return true;
     }
     if (req.method === "POST") {
-      registerSession(req, res, registry);
+      registerSession(req, res, registry, capture);
       return true;
     }
   }
@@ -85,6 +105,7 @@ function registerSession(
   req: IncomingMessage,
   res: ServerResponse,
   registry: SessionRegistry,
+  capture?: Capture,
 ): void {
   let body = "";
   req.setEncoding("utf8");
@@ -103,13 +124,15 @@ function registerSession(
       sendError(res, 400, "session 'id' is required");
       return;
     }
-    registry.register({
+    const session: SessionInfo = {
       id: info.id,
       client: info.client,
       cwd: info.cwd,
       repo: info.repo ?? null,
       startedAt: info.startedAt ?? new Date().toISOString(),
-    });
+    };
+    registry.register(session);
+    capture?.upsertSession(session);
     sendJson(res, 200, { ok: true });
   });
 }
@@ -119,12 +142,15 @@ function forward(
   res: ServerResponse,
   upstream: string,
   pathWithQuery: string,
+  trace?: RequestTrace,
 ): void {
   let base: URL;
   try {
     base = new URL(upstream);
   } catch {
     sendError(res, 500, `Invalid upstream URL "${upstream}"`);
+    trace?.error("resolve", `Invalid upstream URL "${upstream}"`);
+    trace?.finish();
     return;
   }
 
@@ -135,6 +161,10 @@ function forward(
   const headers: OutgoingHttpHeaders = { ...req.headers };
   for (const name of HOP_BY_HOP) delete headers[name];
   headers["host"] = base.host;
+
+  if (trace) {
+    req.on("data", (chunk: Buffer) => trace.requestChunk(chunk));
+  }
 
   const transport = isHttps ? https : http;
   const upstreamReq = transport.request(
@@ -149,6 +179,14 @@ function forward(
     (upstreamRes) => {
       const outHeaders: OutgoingHttpHeaders = { ...upstreamRes.headers };
       for (const name of HOP_BY_HOP) delete outHeaders[name];
+      trace?.response(
+        upstreamRes.statusCode ?? 502,
+        upstreamRes.statusMessage,
+        upstreamRes.headers,
+      );
+      if (trace) {
+        upstreamRes.on("data", (chunk: Buffer) => trace.responseChunk(chunk));
+      }
       res.writeHead(
         upstreamRes.statusCode ?? 502,
         upstreamRes.statusMessage,
@@ -159,6 +197,7 @@ function forward(
   );
 
   upstreamReq.on("error", (err) => {
+    trace?.error("upstream", err.message);
     if (!res.headersSent) {
       sendError(res, 502, `Upstream request failed: ${err.message}`);
     } else {
@@ -166,8 +205,10 @@ function forward(
     }
   });
 
+  res.on("finish", () => trace?.finish());
   res.on("close", () => {
     if (!res.writableFinished) upstreamReq.destroy();
+    trace?.finish();
   });
 
   req.pipe(upstreamReq);

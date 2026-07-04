@@ -11,6 +11,10 @@ host = "127.0.0.1"
 # (only used for traffic that arrives without a launcher-assigned session id).
 idleTimeoutMs = 300000
 
+[storage]
+# Directory for the SQLite index (aap.sqlite) and raw NDJSON traces (traces/).
+dir = "data"
+
 # Provider routes. The request path prefix /<session_id>/<provider>/ selects one.
 [providers.anthropic]
 upstream = "https://api.anthropic.com"

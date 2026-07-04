@@ -4,6 +4,7 @@ export {
   providerSchema,
   serverSchema,
   sessionsSchema,
+  storageSchema,
   type Config,
   type ProviderConfig,
 } from "./schema.js";

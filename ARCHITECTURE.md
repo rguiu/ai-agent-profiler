@@ -86,7 +86,7 @@ The current focus is the **capture core**: reliably record raw, high-fidelity tr
 traces/<session_id>/<request_id>.ndjson
 ```
 
-Each line is one event, e.g. `request_meta`, `request_body`, `response_meta`, `sse_chunk`, `response_end`, `error`. Secrets are redacted before writing.
+Each line is one event: `request`, `request_body`, `response`, `response_body`, `error`, `end` (a terminal summary with status, latency, and byte totals). Secrets are redacted before writing.
 
 **SQLite index (derived, queryable).** Plain SQL, no ORM. Initial tables (to be refined in M2/M3):
 
