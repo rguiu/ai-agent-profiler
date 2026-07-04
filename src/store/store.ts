@@ -93,6 +93,97 @@ export interface MetricsRow {
   parsedAt: string;
 }
 
+export interface SessionSummary {
+  id: string;
+  client: string | null;
+  cwd: string | null;
+  repo: string | null;
+  started_at: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+  tool_calls: number;
+}
+
+export interface SessionRow {
+  id: string;
+  client: string | null;
+  cwd: string | null;
+  repo: string | null;
+  started_at: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+}
+
+export interface SessionRequest {
+  id: string;
+  provider: string;
+  method: string | null;
+  path: string | null;
+  status: number | null;
+  latency_ms: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  request_bytes: number | null;
+  response_bytes: number | null;
+  error: string | null;
+  format: string | null;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  stop_reason: string | null;
+  cost: number | null;
+  tool_call_count: number | null;
+}
+
+export interface SessionDetail {
+  session: SessionRow;
+  requests: SessionRequest[];
+}
+
+export interface ToolCall {
+  ordinal: number;
+  name: string;
+}
+
+export interface RequestDetail {
+  id: string;
+  session_id: string;
+  provider: string;
+  method: string | null;
+  path: string | null;
+  trace_file: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  status: number | null;
+  latency_ms: number | null;
+  request_bytes: number | null;
+  response_bytes: number | null;
+  error: string | null;
+  format: string | null;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  stop_reason: string | null;
+  streaming: number | null;
+  tool_call_count: number | null;
+  cost: number | null;
+  parsed_at: string | null;
+  toolCalls: ToolCall[];
+  events?: unknown[];
+}
+
+export interface Stats {
+  sessions: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+}
+
 export class Store {
   private readonly upsertSessionStmt;
   private readonly insertRequestStmt;
@@ -106,6 +197,12 @@ export class Store {
     requestId: string,
     names: readonly string[],
   ) => void;
+  private readonly listSessionsStmt;
+  private readonly getSessionStmt;
+  private readonly getSessionRequestsStmt;
+  private readonly getRequestStmt;
+  private readonly getToolCallsStmt;
+  private readonly statsStmt;
 
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
@@ -173,6 +270,51 @@ export class Store {
         });
       },
     );
+    this.listSessionsStmt = db.prepare(`
+      SELECT s.id, s.client, s.cwd, s.repo, s.started_at, s.first_seen_at, s.last_seen_at,
+             COUNT(r.id) AS request_count,
+             COALESCE(SUM(m.input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(m.cost), 0) AS cost,
+             COALESCE(SUM(m.tool_call_count), 0) AS tool_calls
+      FROM sessions s
+      LEFT JOIN requests r ON r.session_id = s.id
+      LEFT JOIN metrics m ON m.request_id = r.id
+      GROUP BY s.id
+      ORDER BY s.last_seen_at DESC
+    `);
+    this.getSessionStmt = db.prepare(`SELECT * FROM sessions WHERE id = ?`);
+    this.getSessionRequestsStmt = db.prepare(`
+      SELECT r.id, r.provider, r.method, r.path, r.status, r.latency_ms,
+             r.started_at, r.ended_at, r.request_bytes, r.response_bytes, r.error,
+             m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
+             m.cost, m.tool_call_count
+      FROM requests r
+      LEFT JOIN metrics m ON m.request_id = r.id
+      WHERE r.session_id = ?
+      ORDER BY r.started_at
+    `);
+    this.getRequestStmt = db.prepare(`
+      SELECT r.id, r.session_id, r.provider, r.method, r.path, r.trace_file,
+             r.started_at, r.ended_at, r.status, r.latency_ms,
+             r.request_bytes, r.response_bytes, r.error,
+             m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
+             m.streaming, m.tool_call_count, m.cost, m.parsed_at
+      FROM requests r
+      LEFT JOIN metrics m ON m.request_id = r.id
+      WHERE r.id = ?
+    `);
+    this.getToolCallsStmt = db.prepare(
+      `SELECT ordinal, name FROM tool_calls WHERE request_id = ? ORDER BY ordinal`,
+    );
+    this.statsStmt = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM sessions) AS sessions,
+        (SELECT COUNT(*) FROM requests) AS requests,
+        COALESCE((SELECT SUM(input_tokens) FROM metrics), 0) AS input_tokens,
+        COALESCE((SELECT SUM(output_tokens) FROM metrics), 0) AS output_tokens,
+        COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost
+    `);
   }
 
   upsertSession(info: SessionInfo): void {
@@ -232,6 +374,29 @@ export class Store {
 
   replaceToolCalls(requestId: string, names: readonly string[]): void {
     this.replaceToolCallsTxn(requestId, names);
+  }
+
+  listSessions(): SessionSummary[] {
+    return this.listSessionsStmt.all() as SessionSummary[];
+  }
+
+  getSession(id: string): SessionDetail | undefined {
+    const session = this.getSessionStmt.get(id) as SessionRow | undefined;
+    if (!session) return undefined;
+    const requests = this.getSessionRequestsStmt.all(id) as SessionRequest[];
+    return { session, requests };
+  }
+
+  getRequest(id: string): RequestDetail | undefined {
+    const row = this.getRequestStmt.get(id) as
+      Omit<RequestDetail, "toolCalls" | "events"> | undefined;
+    if (!row) return undefined;
+    const toolCalls = this.getToolCallsStmt.all(id) as ToolCall[];
+    return { ...row, toolCalls };
+  }
+
+  stats(): Stats {
+    return this.statsStmt.get() as Stats;
   }
 
   close(): void {

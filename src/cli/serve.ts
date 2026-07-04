@@ -13,7 +13,7 @@ export function serve(): void {
     config.storage.dir,
     config.sessions.idleTimeoutMs,
   );
-  const server = createProxyServer(config, registry, capture);
+  const server = createProxyServer(config, registry, capture, store);
 
   server.listen(config.server.port, config.server.host, () => {
     console.log(

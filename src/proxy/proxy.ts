@@ -7,7 +7,9 @@ import https from "node:https";
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
 import type { Capture, RequestTrace } from "../capture/index.js";
+import { handleApi } from "../api/index.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
+import type { Store } from "../store/index.js";
 import { parseRoute } from "./route.js";
 
 const HOP_BY_HOP: ReadonlySet<string> = new Set([
@@ -25,10 +27,11 @@ export function createProxyServer(
   config: Config,
   registry: SessionRegistry,
   capture?: Capture,
+  store?: Store,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
   return http.createServer((req, res) => {
-    handle(req, res, config, providers, registry, capture);
+    handle(req, res, config, providers, registry, capture, store);
   });
 }
 
@@ -39,6 +42,7 @@ function handle(
   providers: ReadonlySet<string>,
   registry: SessionRegistry,
   capture?: Capture,
+  store?: Store,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
@@ -46,6 +50,7 @@ function handle(
   const search = queryStart === -1 ? "" : rawUrl.slice(queryStart);
 
   if (handleControl(req, res, pathname, registry, capture)) return;
+  if (store && handleApi(req, res, pathname, store)) return;
 
   const route = parseRoute(pathname, providers);
   if (!route) {

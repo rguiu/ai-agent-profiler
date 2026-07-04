@@ -5,4 +5,11 @@ export {
   type RequestFinish,
   type ParseTarget,
   type MetricsRow,
+  type SessionSummary,
+  type SessionRow,
+  type SessionRequest,
+  type SessionDetail,
+  type RequestDetail,
+  type ToolCall,
+  type Stats,
 } from "./store.js";

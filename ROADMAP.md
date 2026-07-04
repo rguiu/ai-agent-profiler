@@ -46,8 +46,8 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 
 ### M4 — Minimal read surface
 
-- [ ] `GET /health`, `GET /sessions`, `GET /sessions/:id`.
-- [ ] Enough to inspect captured data and validate the schema.
+- [x] `GET /health`, `GET /sessions`, `GET /sessions/:id`, `GET /requests/:id` (`?events=1` for raw trace events), `GET /stats`.
+- [x] Enough to inspect captured data and validate the schema.
 
 **Done when:** captured sessions can be listed and inspected via the API.
 

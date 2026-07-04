@@ -37,11 +37,23 @@ _Not yet available — the project is in early development._
 
 ## Usage
 
-_Coming with M1._ Planned:
+Copy `config.example.toml` to `config.toml`, then:
 
 ```
-aap serve            # start the proxy
-aap run <agent>      # launch an agent through the profiler
+aap serve            # start the proxy (also serves the read API)
+aap run <agent>      # launch an agent through the profiler (e.g. aap run claude)
+aap parse [--all]    # derive token/cost/tool metrics from captured traces
+aap config           # print the resolved configuration
+```
+
+Inspect captured data over HTTP (same port as the proxy):
+
+```
+GET /stats                     # totals: sessions, requests, tokens, cost
+GET /sessions                  # sessions with rolled-up metrics
+GET /sessions/:id              # session detail with its requests
+GET /requests/:id?events=1     # request detail + raw trace events
+GET /health
 ```
 
 ## Documentation
