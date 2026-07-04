@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import { configSchema, type Config } from "./schema.js";
@@ -7,16 +9,41 @@ export class ConfigError extends Error {
   override name = "ConfigError";
 }
 
+export function configCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): string[] {
+  if (env.AAP_CONFIG) return [env.AAP_CONFIG];
+  const configHome =
+    env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.length > 0
+      ? env.XDG_CONFIG_HOME
+      : join(homedir(), ".config");
+  return [join(configHome, "aap", "config.toml"), join(cwd, "config.toml")];
+}
+
 export function resolveConfigPath(
   env: NodeJS.ProcessEnv = process.env,
-): string {
-  return env.AAP_CONFIG ?? "config.toml";
+  cwd: string = process.cwd(),
+): string | null {
+  const candidates = configCandidates(env, cwd);
+  if (env.AAP_CONFIG) return candidates[0] ?? null;
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 export function loadConfig(
-  path: string = resolveConfigPath(),
+  pathArg?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Config {
+  const path = pathArg ?? resolveConfigPath(env);
+  if (path === null) {
+    const looked = configCandidates(env)
+      .map((candidate) => `  - ${candidate}`)
+      .join("\n");
+    throw new ConfigError(
+      `No config file found. Looked in:\n${looked}\n\nCreate one from config.example.toml (e.g. ~/.config/aap/config.toml) or set AAP_CONFIG.`,
+    );
+  }
+
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");

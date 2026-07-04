@@ -1,4 +1,9 @@
-export { loadConfig, resolveConfigPath, ConfigError } from "./load.js";
+export {
+  loadConfig,
+  resolveConfigPath,
+  configCandidates,
+  ConfigError,
+} from "./load.js";
 export {
   configSchema,
   providerSchema,

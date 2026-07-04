@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, loadConfig } from "./index.js";
+import {
+  ConfigError,
+  configCandidates,
+  loadConfig,
+  resolveConfigPath,
+} from "./index.js";
 
 const created: string[] = [];
 
@@ -72,5 +77,58 @@ upstream = "not-a-url"
     expect(() => loadConfig(writeConfig(`this is = = not toml`), {})).toThrow(
       ConfigError,
     );
+  });
+});
+
+describe("config resolution", () => {
+  it("uses AAP_CONFIG exclusively when set", () => {
+    expect(configCandidates({ AAP_CONFIG: "/custom.toml" }, "/cwd")).toEqual([
+      "/custom.toml",
+    ]);
+  });
+
+  it("prefers the XDG config home, then cwd", () => {
+    expect(configCandidates({ XDG_CONFIG_HOME: "/xdg" }, "/project")).toEqual([
+      "/xdg/aap/config.toml",
+      "/project/config.toml",
+    ]);
+  });
+
+  it("resolves the global config regardless of cwd", () => {
+    const home = mkdtempSync(join(tmpdir(), "aap-home-"));
+    created.push(home);
+    mkdirSync(join(home, "aap"), { recursive: true });
+    const global = join(home, "aap", "config.toml");
+    writeFileSync(global, MINIMAL);
+    const emptyCwd = mkdtempSync(join(tmpdir(), "aap-cwd-"));
+    created.push(emptyCwd);
+
+    expect(resolveConfigPath({ XDG_CONFIG_HOME: home }, emptyCwd)).toBe(global);
+  });
+
+  it("returns null when no config exists", () => {
+    const emptyHome = mkdtempSync(join(tmpdir(), "aap-home-"));
+    created.push(emptyHome);
+    const emptyCwd = mkdtempSync(join(tmpdir(), "aap-cwd-"));
+    created.push(emptyCwd);
+    expect(
+      resolveConfigPath({ XDG_CONFIG_HOME: emptyHome }, emptyCwd),
+    ).toBeNull();
+  });
+
+  it("loadConfig throws a helpful error when nothing is found", () => {
+    const emptyHome = mkdtempSync(join(tmpdir(), "aap-home-"));
+    created.push(emptyHome);
+    const emptyCwd = mkdtempSync(join(tmpdir(), "aap-cwd-"));
+    created.push(emptyCwd);
+    const original = process.cwd();
+    process.chdir(emptyCwd);
+    try {
+      expect(() =>
+        loadConfig(undefined, { XDG_CONFIG_HOME: emptyHome }),
+      ).toThrow(/No config file found/);
+    } finally {
+      process.chdir(original);
+    }
   });
 });
