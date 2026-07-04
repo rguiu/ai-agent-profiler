@@ -121,9 +121,9 @@ upstream = "https://api.anthropic.com"
 [providers.openai]
 upstream = "https://api.openai.com"
 
-[pricing.anthropic."claude-...".]
-input_per_mtok  = 0.0
-output_per_mtok = 0.0
+[pricing."claude-3-5-sonnet-20241022"]
+inputPerMTok  = 3.0
+outputPerMTok = 15.0
 ```
 
 Pricing is never hardcoded in source.
@@ -135,6 +135,38 @@ Pricing is never hardcoded in source.
 - Localhost binding only. No telemetry, no cloud dependency.
 - `authorization` and `x-api-key` headers are redacted before any trace is persisted.
 - Config files that may hold secrets are gitignored.
+
+---
+
+## Custom metadata (designed, not yet built)
+
+External tools (e.g. Armada, benchmark harnesses) may want to tag captured traffic with
+their own context — run id, task id, node name, experiment label. The design below keeps
+that metadata **for the profiler only**: it is recorded but **never forwarded to the LLM**,
+so it stays behaviour-neutral.
+
+Two channels, to be added when there is a concrete integration:
+
+1. **Session-level metadata — via the control API (agent-independent, preferred).**
+   Extend `POST /_control/sessions` to accept an arbitrary `meta` map:
+
+   ```
+   POST /_control/sessions
+   { "id": "<session>", "meta": { "armada_node": "n3", "task_id": "t42", "run_id": "r7" } }
+   ```
+
+   `aap run` would populate it from `--meta key=value` flags and selected env vars (e.g.
+   `ARMADA_NODE_NAME`). This is a pure side channel to the proxy — it never touches provider
+   traffic — so it works regardless of what the agent supports.
+
+2. **Per-request metadata — via reserved `x-aap-*` headers (captured, then stripped).**
+   The client sets headers under a reserved prefix; the proxy records them as request
+   metadata and **strips all `x-aap-*` headers before forwarding upstream** (same mechanism
+   as the hop-by-hop strip list). _Caveat:_ depends on the agent being able to inject custom
+   outbound headers — unverified for Claude Code / Opencode, so channel 1 leads.
+
+**Storage:** a `meta` JSON column on `sessions` (and later `requests`), queryable via SQLite
+`json_extract`. Flexible and consistent with "record raw, derive later".
 
 ---
 
