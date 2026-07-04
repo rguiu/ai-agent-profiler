@@ -1,6 +1,6 @@
 import { FileCapture } from "../capture/index.js";
 import { loadConfig } from "../config/index.js";
-import { createProxyServer } from "../proxy/index.js";
+import { consoleRequestLogger, createProxyServer } from "../proxy/index.js";
 import { SessionRegistry } from "../session/index.js";
 import { openStore } from "../store/index.js";
 
@@ -13,7 +13,13 @@ export function serve(): void {
     config.storage.dir,
     config.sessions.idleTimeoutMs,
   );
-  const server = createProxyServer(config, registry, capture, store);
+  const server = createProxyServer(
+    config,
+    registry,
+    capture,
+    store,
+    consoleRequestLogger(),
+  );
 
   server.listen(config.server.port, config.server.host, () => {
     console.log(

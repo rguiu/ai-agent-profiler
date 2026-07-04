@@ -10,6 +10,7 @@ import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
+import type { RequestLogEntry, RequestLogger } from "./log.js";
 import { parseRoute } from "./route.js";
 
 const HOP_BY_HOP: ReadonlySet<string> = new Set([
@@ -28,10 +29,11 @@ export function createProxyServer(
   registry: SessionRegistry,
   capture?: Capture,
   store?: Store,
+  logger?: RequestLogger,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
   return http.createServer((req, res) => {
-    handle(req, res, config, providers, registry, capture, store);
+    handle(req, res, config, providers, registry, capture, store, logger);
   });
 }
 
@@ -43,6 +45,7 @@ function handle(
   registry: SessionRegistry,
   capture?: Capture,
   store?: Store,
+  logger?: RequestLogger,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
@@ -64,6 +67,8 @@ function handle(
     return;
   }
 
+  const method = req.method ?? "GET";
+
   let trace: RequestTrace | undefined;
   if (capture) {
     const sessionId = route.sessionId ?? capture.nextUnattributedSession();
@@ -71,7 +76,7 @@ function handle(
       sessionId,
       requestId: randomUUID(),
       provider: route.provider,
-      method: req.method ?? "GET",
+      method,
       path: pathname + search,
       httpVersion: req.httpVersion,
       headers: req.headers,
@@ -79,7 +84,16 @@ function handle(
     });
   }
 
-  forward(req, res, provider.upstream, route.upstreamPath + search, trace);
+  forward(req, res, provider.upstream, route.upstreamPath + search, {
+    trace,
+    logger,
+    meta: {
+      sessionId: route.sessionId,
+      provider: route.provider,
+      method,
+      path: route.upstreamPath,
+    },
+  });
 }
 
 function handleControl(
@@ -142,20 +156,50 @@ function registerSession(
   });
 }
 
+interface ForwardObs {
+  trace?: RequestTrace;
+  logger?: RequestLogger;
+  meta: Omit<
+    RequestLogEntry,
+    "status" | "latencyMs" | "responseBytes" | "error"
+  >;
+}
+
 function forward(
   req: IncomingMessage,
   res: ServerResponse,
   upstream: string,
   pathWithQuery: string,
-  trace?: RequestTrace,
+  obs: ForwardObs,
 ): void {
+  const { trace, logger, meta } = obs;
+  const startedAt = Date.now();
+  let status: number | null = null;
+  let responseBytes = 0;
+  let errorMessage: string | undefined;
+  let logged = false;
+
+  const emitLog = (): void => {
+    if (!logger || logged) return;
+    logged = true;
+    logger({
+      ...meta,
+      status,
+      latencyMs: Date.now() - startedAt,
+      responseBytes,
+      error: errorMessage,
+    });
+  };
+
   let base: URL;
   try {
     base = new URL(upstream);
   } catch {
-    sendError(res, 500, `Invalid upstream URL "${upstream}"`);
-    trace?.error("resolve", `Invalid upstream URL "${upstream}"`);
+    errorMessage = `Invalid upstream URL "${upstream}"`;
+    sendError(res, 500, errorMessage);
+    trace?.error("resolve", errorMessage);
     trace?.finish();
+    emitLog();
     return;
   }
 
@@ -182,26 +226,21 @@ function forward(
       headers,
     },
     (upstreamRes) => {
+      status = upstreamRes.statusCode ?? 502;
       const outHeaders: OutgoingHttpHeaders = { ...upstreamRes.headers };
       for (const name of HOP_BY_HOP) delete outHeaders[name];
-      trace?.response(
-        upstreamRes.statusCode ?? 502,
-        upstreamRes.statusMessage,
-        upstreamRes.headers,
-      );
-      if (trace) {
-        upstreamRes.on("data", (chunk: Buffer) => trace.responseChunk(chunk));
-      }
-      res.writeHead(
-        upstreamRes.statusCode ?? 502,
-        upstreamRes.statusMessage,
-        outHeaders,
-      );
+      trace?.response(status, upstreamRes.statusMessage, upstreamRes.headers);
+      upstreamRes.on("data", (chunk: Buffer) => {
+        responseBytes += chunk.length;
+        trace?.responseChunk(chunk);
+      });
+      res.writeHead(status, upstreamRes.statusMessage, outHeaders);
       upstreamRes.pipe(res);
     },
   );
 
   upstreamReq.on("error", (err) => {
+    errorMessage = err.message;
     trace?.error("upstream", err.message);
     if (!res.headersSent) {
       sendError(res, 502, `Upstream request failed: ${err.message}`);
@@ -210,10 +249,14 @@ function forward(
     }
   });
 
-  res.on("finish", () => trace?.finish());
+  res.on("finish", () => {
+    trace?.finish();
+    emitLog();
+  });
   res.on("close", () => {
     if (!res.writableFinished) upstreamReq.destroy();
     trace?.finish();
+    emitLog();
   });
 
   req.pipe(upstreamReq);

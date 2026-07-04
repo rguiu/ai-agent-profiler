@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import type { Config } from "../config/index.js";
 import { SessionRegistry } from "../session/index.js";
 import { createProxyServer } from "./index.js";
+import type { RequestLogEntry } from "./index.js";
 
 const servers: http.Server[] = [];
 
@@ -40,7 +41,9 @@ const upstreamHandler: http.RequestListener = (req, res) => {
   res.end("nope");
 };
 
-async function startStack(): Promise<{ proxyPort: number }> {
+async function startStack(
+  logger?: (entry: RequestLogEntry) => void,
+): Promise<{ proxyPort: number }> {
   const upstream = http.createServer(upstreamHandler);
   const upstreamPort = await listen(upstream);
   servers.push(upstream);
@@ -52,7 +55,13 @@ async function startStack(): Promise<{ proxyPort: number }> {
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
   };
-  const proxy = createProxyServer(config, new SessionRegistry());
+  const proxy = createProxyServer(
+    config,
+    new SessionRegistry(),
+    undefined,
+    undefined,
+    logger,
+  );
   const proxyPort = await listen(proxy);
   servers.push(proxy);
   return { proxyPort };
@@ -99,6 +108,28 @@ describe("proxy passthrough", () => {
     const { proxyPort } = await startStack();
     const res = await fetch(`http://127.0.0.1:${proxyPort}/sess/nope/echo`);
     expect(res.status).toBe(404);
+  });
+
+  it("reports each request to the logger", async () => {
+    const entries: RequestLogEntry[] = [];
+    const { proxyPort } = await startStack((e) => entries.push(e));
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/sess-1/test/echo`, {
+        method: "POST",
+        body: "hello",
+      })
+    ).text();
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(entries).toHaveLength(1);
+    const entry = entries[0];
+    expect(entry?.sessionId).toBe("sess-1");
+    expect(entry?.provider).toBe("test");
+    expect(entry?.method).toBe("POST");
+    expect(entry?.path).toBe("/echo");
+    expect(entry?.status).toBe(200);
+    expect(entry?.responseBytes).toBeGreaterThan(0);
+    expect(entry?.latencyMs).toBeGreaterThanOrEqual(0);
   });
 });
 
