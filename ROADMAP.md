@@ -38,11 +38,11 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 
 ### M3 — Off-hot-path parsing & metrics
 
-- [ ] Parser worker extracts model, token usage, stop reason, tool calls from raw traces → SQLite.
-- [ ] Cost estimation from the pricing config.
-- [ ] Integrity check: index is reproducible from traces.
+- [x] `aap parse` extracts model, token usage, stop reason, and tool calls from raw traces → SQLite (`metrics`, `tool_calls`). Anthropic + OpenAI, streaming and non-streaming, gzip/br decoding.
+- [x] Cost estimation from the pricing config.
+- [x] Re-runnable and idempotent (keyed by `request_id`); `--all` reparses everything. Metrics are always reproducible from the raw traces.
 
-**Done when:** per-request and per-session token/cost/tool metrics are queryable and match the raw traces.
+**Done when:** per-request token/cost/tool metrics are queryable and match the raw traces.
 
 ### M4 — Minimal read surface
 

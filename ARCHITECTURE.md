@@ -88,16 +88,21 @@ traces/<session_id>/<request_id>.ndjson
 
 Each line is one event: `request`, `request_body`, `response`, `response_body`, `error`, `end` (a terminal summary with status, latency, and byte totals). Secrets are redacted before writing.
 
-**SQLite index (derived, queryable).** Plain SQL, no ORM. Initial tables (to be refined in M2/M3):
+**SQLite index (derived, queryable).** Plain SQL, no ORM. Current tables:
 
 ```
-sessions   (id, client, provider, model, cwd, repo, started_at, ended_at)
-requests   (id, session_id, provider, path, trace_file, byte_offset, started_at, ...)
-responses  (id, request_id, status, stop_reason, latency_ms, trace_offset, ...)
-tool_calls (id, request_id, name, args_ref, ordinal)
-metrics    (request_id, input_tokens, output_tokens, cost, ...)
+sessions   (id, client, cwd, repo, started_at, first_seen_at, last_seen_at)
+requests   (id, session_id, provider, method, path, trace_file,
+            started_at, ended_at, status, latency_ms,
+            request_bytes, response_bytes, error)
+metrics    (request_id, format, model, input_tokens, output_tokens,
+            stop_reason, streaming, tool_call_count, cost, parsed_at)
+tool_calls (id, request_id, ordinal, name)
 ```
 
+`requests` is written on the hot path during capture (M2). `metrics` and
+`tool_calls` are derived off the hot path by `aap parse` (M3), which reads the
+raw traces and is fully re-runnable and idempotent (keyed by `request_id`).
 The SQLite index can always be rebuilt from the raw traces. Traces are authoritative.
 
 ---

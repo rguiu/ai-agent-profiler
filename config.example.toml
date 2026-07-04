@@ -22,6 +22,8 @@ upstream = "https://api.anthropic.com"
 [providers.openai]
 upstream = "https://api.openai.com"
 
-# Pricing tables live here (never hardcoded in source). Shape is refined in M3.
-# [pricing.anthropic]
-# ...
+# Pricing tables (never hardcoded in source). Keyed by model name; rates are
+# per million tokens. Used by `aap parse` to estimate cost.
+# [pricing."claude-3-5-sonnet-20241022"]
+# inputPerMTok = 3.0
+# outputPerMTok = 15.0

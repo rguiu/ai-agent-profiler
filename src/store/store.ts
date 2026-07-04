@@ -32,6 +32,28 @@ CREATE TABLE IF NOT EXISTS requests (
 
 CREATE INDEX IF NOT EXISTS idx_requests_session ON requests (session_id);
 CREATE INDEX IF NOT EXISTS idx_requests_started ON requests (started_at);
+
+CREATE TABLE IF NOT EXISTS metrics (
+  request_id      TEXT PRIMARY KEY,
+  format          TEXT,
+  model           TEXT,
+  input_tokens    INTEGER,
+  output_tokens   INTEGER,
+  stop_reason     TEXT,
+  streaming       INTEGER,
+  tool_call_count INTEGER,
+  cost            REAL,
+  parsed_at       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tool_calls (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id TEXT NOT NULL,
+  ordinal    INTEGER NOT NULL,
+  name       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls (request_id);
 `;
 
 export interface RequestRow {
@@ -53,10 +75,37 @@ export interface RequestFinish {
   error: string | null;
 }
 
+export interface ParseTarget {
+  id: string;
+  trace_file: string;
+}
+
+export interface MetricsRow {
+  requestId: string;
+  format: string;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  stopReason: string | null;
+  streaming: number;
+  toolCallCount: number;
+  cost: number | null;
+  parsedAt: string;
+}
+
 export class Store {
   private readonly upsertSessionStmt;
   private readonly insertRequestStmt;
   private readonly finishRequestStmt;
+  private readonly allTargetsStmt;
+  private readonly pendingTargetsStmt;
+  private readonly upsertMetricsStmt;
+  private readonly deleteToolCallsStmt;
+  private readonly insertToolCallStmt;
+  private readonly replaceToolCallsTxn: (
+    requestId: string,
+    names: readonly string[],
+  ) => void;
 
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
@@ -83,6 +132,47 @@ export class Store {
         error          = @error
       WHERE id = @id
     `);
+    this.allTargetsStmt = db.prepare(`
+      SELECT id, trace_file FROM requests WHERE trace_file IS NOT NULL
+    `);
+    this.pendingTargetsStmt = db.prepare(`
+      SELECT r.id, r.trace_file FROM requests r
+      LEFT JOIN metrics m ON m.request_id = r.id
+      WHERE m.request_id IS NULL
+        AND r.trace_file IS NOT NULL
+        AND r.ended_at IS NOT NULL
+    `);
+    this.upsertMetricsStmt = db.prepare(`
+      INSERT INTO metrics (request_id, format, model, input_tokens, output_tokens,
+                           stop_reason, streaming, tool_call_count, cost, parsed_at)
+      VALUES (@request_id, @format, @model, @input_tokens, @output_tokens,
+              @stop_reason, @streaming, @tool_call_count, @cost, @parsed_at)
+      ON CONFLICT(request_id) DO UPDATE SET
+        format          = excluded.format,
+        model           = excluded.model,
+        input_tokens    = excluded.input_tokens,
+        output_tokens   = excluded.output_tokens,
+        stop_reason     = excluded.stop_reason,
+        streaming       = excluded.streaming,
+        tool_call_count = excluded.tool_call_count,
+        cost            = excluded.cost,
+        parsed_at       = excluded.parsed_at
+    `);
+    this.deleteToolCallsStmt = db.prepare(
+      `DELETE FROM tool_calls WHERE request_id = ?`,
+    );
+    this.insertToolCallStmt = db.prepare(`
+      INSERT INTO tool_calls (request_id, ordinal, name)
+      VALUES (@request_id, @ordinal, @name)
+    `);
+    this.replaceToolCallsTxn = db.transaction(
+      (requestId: string, names: readonly string[]) => {
+        this.deleteToolCallsStmt.run(requestId);
+        names.forEach((name, ordinal) => {
+          this.insertToolCallStmt.run({ request_id: requestId, ordinal, name });
+        });
+      },
+    );
   }
 
   upsertSession(info: SessionInfo): void {
@@ -118,6 +208,30 @@ export class Store {
       ended_at: finish.endedAt,
       error: finish.error,
     });
+  }
+
+  requestsToParse(all: boolean): ParseTarget[] {
+    const stmt = all ? this.allTargetsStmt : this.pendingTargetsStmt;
+    return stmt.all() as ParseTarget[];
+  }
+
+  upsertMetrics(row: MetricsRow): void {
+    this.upsertMetricsStmt.run({
+      request_id: row.requestId,
+      format: row.format,
+      model: row.model,
+      input_tokens: row.inputTokens,
+      output_tokens: row.outputTokens,
+      stop_reason: row.stopReason,
+      streaming: row.streaming,
+      tool_call_count: row.toolCallCount,
+      cost: row.cost,
+      parsed_at: row.parsedAt,
+    });
+  }
+
+  replaceToolCalls(requestId: string, names: readonly string[]): void {
+    this.replaceToolCallsTxn(requestId, names);
   }
 
   close(): void {

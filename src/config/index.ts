@@ -5,6 +5,8 @@ export {
   serverSchema,
   sessionsSchema,
   storageSchema,
+  modelPricingSchema,
   type Config,
   type ProviderConfig,
+  type ModelPricing,
 } from "./schema.js";

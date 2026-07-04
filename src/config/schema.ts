@@ -17,6 +17,11 @@ export const storageSchema = z.object({
   dir: z.string().default("data"),
 });
 
+export const modelPricingSchema = z.object({
+  inputPerMTok: z.number().nonnegative(),
+  outputPerMTok: z.number().nonnegative(),
+});
+
 export const configSchema = z.object({
   server: serverSchema.prefault({}),
   sessions: sessionsSchema.prefault({}),
@@ -26,8 +31,9 @@ export const configSchema = z.object({
     .refine((p) => Object.keys(p).length > 0, {
       message: "at least one provider must be configured",
     }),
-  pricing: z.record(z.string(), z.unknown()).default({}),
+  pricing: z.record(z.string(), modelPricingSchema).default({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
 export type ProviderConfig = z.infer<typeof providerSchema>;
+export type ModelPricing = z.infer<typeof modelPricingSchema>;
