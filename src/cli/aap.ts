@@ -1,26 +1,27 @@
 #!/usr/bin/env node
 import { ConfigError, loadConfig } from "../config/index.js";
+import { run } from "./run.js";
+import { serve } from "./serve.js";
 
 function printHelp(): void {
   console.log(`aap — AI Agent Profiler
 
 Usage:
-  aap serve            Start the profiler proxy (planned: M1)
-  aap run <agent>      Launch an agent through the profiler (planned: M1)
+  aap serve            Start the profiler proxy
+  aap run <agent>      Launch an agent through the profiler
   aap config           Print the resolved configuration
   aap help             Show this help
 `);
 }
 
-function main(argv: string[]): void {
+async function main(argv: string[]): Promise<void> {
   const command = argv[0];
   switch (command) {
     case "serve":
+      serve();
+      return;
     case "run":
-      console.error(
-        `"aap ${command}" is not implemented yet (planned for M1).`,
-      );
-      process.exitCode = 1;
+      await run(argv.slice(1));
       return;
     case "config":
       console.log(JSON.stringify(loadConfig(), null, 2));
@@ -38,13 +39,11 @@ function main(argv: string[]): void {
   }
 }
 
-try {
-  main(process.argv.slice(2));
-} catch (err) {
+main(process.argv.slice(2)).catch((err: unknown) => {
   if (err instanceof ConfigError) {
     console.error(err.message);
-    process.exitCode = 1;
   } else {
-    throw err;
+    console.error(err);
   }
-}
+  process.exitCode = 1;
+});

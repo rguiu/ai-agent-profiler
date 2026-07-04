@@ -20,10 +20,10 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 
 ### M1 — Transparent passthrough + launcher
 
-- [ ] Single-port listener; path routing `/<session_id>/<provider>/...`.
-- [ ] Byte-faithful streaming passthrough (request + SSE response), unbuffered, correct headers/status/error propagation.
-- [ ] `aap serve` (start proxy) and `aap run <agent>` (wrapper: session_id + cwd/repo, set base URLs, exec agent).
-- [ ] **Validate** Claude Code and Opencode both work end-to-end through the prefixed base URL with zero behaviour change.
+- [x] Single-port listener; path routing `/<session_id>/<provider>/...`.
+- [x] Byte-faithful streaming passthrough (request + SSE response), unbuffered, correct headers/status/error propagation.
+- [x] `aap serve` (start proxy) and `aap run <agent>` (wrapper: session_id + cwd/repo, set base URLs, exec agent).
+- [ ] **Validate** Claude Code and Opencode both work end-to-end through the prefixed base URL with zero behaviour change (manual: needs the agents + provider credentials).
 
 **Done when:** a real Claude Code / Opencode session runs through the proxy indistinguishably from a direct connection.
 
