@@ -1,0 +1,23 @@
+# AI Agent Profiler configuration.
+# Copy to config.toml and edit. config.toml is gitignored (may hold overrides).
+# Ports and secrets can also be set via env vars (e.g. AAP_PORT, AAP_CONFIG).
+
+[server]
+port = 8080
+host = "127.0.0.1"
+
+[sessions]
+# Start a new "unattributed" session after this many ms of inactivity
+# (only used for traffic that arrives without a launcher-assigned session id).
+idleTimeoutMs = 300000
+
+# Provider routes. The request path prefix /<session_id>/<provider>/ selects one.
+[providers.anthropic]
+upstream = "https://api.anthropic.com"
+
+[providers.openai]
+upstream = "https://api.openai.com"
+
+# Pricing tables live here (never hardcoded in source). Shape is refined in M3.
+# [pricing.anthropic]
+# ...

@@ -1,0 +1,31 @@
+# Private seed / working notes (not part of the public repo)
+notes/
+
+# Runtime capture data
+traces/
+data.sqlite
+data.sqlite-*
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Local config with secrets/overrides
+config.toml
+config.local.*
+.env
+.env.*
+
+# Node
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+.pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

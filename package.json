@@ -1,0 +1,38 @@
+{
+  "name": "ai-agent-profiler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first, read-only profiler for AI coding agents.",
+  "bin": {
+    "aap": "dist/cli/aap.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli/aap.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "smol-toml": "^1.7.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.0",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.4",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.1",
+    "vitest": "^4.1.9"
+  }
+}
