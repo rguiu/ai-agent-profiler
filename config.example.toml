@@ -22,8 +22,16 @@ upstream = "https://api.anthropic.com"
 [providers.openai]
 upstream = "https://api.openai.com"
 
+# DeepSeek (OpenAI-compatible). `aap run opencode` auto-routes providers via
+# OPENCODE_CONFIG_CONTENT (base path defaults to /v1; set apiPath to override).
+[providers.deepseek]
+upstream = "https://api.deepseek.com"
+
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
-# per million tokens. Used by `aap parse` to estimate cost.
+# per million tokens. Used by `aap parse` to estimate cost. Check current prices.
 # [pricing."claude-3-5-sonnet-20241022"]
 # inputPerMTok = 3.0
 # outputPerMTok = 15.0
+# [pricing."deepseek-chat"]
+# inputPerMTok = 0.27
+# outputPerMTok = 1.10

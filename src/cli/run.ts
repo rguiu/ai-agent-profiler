@@ -1,12 +1,37 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { loadConfig } from "../config/index.js";
+import { loadConfig, type Config } from "../config/index.js";
 import type { SessionInfo } from "../session/index.js";
 
 const PROVIDER_ENV: Readonly<Record<string, string>> = {
   anthropic: "ANTHROPIC_BASE_URL",
   openai: "OPENAI_BASE_URL",
 };
+
+export function buildProviderEnv(
+  agent: string,
+  config: Pick<Config, "providers">,
+  origin: string,
+  sessionId: string,
+): Record<string, string> {
+  if (agent === "opencode") {
+    const provider: Record<string, { options: { baseURL: string } }> = {};
+    for (const [name, cfg] of Object.entries(config.providers)) {
+      const apiPath = cfg.apiPath ?? "/v1";
+      provider[name] = {
+        options: { baseURL: `${origin}/${sessionId}/${name}${apiPath}` },
+      };
+    }
+    return { OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider }) };
+  }
+
+  const env: Record<string, string> = {};
+  for (const name of Object.keys(config.providers)) {
+    const varName = PROVIDER_ENV[name];
+    if (varName) env[varName] = `${origin}/${sessionId}/${name}`;
+  }
+  return env;
+}
 
 export async function run(args: string[]): Promise<void> {
   const agent = args[0];
@@ -32,15 +57,23 @@ export async function run(args: string[]): Promise<void> {
   };
   await registerSession(origin, session);
 
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const provider of Object.keys(config.providers)) {
-    const varName = PROVIDER_ENV[provider];
-    if (!varName) continue;
-    const url = `${origin}/${sessionId}/${provider}`;
-    env[varName] = url;
-    console.error(`aap: ${varName}=${url}`);
-  }
+  const overrides = buildProviderEnv(agent, config, origin, sessionId);
+  const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
+
   console.error(`aap: session ${sessionId} (cwd ${cwd})`);
+  if (overrides.OPENCODE_CONFIG_CONTENT) {
+    console.error(
+      `aap: routing opencode via OPENCODE_CONFIG_CONTENT (providers: ${Object.keys(config.providers).join(", ")})`,
+    );
+  } else if (Object.keys(overrides).length > 0) {
+    for (const [key, value] of Object.entries(overrides)) {
+      console.error(`aap: ${key}=${value}`);
+    }
+  } else {
+    console.error(
+      `aap: warning — no base-URL routing set for "${agent}" (no matching provider)`,
+    );
+  }
 
   const child = spawn(agent, agentArgs, { stdio: "inherit", env });
   child.on("error", (err) => {

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const providerSchema = z.object({
   upstream: z.url(),
+  apiPath: z.string().optional(),
 });
 
 export const serverSchema = z.object({
