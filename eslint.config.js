@@ -6,5 +6,20 @@ export default tseslint.config(
   { ignores: ["dist/", "node_modules/", "notes/", "coverage/"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ["web/**/*.js"],
+    languageOptions: {
+      globals: {
+        window: "readonly",
+        document: "readonly",
+        location: "readonly",
+        fetch: "readonly",
+        atob: "readonly",
+        TextDecoder: "readonly",
+        Uint8Array: "readonly",
+        console: "readonly",
+      },
+    },
+  },
   prettier,
 );

@@ -58,7 +58,7 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 Only after the capture core is solid.
 
 - **REST API** — complete the endpoints (`/requests/:id`, `/metrics`, `/stats`, search).
-- **Web UI** — dashboard, sessions, session detail, request detail, metrics. Framework/charts chosen then (React/TS is the default, revisit vs lighter options). Dark mode by default.
+- **Web UI** — a minimal dark-mode dashboard is built (served at `/ui`: dashboard, sessions, session detail, request detail with reconstructed response), no framework. Remaining: charts (tokens/latency/cost over time), live auto-refresh.
 - **Search** — by prompt, filename, model, tool, repository.
 - **Export** — session as JSON / Markdown.
 - **Custom run metadata** — let external tools (Armada, benchmark harnesses) tag traffic with their own context (run/task/node id), recorded for the profiler but never sent to the LLM. Designed in [`ARCHITECTURE.md`](ARCHITECTURE.md#custom-metadata-designed-not-yet-built); deferred until a concrete integration exists.

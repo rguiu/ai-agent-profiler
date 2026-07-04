@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Agent Profiler</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1><a href="#/">AI Agent Profiler</a></h1>
+      <nav>
+        <a href="#/">Dashboard</a>
+        <a href="#/sessions">Sessions</a>
+      </nav>
+      <button id="refresh" title="Reload current view">Refresh</button>
+    </header>
+    <main id="app"></main>
+    <footer>
+      Local-first profiler for AI coding agents. Run <code>aap parse</code> to
+      populate token/cost metrics.
+    </footer>
+    <script type="module" src="/ui/app.js"></script>
+  </body>
+</html>

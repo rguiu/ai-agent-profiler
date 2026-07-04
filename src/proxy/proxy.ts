@@ -10,6 +10,7 @@ import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
+import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
 import { parseRoute } from "./route.js";
 
@@ -53,6 +54,7 @@ function handle(
   const search = queryStart === -1 ? "" : rawUrl.slice(queryStart);
 
   if (handleControl(req, res, pathname, registry, capture)) return;
+  if (handleUi(req, res, pathname)) return;
   if (store && handleApi(req, res, pathname, store)) return;
 
   const route = parseRoute(pathname, providers);

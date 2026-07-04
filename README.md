@@ -6,7 +6,7 @@ It sits as a transparent proxy between a coding agent (Claude Code, Opencode) an
 
 It is a **performance profiler for autonomous coding agents** — not an observability dashboard, not an enterprise proxy, not an LLM profiler. See [`VISION.md`](VISION.md).
 
-> Status: **capture core complete** — transparent proxy, raw trace capture, derived metrics, and a read API all work. Web UI and analysis are next. See [`ROADMAP.md`](ROADMAP.md).
+> Status: **capture core complete** — transparent proxy, raw trace capture, derived metrics, a read API, and a minimal web dashboard all work. Charts, search/export, and analysis are next. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Features
 
@@ -15,7 +15,8 @@ Working now (capture core):
 - Transparent, byte-faithful HTTP(S) proxy — never modifies requests.
 - Per-session raw trace capture (requests, responses, streaming events, timing) with secret redaction.
 - Token, latency, cost, and tool metrics derived from raw traces (`aap parse`).
-- Read API to list sessions and inspect requests.
+- Read API + a minimal dark-mode web dashboard at `/ui`.
+- Per-request logging in the `aap serve` terminal.
 
 Planned:
 
@@ -97,12 +98,16 @@ For development without linking, use `npm run dev -- <command>`.
 Inspect captured data over HTTP (same port as the proxy):
 
 ```
+GET /ui                        # web dashboard (also at /)
 GET /stats                     # totals: sessions, requests, tokens, cost
 GET /sessions                  # sessions with rolled-up metrics
 GET /sessions/:id              # session detail with its requests
 GET /requests/:id?events=1     # request detail + raw trace events
 GET /health
 ```
+
+Open **`http://localhost:8080/ui`** in a browser for the dashboard (sessions,
+per-session requests, and per-request detail with the reconstructed response).
 
 ### opencode + DeepSeek
 
