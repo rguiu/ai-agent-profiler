@@ -97,18 +97,30 @@ export function collectSummaries(
 
 export function compareSessions(args: string[]): void {
   const json = args.includes("--json");
-  const ids = args.filter((arg) => !arg.startsWith("--"));
-  if (ids.length < 1) {
-    console.error(
-      "Usage: aap compare <session-id> <session-id> [...] [--json]",
-    );
-    process.exitCode = 1;
-    return;
+  const ids: string[] = [];
+  let task: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === undefined) continue;
+    if (arg === "--task") {
+      task = args[i + 1];
+      i++;
+      continue;
+    }
+    if (!arg.startsWith("--")) ids.push(arg);
   }
 
   const config = loadConfig();
   const store = openStore(config.storage.dir);
   try {
+    if (task) ids.push(...store.sessionIdsByMeta("task", task));
+    if (ids.length === 0) {
+      console.error(
+        "Usage: aap compare <session-id> [<session-id> ...] | --task <name> [--json]",
+      );
+      process.exitCode = 1;
+      return;
+    }
     const { summaries, missing } = collectSummaries(store, ids);
     for (const id of missing) console.error(`Session "${id}" not found`);
     if (summaries.length === 0) {

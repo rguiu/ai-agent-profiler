@@ -531,6 +531,15 @@ export class Store {
     return this.toolUsageGlobalStmt.all() as ToolUsage[];
   }
 
+  sessionIdsByMeta(key: string, value: string): string[] {
+    const rows = this.db
+      .prepare(
+        "SELECT id FROM sessions WHERE json_extract(meta, '$.' || ?) = ?",
+      )
+      .all(key, value) as { id: string }[];
+    return rows.map((r) => r.id);
+  }
+
   getRequest(id: string): RequestDetail | undefined {
     const row = this.getRequestStmt.get(id) as
       Omit<RequestDetail, "toolCalls" | "events"> | undefined;

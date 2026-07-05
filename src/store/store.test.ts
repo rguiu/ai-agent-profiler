@@ -108,6 +108,18 @@ describe("Store", () => {
     expect(req.response_bytes).toBe(20);
   });
 
+  it("finds session ids by metadata", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({ id: "a", startedAt: "t", meta: { task: "fix-bug" } });
+    store.upsertSession({ id: "b", startedAt: "t", meta: { task: "fix-bug" } });
+    store.upsertSession({ id: "c", startedAt: "t", meta: { task: "explain" } });
+    store.upsertSession({ id: "d", startedAt: "t" });
+    const ids = store.sessionIdsByMeta("task", "fix-bug").sort();
+    store.close();
+    expect(ids).toEqual(["a", "b"]);
+  });
+
   it("stores and reads back session metadata", () => {
     const dir = tmpDir();
     const store = openStore(dir);

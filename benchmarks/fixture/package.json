@@ -1,0 +1,10 @@
+{
+  "name": "bench-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tiny CSV parser used as a controlled target for agent benchmarks.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
