@@ -23,6 +23,15 @@ function esc(s) {
 const num = (n) => (n ?? 0).toLocaleString();
 const cost = (c) => (c ? `$${Number(c).toFixed(4)}` : "$0");
 const shortId = (id) => (id ? esc(String(id).slice(0, 8)) : "—");
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const shortPath = (p) => {
+  const full = String(p ?? "");
+  const short = full
+    .split("/")
+    .map((seg) => (UUID_RE.test(seg) ? seg.slice(0, 8) + "…" : seg))
+    .join("/");
+  return `<span title="${esc(full)}">${esc(short)}</span>`;
+};
 const dt = (s) => (s ? esc(String(s).replace("T", " ").slice(0, 19)) : "—");
 
 function fmtBytes(n) {
@@ -180,7 +189,7 @@ async function sessionDetail(id) {
       <td class="mono muted">${dt(r.started_at)}</td>
       <td>${esc(r.provider)}</td>
       <td>${esc(r.method)}</td>
-      <td class="mono">${esc(r.path)}</td>
+      <td class="mono">${shortPath(r.path)}</td>
       <td>${statusCell(r.status)}</td>
       <td class="num">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</td>
       <td class="mono">${esc(r.model) || "—"}</td>
@@ -277,7 +286,7 @@ async function requestDetail(id) {
     <h2>Request ${shortId(r.id)}</h2>
     <div class="kv">
       <div class="k">provider</div><div class="v">${esc(r.provider)}</div>
-      <div class="k">path</div><div class="v">${esc(r.path)}</div>
+      <div class="k">path</div><div class="v">${shortPath(r.path)}</div>
       <div class="k">started</div><div class="v">${dt(r.started_at)}</div>
       <div class="k">status</div><div class="v">${statusCell(r.status)}</div>
       <div class="k">latency</div><div class="v">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</div>
