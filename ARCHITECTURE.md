@@ -140,35 +140,30 @@ Pricing is never hardcoded in source.
 
 ---
 
-## Custom metadata (designed, not yet built)
+## Custom metadata
 
-External tools (e.g. Armada, benchmark harnesses) may want to tag captured traffic with
-their own context — run id, task id, node name, experiment label. The design below keeps
-that metadata **for the profiler only**: it is recorded but **never forwarded to the LLM**,
-so it stays behaviour-neutral.
+External tools (e.g. Armada, benchmark harnesses) can tag captured traffic with their own
+context — run id, task id, node name, experiment label. This metadata is recorded **for the
+profiler only** and is **never forwarded to the LLM**, so it stays behaviour-neutral.
 
-Two channels, to be added when there is a concrete integration:
-
-1. **Session-level metadata — via the control API (agent-independent, preferred).**
-   Extend `POST /_control/sessions` to accept an arbitrary `meta` map:
+1. **Session-level metadata — via the control API (implemented).**
+   `POST /_control/sessions` accepts an arbitrary `meta` map:
 
    ```
    POST /_control/sessions
-   { "id": "<session>", "meta": { "armada_node": "n3", "task_id": "t42", "run_id": "r7" } }
+   { "id": "<session>", "meta": { "armada_node": "n3", "task": "t42", "iter": "1" } }
    ```
 
-   `aap run` would populate it from `--meta key=value` flags and selected env vars (e.g.
-   `ARMADA_NODE_NAME`). This is a pure side channel to the proxy — it never touches provider
-   traffic — so it works regardless of what the agent supports.
+   `aap run` populates it from `--meta key=value` flags plus `AAP_META_*` env vars and
+   `ARMADA_NODE_NAME`. It is a pure side channel to the proxy — it never touches provider
+   traffic — so it works regardless of what the agent supports. Stored as a `meta` JSON
+   column on `sessions`; surfaced in the read API, `/ui`, and MCP `get_session`.
 
-2. **Per-request metadata — via reserved `x-aap-*` headers (captured, then stripped).**
-   The client sets headers under a reserved prefix; the proxy records them as request
-   metadata and **strips all `x-aap-*` headers before forwarding upstream** (same mechanism
-   as the hop-by-hop strip list). _Caveat:_ depends on the agent being able to inject custom
-   outbound headers — unverified for Claude Code / Opencode, so channel 1 leads.
-
-**Storage:** a `meta` JSON column on `sessions` (and later `requests`), queryable via SQLite
-`json_extract`. Flexible and consistent with "record raw, derive later".
+2. **Per-request metadata — via reserved `x-aap-*` headers (deferred).**
+   The client sets headers under a reserved prefix; the proxy would record them as request
+   metadata and **strip all `x-aap-*` headers before forwarding upstream**. _Caveat:_ depends
+   on the agent being able to inject custom outbound headers — unverified for Claude Code /
+   Opencode, so channel 1 leads and channel 2 remains future work.
 
 ---
 

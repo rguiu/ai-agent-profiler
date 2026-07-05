@@ -201,6 +201,16 @@ async function sessionDetail(id) {
       <div class="k">cwd</div><div class="v">${esc(session.cwd) || "—"}</div>
       <div class="k">repo</div><div class="v">${esc(session.repo) || "—"}</div>
       <div class="k">started</div><div class="v">${esc(session.started_at) || "—"}</div>
+      ${
+        session.meta
+          ? Object.entries(session.meta)
+              .map(
+                ([k, v]) =>
+                  `<div class="k">meta.${esc(k)}</div><div class="v">${esc(v)}</div>`,
+              )
+              .join("")
+          : ""
+      }
     </div>
     <h2>Recommendations</h2>
     ${recommendationsHtml(recommendations)}

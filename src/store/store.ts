@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   repo          TEXT,
   started_at    TEXT,
   first_seen_at TEXT,
-  last_seen_at  TEXT
+  last_seen_at  TEXT,
+  meta          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS requests (
@@ -128,6 +129,7 @@ export interface SessionRow {
   started_at: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
+  meta: Record<string, string> | null;
 }
 
 export interface SessionRequest {
@@ -271,14 +273,15 @@ export class Store {
 
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
-      INSERT INTO sessions (id, client, cwd, repo, started_at, first_seen_at, last_seen_at)
-      VALUES (@id, @client, @cwd, @repo, @started_at, @now, @now)
+      INSERT INTO sessions (id, client, cwd, repo, started_at, first_seen_at, last_seen_at, meta)
+      VALUES (@id, @client, @cwd, @repo, @started_at, @now, @now, @meta)
       ON CONFLICT(id) DO UPDATE SET
         client       = COALESCE(excluded.client, sessions.client),
         cwd          = COALESCE(excluded.cwd, sessions.cwd),
         repo         = COALESCE(excluded.repo, sessions.repo),
         started_at   = COALESCE(sessions.started_at, excluded.started_at),
-        last_seen_at = excluded.last_seen_at
+        last_seen_at = excluded.last_seen_at,
+        meta         = COALESCE(excluded.meta, sessions.meta)
     `);
     this.insertRequestStmt = db.prepare(`
       INSERT INTO requests (id, session_id, provider, method, path, trace_file, started_at)
@@ -441,6 +444,10 @@ export class Store {
       cwd: info.cwd ?? null,
       repo: info.repo ?? null,
       started_at: info.startedAt ?? null,
+      meta:
+        info.meta && Object.keys(info.meta).length > 0
+          ? JSON.stringify(info.meta)
+          : null,
       now: new Date().toISOString(),
     });
   }
@@ -506,8 +513,10 @@ export class Store {
   }
 
   getSession(id: string): SessionDetail | undefined {
-    const session = this.getSessionStmt.get(id) as SessionRow | undefined;
-    if (!session) return undefined;
+    const raw = this.getSessionStmt.get(id) as
+      (Omit<SessionRow, "meta"> & { meta: string | null }) | undefined;
+    if (!raw) return undefined;
+    const session: SessionRow = { ...raw, meta: parseMeta(raw.meta) };
     const requests = this.getSessionRequestsStmt.all(id) as SessionRequest[];
     const analysis: SessionAnalysis = {
       toolUsage: this.toolUsageSessionStmt.all(id) as ToolUsage[],
@@ -559,12 +568,25 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "system_tokens", "INTEGER");
   ensureColumn(db, "metrics", "tools_defined", "INTEGER");
   ensureColumn(db, "metrics", "tools_tokens", "INTEGER");
+  ensureColumn(db, "sessions", "meta", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,
   // otherwise pre-existing databases fail before ensureColumn can run.
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_id ON tool_calls (tool_id)",
   );
   return new Store(db);
+}
+
+function parseMeta(value: string | null): Record<string, string> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, string>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function ensureColumn(

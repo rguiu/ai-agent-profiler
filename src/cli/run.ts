@@ -33,11 +33,34 @@ export function buildProviderEnv(
   return env;
 }
 
+export function parseRunArgs(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { meta: Record<string, string>; agent?: string; agentArgs: string[] } {
+  const meta: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith("AAP_META_") && value) {
+      meta[key.slice("AAP_META_".length).toLowerCase()] = value;
+    }
+  }
+  if (env.ARMADA_NODE_NAME) meta.armada_node = env.ARMADA_NODE_NAME;
+
+  let i = 0;
+  while (i < args.length && args[i] === "--meta") {
+    const pair = args[i + 1];
+    if (pair !== undefined) {
+      const eq = pair.indexOf("=");
+      if (eq > 0) meta[pair.slice(0, eq)] = pair.slice(eq + 1);
+    }
+    i += 2;
+  }
+  return { meta, agent: args[i], agentArgs: args.slice(i + 1) };
+}
+
 export async function run(args: string[]): Promise<void> {
-  const agent = args[0];
-  const agentArgs = args.slice(1);
+  const { meta, agent, agentArgs } = parseRunArgs(args, process.env);
   if (!agent) {
-    console.error("Usage: aap run <agent> [args...]");
+    console.error("Usage: aap run [--meta key=value ...] <agent> [args...]");
     process.exitCode = 1;
     return;
   }
@@ -54,6 +77,7 @@ export async function run(args: string[]): Promise<void> {
     cwd,
     repo: detectRepo(cwd),
     startedAt: new Date().toISOString(),
+    meta: Object.keys(meta).length > 0 ? meta : null,
   };
   await registerSession(origin, session);
 

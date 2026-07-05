@@ -62,7 +62,7 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 - [x] **MCP server** (`aap mcp`) — 7 stdio tools for agent self-introspection: `list_sessions`, `get_session`, `get_request`, `search_requests`, `stats`, `top_tools`, `raw_sql`.
 - [~] **Search** — by model, tool, provider (via MCP `search_requests` + `raw_sql`). _Remaining: UI search bar; full-text search over prompts/filenames._
 - [x] **Export** — session report as Markdown or JSON via `aap export <id> [--json]`.
-- [ ] **Custom run metadata** — let external tools (Armada, benchmark harnesses) tag traffic with their own context (run/task/node id), recorded for the profiler but never sent to the LLM. Designed in [`ARCHITECTURE.md`](ARCHITECTURE.md#custom-metadata-designed-not-yet-built); deferred until a concrete integration exists.
+- [~] **Custom run metadata** — session-level tags via the control API and `aap run --meta key=value` (plus `AAP_META_*` env vars and `ARMADA_NODE_NAME`), stored on the session and never sent to the LLM. Per-request `x-aap-*` header channel still deferred.
 
 ---
 

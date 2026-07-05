@@ -108,6 +108,23 @@ describe("Store", () => {
     expect(req.response_bytes).toBe(20);
   });
 
+  it("stores and reads back session metadata", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({
+      id: "s1",
+      client: "opencode",
+      startedAt: "t0",
+      meta: { task: "explain", agent: "opencode" },
+    });
+    const detail = store.getSession("s1");
+    store.close();
+    expect(detail?.session.meta).toEqual({
+      task: "explain",
+      agent: "opencode",
+    });
+  });
+
   it("preserves existing session fields on a minimal re-upsert", () => {
     const dir = tmpDir();
     const store = openStore(dir);
@@ -120,7 +137,6 @@ describe("Store", () => {
     });
     store.upsertSession({ id: "s1", startedAt: "t1" });
     store.close();
-
     const db = new Database(join(dir, "aap.sqlite"));
     const ses = db
       .prepare("SELECT * FROM sessions WHERE id = ?")

@@ -4,6 +4,7 @@ export interface SessionInfo {
   cwd?: string;
   repo?: string | null;
   startedAt: string;
+  meta?: Record<string, string> | null;
 }
 
 export class SessionRegistry {

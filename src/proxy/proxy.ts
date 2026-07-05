@@ -151,6 +151,10 @@ function registerSession(
       cwd: info.cwd,
       repo: info.repo ?? null,
       startedAt: info.startedAt ?? new Date().toISOString(),
+      meta:
+        info.meta && typeof info.meta === "object"
+          ? (info.meta as Record<string, string>)
+          : null,
     };
     registry.register(session);
     capture?.upsertSession(session);

@@ -13,6 +13,7 @@ function makeDetail(): SessionDetail {
       started_at: "2026-01-01T00:00:00Z",
       first_seen_at: null,
       last_seen_at: null,
+      meta: null,
     },
     requests: [
       {

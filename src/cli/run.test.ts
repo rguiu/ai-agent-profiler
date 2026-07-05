@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../config/index.js";
-import { buildProviderEnv } from "./run.js";
+import { buildProviderEnv, parseRunArgs } from "./run.js";
 
 const providers: Pick<Config, "providers"> = {
   providers: {
@@ -53,5 +53,37 @@ describe("buildProviderEnv", () => {
     expect(config.provider.openrouter?.options.baseURL).toBe(
       "http://h:1/s/openrouter/api/v1",
     );
+  });
+});
+
+describe("parseRunArgs", () => {
+  it("separates --meta flags from the agent command", () => {
+    const { meta, agent, agentArgs } = parseRunArgs(
+      ["--meta", "task=explain", "--meta", "iter=1", "opencode", "run", "hi"],
+      {},
+    );
+    expect(meta).toEqual({ task: "explain", iter: "1" });
+    expect(agent).toBe("opencode");
+    expect(agentArgs).toEqual(["run", "hi"]);
+  });
+
+  it("captures AAP_META_* env vars and ARMADA_NODE_NAME", () => {
+    const { meta } = parseRunArgs(["claude"], {
+      AAP_META_TASK: "bugfix",
+      ARMADA_NODE_NAME: "n3",
+    });
+    expect(meta.task).toBe("bugfix");
+    expect(meta.armada_node).toBe("n3");
+  });
+
+  it("lets --meta flags override env meta", () => {
+    const { meta } = parseRunArgs(["--meta", "task=b", "claude"], {
+      AAP_META_TASK: "a",
+    });
+    expect(meta.task).toBe("b");
+  });
+
+  it("returns no agent when only flags are given", () => {
+    expect(parseRunArgs(["--meta", "x=1"], {}).agent).toBeUndefined();
   });
 });

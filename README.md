@@ -92,6 +92,7 @@ cp config.example.toml ~/.config/aap/config.toml   # edit providers / pricing
 ```
 aap serve            # start the proxy + read API (also prints a line per request)
 aap run <agent>      # launch an agent through the profiler, e.g. aap run claude
+                     #   tag a run: aap run --meta task=explain --meta iter=1 opencode
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
 aap export <id>      # export a session report (Markdown; add --json for JSON)
 aap compare <ids>    # compare sessions side by side (add --json for JSON)
