@@ -1,0 +1,10 @@
+{
+  "name": "task-queue",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "In-memory priority task queue (benchmark fixture).",
+  "scripts": {
+    "test": "node --test"
+  }
+}

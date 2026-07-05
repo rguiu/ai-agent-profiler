@@ -17,55 +17,79 @@ task and per agent:
 
 ## Where the tasks run (the target project)
 
-By default the tasks run against the bundled **`benchmarks/fixture/`** — a tiny
-zero-dependency CSV parser with a **deliberate bug** (the header row is parsed as a data
-row, so `npm test` has one failing test). It's small enough to reason about but real enough
-to exercise reading, searching, editing, and the test-fix loop. It's self-contained, so
-cross-agent runs are comparable.
+Benchmarks run against a **fixture** — a small, self-contained mini-repo committed under
+`benchmarks/fixtures/<name>/`, each with its own `TASKS` file and (where relevant) a
+**verifiable** outcome (`npm test` with a deliberately planted failing test). Fixtures are
+committed and pinned, so runs are reproducible and comparable across agents. That — not
+cloning random public repos — is what makes a benchmark "proper": bounded, reproducible,
+with ground truth.
 
-You can point the benchmark at other code instead:
+Bundled fixtures:
+
+| fixture      | shape                                   | stresses                                        |
+| ------------ | --------------------------------------- | ----------------------------------------------- |
+| `csv-parser` | one small module + tests, 1 planted bug | reading, fixing, a small edit                   |
+| `task-queue` | multi-file lib (queue/scheduler/store)  | cross-file reasoning, locating logic, fix + add |
+
+Pick one with `--fixture`:
+
+```
+./benchmarks/run.sh opencode --fixture task-queue
+```
+
+You can also point at other code (tasks then come from a `--tasks` file, or fall back to
+generic read-only `explain`/`locate`):
 
 | Target             | Flag               | Use it for                                             |
 | ------------------ | ------------------ | ------------------------------------------------------ |
-| Bundled fixture    | _(default)_        | Reproducible cross-agent comparison + a verifiable fix |
-| Your own directory | `--dir <path>`     | Benchmarking on your real project                      |
-| A cloned repo      | `--repo <git-url>` | A shared, downloadable target (shallow-cloned)         |
+| Bundled fixture    | `--fixture <name>` | Reproducible cross-agent comparison + a verifiable fix |
+| Your own directory | `--dir <path>`     | Profiling your real project                            |
+| A cloned repo      | `--repo <git-url>` | A shared target (pin a commit for reproducibility)     |
 
-In every case the target is **copied fresh into a scratch dir per task**, so edits never
-touch the original and each run starts from the same state.
+Every target is **copied fresh into a scratch dir per task**, so edits never touch the
+original and each run starts from the same state.
+
+## Adding a fixture
+
+1. Create `benchmarks/fixtures/<name>/` — a small, self-contained project. Prefer zero
+   dependencies and a runnable check (e.g. `node --test`) so success is verifiable. Plant a
+   clear, single bug for a `fix-bug` task.
+2. Add a `TASKS` file next to it — one task per line as `id|prompt`. Keep read-only tasks
+   explicit ("Do not change any files").
+3. Run it: `./benchmarks/run.sh opencode --fixture <name>`.
+
+Design fixtures to stress the things the profiler measures: whole-file vs ranged reads
+(amplification), search cost (`locate`), context growth over a multi-step task, and tool
+definitions re-sent every request.
 
 ## Tasks
 
-Built-in tasks for the **fixture**:
+Each fixture defines its own tasks in `TASKS`. The bundled fixtures use this shape:
 
-| id            | stresses                                | prompt (summary)                                        |
-| ------------- | --------------------------------------- | ------------------------------------------------------- |
-| `explain`     | read patterns, context pulled in        | Explain the project + how `parser.js` works (read-only) |
-| `locate`      | search/grep token cost                  | Find where `parseLine` is defined and used (read-only)  |
-| `fix-bug`     | tool-call loop, iteration, verification | Fix the failing test                                    |
-| `add-feature` | multi-file edit + test                  | Add a `trim` option to `parse()` and test it            |
+| id            | stresses                                | outcome                     |
+| ------------- | --------------------------------------- | --------------------------- |
+| `explain`     | read patterns, context pulled in        | read-only                   |
+| `locate`      | search / grep token cost                | read-only                   |
+| `fix-bug`     | tool-call loop, iteration, verification | `npm test` passes           |
+| `add-feature` | multi-file edit + test                  | new behaviour + test passes |
 
-For a **custom target** (`--dir`/`--repo`) the built-in fixture tasks don't apply, so
-`run.sh` falls back to two generic read-only tasks (`explain`, `locate`). To run your own
-tasks against any target, pass a task file:
+To run your own tasks against any target, pass a file (one `id|prompt` per line — see
+`benchmarks/tasks.example.txt`):
 
 ```
 ./benchmarks/run.sh opencode --dir ~/my/project --tasks benchmarks/tasks.example.txt
 ```
-
-A task file is one task per line as `id|prompt` (see `benchmarks/tasks.example.txt`).
 
 ## How `run.sh` works
 
 `./benchmarks/run.sh <agent> [target] [--tasks file] [--dry-run]`:
 
 1. Maps the agent to its headless flag (`opencode run "…"`, `claude -p "…"`).
-2. Resolves the target source dir (fixture, `--dir`, or a shallow `--repo` clone).
-3. For each task: wipes the scratch dir, copies the target in fresh, drops any `.git`, then
-   runs `aap run --meta task=<id> --meta agent=<name> <agent> <flag> "<prompt>"` from inside
-   the scratch dir. `aap run` injects proxy routing and registers the tagged session, so the
-   profiler captures the whole run.
-4. Prints the next steps.
+2. Resolves the target source dir (`--fixture` name, `--dir`, or a shallow `--repo` clone).
+3. Resolves tasks: `--tasks` file, else the target's own `TASKS`, else generic read-only tasks.
+4. For each task: wipes the scratch dir, copies the target in fresh, drops `.git`/`TASKS`,
+   then runs `aap run --meta task=<id> --meta agent=<name> <agent> <flag> "<prompt>"` from
+   inside the scratch dir. `aap run` injects proxy routing and registers the tagged session.
 
 Use `--dry-run` to print the exact commands without executing them.
 
@@ -78,11 +102,9 @@ Use `--dry-run` to print the exact commands without executing them.
 2. Make sure the agent is installed and its key is configured (opencode auth.json /
    `DEEPSEEK_API_KEY`, or Claude Code's `ANTHROPIC_API_KEY`). `aap run` handles routing
    through the proxy automatically.
-3. Run the suite for an agent:
+3. Run a fixture for an agent:
    ```
-   ./benchmarks/run.sh opencode                 # bundled fixture
-   ./benchmarks/run.sh opencode --dir ~/proj    # your project
-   ./benchmarks/run.sh claude  --repo https://github.com/you/repo   # a cloned repo
+   ./benchmarks/run.sh opencode --fixture task-queue
    ```
    Every task is launched tagged with `--meta task=<id> --meta agent=<name>`.
 
