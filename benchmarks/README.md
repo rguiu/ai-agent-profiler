@@ -91,12 +91,17 @@ To run your own tasks against any target, pass a file (one `id|prompt` per line 
 
 `./benchmarks/run.sh <agent> [target] [--tasks file] [--dry-run]`:
 
-1. Maps the agent to its headless flag (`opencode run "…"`, `claude -p "…"`).
+1. Maps the agent to its headless, auto-approving invocation: opencode →
+   `opencode run --auto`, claude → `claude -p --dangerously-skip-permissions`. Without
+   auto-approval the agent's edit/bash tools are rejected in non-interactive mode, so the
+   `fix-bug`/`add-feature` tasks can't act.
 2. Resolves the target source dir (`--fixture` name, `--dir`, or a shallow `--repo` clone).
 3. Resolves tasks: `--tasks` file, else the target's own `TASKS`, else generic read-only tasks.
-4. For each task: wipes the scratch dir, copies the target in fresh, drops `.git`/`TASKS`,
-   then runs `aap run --meta task=<id> --meta agent=<name> <agent> <flag> "<prompt>"` from
-   inside the scratch dir. `aap run` injects proxy routing and registers the tagged session.
+4. For each task: copies the target into its **own** scratch dir (`/tmp/aap-bench/<task>`),
+   drops `.git`/`TASKS`, then runs
+   `aap run --meta task=<id> --meta agent=<name> <agent> <invoke> "<prompt>"` from inside it.
+   A separate dir per task matters: agents group sessions by project directory, so a shared
+   path would bleed one task's conversation into the next.
 
 Use `--dry-run` to print the exact commands without executing them.
 

@@ -45,8 +45,8 @@ done
 [ -n "$AGENT" ] || { usage; exit 1; }
 
 case "$AGENT" in
-  opencode) INVOKE="run" ;;
-  claude)   INVOKE="-p"  ;;
+  opencode) INVOKE="run --auto" ;;                       # opencode run --auto "<prompt>"
+  claude)   INVOKE="-p --dangerously-skip-permissions" ;; # claude -p ... "<prompt>"
   *) echo "unknown agent: $AGENT (use opencode or claude)" >&2; exit 1 ;;
 esac
 
@@ -69,13 +69,17 @@ if [ -z "$TASKS_FILE" ] && [ -f "$SRC/TASKS" ]; then TASKS_FILE="$SRC/TASKS"; fi
 
 run_task() {
   id="$1"; prompt="$2"
+  # A unique scratch dir per task keeps each run isolated: agents (e.g. opencode)
+  # group sessions by project directory, so reusing one path would bleed context
+  # from one task into the next.
+  scratch="$SCRATCH/$id"
   if [ "$DRY" = "1" ]; then
-    echo "[$id] (cd $SCRATCH && aap run --meta task=$id --meta agent=$AGENT $AGENT $INVOKE \"$prompt\")"
+    echo "[$id] (cd $scratch && aap run --meta task=$id --meta agent=$AGENT $AGENT $INVOKE \"$prompt\")"
     return
   fi
-  rm -rf "$SCRATCH"; cp -R "$SRC" "$SCRATCH"; rm -rf "$SCRATCH/.git" "$SCRATCH/TASKS"
-  echo ">>> task=$id agent=$AGENT src=$SRC"
-  ( cd "$SCRATCH" && aap run --meta "task=$id" --meta "agent=$AGENT" "$AGENT" "$INVOKE" "$prompt" ) || true
+  rm -rf "$scratch"; mkdir -p "$scratch"; cp -R "$SRC"/. "$scratch"; rm -rf "$scratch/.git" "$scratch/TASKS"
+  echo ">>> task=$id agent=$AGENT scratch=$scratch"
+  ( cd "$scratch" && aap run --meta "task=$id" --meta "agent=$AGENT" "$AGENT" $INVOKE "$prompt" ) || true
 }
 
 if [ -n "$TASKS_FILE" ]; then
