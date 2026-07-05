@@ -61,6 +61,23 @@ describe("summarize", () => {
     expect(s.resultTokens).toBe(500);
     expect(s.wallMs).toBeGreaterThan(0);
   });
+
+  it("carries session meta and tool-def tokens for baseline collection", () => {
+    const detail = makeDetail("sess-m", 2);
+    detail.session.meta = {
+      task: "fix-bug",
+      agent: "opencode",
+      verify: "pass",
+    };
+    detail.analysis.context.tools_tokens_total = 4321;
+    const s = summarize(detail);
+    expect(s.meta).toEqual({
+      task: "fix-bug",
+      agent: "opencode",
+      verify: "pass",
+    });
+    expect(s.toolsTokens).toBe(4321);
+  });
 });
 
 describe("renderComparison", () => {

@@ -228,8 +228,11 @@ here so the AISH-vs-proxy decision is made on evidence rather than by default.
 Baselines come from the benchmark suite in [`benchmarks/`](../benchmarks/README.md):
 
 1. `aap serve`, then `./benchmarks/run.sh opencode` (and `claude` when available).
-2. `aap parse`, then `aap compare --task <id>` for the side-by-side per task.
-3. Record the numbers into the slots above, per agent, as `baseline`.
+2. `aap parse`, then collect the numbers with `node benchmarks/baselines.mjs`, which writes
+   [`benchmarks/BASELINES.md`](../benchmarks/BASELINES.md) — per task, the mean of each metric
+   across runs, grouped by agent, counting only `verify=pass` runs for mutating tasks.
+3. Copy the relevant figure from that report into the `Baseline:` slot of each capability
+   above (the metric→capability hints are noted in `benchmarks/baselines.mjs`).
 4. Once AISH exists, add it as a third column; a capability is justified only if AISH beats
    the baseline on its stated metric **without** regressing task success.
 

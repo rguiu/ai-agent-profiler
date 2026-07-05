@@ -5,6 +5,7 @@ import { openStore, type SessionDetail, type Store } from "../store/index.js";
 export interface SessionSummary {
   id: string;
   client: string | null;
+  meta: Record<string, string> | null;
   requests: number;
   inputTokens: number;
   outputTokens: number;
@@ -12,6 +13,7 @@ export interface SessionSummary {
   toolCalls: number;
   distinctTools: number;
   resultTokens: number;
+  toolsTokens: number;
   wallMs: number;
   recommendations: number;
 }
@@ -38,6 +40,7 @@ export function summarize(detail: SessionDetail): SessionSummary {
   return {
     id: detail.session.id,
     client: detail.session.client,
+    meta: detail.session.meta ?? null,
     requests: requests.length,
     inputTokens: requests.reduce((a, r) => a + (r.input_tokens ?? 0), 0),
     outputTokens: requests.reduce((a, r) => a + (r.output_tokens ?? 0), 0),
@@ -48,6 +51,7 @@ export function summarize(detail: SessionDetail): SessionSummary {
       (a, t) => a + t.result_tokens,
       0,
     ),
+    toolsTokens: detail.analysis.context.tools_tokens_total,
     wallMs: wallMs(detail),
     recommendations: recommend(detail).length,
   };
@@ -64,6 +68,7 @@ export function renderComparison(summaries: SessionSummary[]): string {
     ["Tool calls", (s) => num(s.toolCalls)],
     ["Distinct tools", (s) => num(s.distinctTools)],
     ["Tool result tokens", (s) => `~${num(s.resultTokens)}`],
+    ["Tool-def tokens (resent)", (s) => `~${num(s.toolsTokens)}`],
     ["Wall time", (s) => `${(s.wallMs / 1000).toFixed(1)}s`],
     ["Recommendations", (s) => num(s.recommendations)],
   ];

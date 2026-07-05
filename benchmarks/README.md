@@ -135,6 +135,17 @@ aap compare --task fix-bug     # side-by-side across every agent that ran fix-bu
 aap compare --task explain
 ```
 
+To roll every task up into a baseline report (mean per metric per agent, counting only
+`verify=pass` runs for mutating tasks), run the collector:
+
+```
+node benchmarks/baselines.mjs            # writes benchmarks/BASELINES.md
+node benchmarks/baselines.mjs fix-bug    # a subset of tasks
+```
+
+Those numbers are what fill the `Baseline:` slots in
+[`docs/aish-requirements.md`](../docs/aish-requirements.md).
+
 Sessions from a verified task are tagged `verify=pass|fail`, so you can filter baselines by
 task success (e.g. via the `raw_sql` MCP tool or `aap sessions`) — a token win only counts if
 the agent still solved the task.

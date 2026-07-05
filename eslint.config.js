@@ -29,5 +29,14 @@ export default tseslint.config(
       },
     },
   },
+  {
+    files: ["benchmarks/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        console: "readonly",
+      },
+    },
+  },
   prettier,
 );
