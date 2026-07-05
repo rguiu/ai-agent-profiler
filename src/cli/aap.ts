@@ -6,6 +6,7 @@ import { mcp } from "./mcp.js";
 import { parse } from "./parse.js";
 import { run } from "./run.js";
 import { serve } from "./serve.js";
+import { sessions } from "./sessions.js";
 
 function printHelp(): void {
   console.log(`aap — AI Agent Profiler
@@ -14,6 +15,7 @@ Usage:
   aap serve            Start the profiler proxy
   aap run <agent>      Launch an agent through the profiler
   aap parse [--all]    Derive metrics from captured traces
+  aap sessions         List captured sessions (id, task, agent, tokens)
   aap export <id>      Export a session report (Markdown; --json for JSON)
   aap compare <ids...> Compare sessions side by side (--json for JSON)
   aap mcp              Start an MCP server for agent introspection
@@ -33,6 +35,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "parse":
       parse(argv.slice(1));
+      return;
+    case "sessions":
+      sessions(argv.slice(1));
       return;
     case "export":
       exportSession(argv.slice(1));

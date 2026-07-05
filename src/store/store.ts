@@ -119,6 +119,7 @@ export interface SessionSummary {
   output_tokens: number;
   cost: number;
   tool_calls: number;
+  meta: Record<string, string> | null;
 }
 
 export interface SessionRow {
@@ -355,7 +356,7 @@ export class Store {
       },
     );
     this.listSessionsStmt = db.prepare(`
-      SELECT s.id, s.client, s.cwd, s.repo, s.started_at, s.first_seen_at, s.last_seen_at,
+      SELECT s.id, s.client, s.cwd, s.repo, s.started_at, s.first_seen_at, s.last_seen_at, s.meta,
              COUNT(r.id) AS request_count,
              COALESCE(SUM(m.input_tokens), 0) AS input_tokens,
              COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
@@ -509,7 +510,10 @@ export class Store {
   }
 
   listSessions(): SessionSummary[] {
-    return this.listSessionsStmt.all() as SessionSummary[];
+    const rows = this.listSessionsStmt.all() as Array<
+      Omit<SessionSummary, "meta"> & { meta: string | null }
+    >;
+    return rows.map((row) => ({ ...row, meta: parseMeta(row.meta) }));
   }
 
   getSession(id: string): SessionDetail | undefined {
