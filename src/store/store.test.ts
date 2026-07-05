@@ -32,6 +32,40 @@ interface SessionRecord {
   started_at: string | null;
 }
 
+describe("openStore migrations", () => {
+  it("upgrades a pre-tool_id database without error", () => {
+    const dir = tmpDir();
+    // Simulate an old database: tool_calls lacking the newer columns.
+    const legacy = new Database(join(dir, "aap.sqlite"));
+    legacy.exec(`
+      CREATE TABLE tool_calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        name TEXT NOT NULL
+      );
+    `);
+    legacy.close();
+
+    expect(() => openStore(dir).close()).not.toThrow();
+
+    const db = new Database(join(dir, "aap.sqlite"));
+    const columns = db.prepare("PRAGMA table_info(tool_calls)").all() as {
+      name: string;
+    }[];
+    const indexes = db.prepare("PRAGMA index_list(tool_calls)").all() as {
+      name: string;
+    }[];
+    db.close();
+
+    const names = columns.map((c) => c.name);
+    expect(names).toContain("tool_id");
+    expect(names).toContain("arguments");
+    expect(names).toContain("result_tokens");
+    expect(indexes.map((i) => i.name)).toContain("idx_tool_calls_tool_id");
+  });
+});
+
 describe("Store", () => {
   it("inserts a request and records its outcome", () => {
     const dir = tmpDir();

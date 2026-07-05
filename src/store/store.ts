@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls (request_id);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_id ON tool_calls (tool_id);
 `;
 
 export interface RequestRow {
@@ -560,6 +559,11 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "system_tokens", "INTEGER");
   ensureColumn(db, "metrics", "tools_defined", "INTEGER");
   ensureColumn(db, "metrics", "tools_tokens", "INTEGER");
+  // Indexes on migrated columns must be created after the columns exist,
+  // otherwise pre-existing databases fail before ensureColumn can run.
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_id ON tool_calls (tool_id)",
+  );
   return new Store(db);
 }
 
