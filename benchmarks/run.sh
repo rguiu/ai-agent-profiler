@@ -79,7 +79,8 @@ run_task() {
   fi
   rm -rf "$scratch"; mkdir -p "$scratch"; cp -R "$SRC"/. "$scratch"; rm -rf "$scratch/.git" "$scratch/TASKS"
   echo ">>> task=$id agent=$AGENT scratch=$scratch"
-  ( cd "$scratch" && aap run --meta "task=$id" --meta "agent=$AGENT" "$AGENT" $INVOKE "$prompt" ) || true
+  # stdin from /dev/null so the agent can't consume the task-loop's stdin (the TASKS file).
+  ( cd "$scratch" && aap run --meta "task=$id" --meta "agent=$AGENT" "$AGENT" $INVOKE "$prompt" </dev/null ) || true
 }
 
 if [ -n "$TASKS_FILE" ]; then
