@@ -35,28 +35,7 @@ The dark-mode dashboard at `/ui`:
 
 A session page surfaces the analysis and recommendations:
 
-```
-Sessions / 5d11f321
-Session 5d11f321      client opencode      cwd .../book
-
-Recommendations
-  | HIGH  webfetch results added ~32,482 tokens to context
-  |       Across 10 calls this output entered later prompts -- summarise it.
-  | HIGH  Tool definitions re-sent on every request (~96,390 tokens total)
-  | INFO  Context grew from ~607 to ~63,522 tokens (104x over 17 requests)
-
-Context growth (input tokens per request, max ~63,522)
-  63k |                                             .------
-      |                                    .--------'
-  30k |                     .--------------'
-      |        .------------'
-   0  +--------'
-
-Requests
-  #  Started    Provider  Model            Status  Latency   In       Tools
-  1  22:07:42   deepseek  deepseek-v4-pro    200    8.4s      607        0
-  7  22:40:08   deepseek  deepseek-v4-pro    200    5.2s      16,905     2
-```
+![AI Agent Profiler session detail](docs/dashboard_session.png)
 
 ## How it works
 
