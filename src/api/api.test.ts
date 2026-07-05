@@ -67,6 +67,10 @@ function seed(store: Store, dir: string): void {
     toolCallCount: 1,
     cost: 0.00105,
     parsedAt: "2026-01-01T00:00:02Z",
+    messageCount: 3,
+    systemTokens: 40,
+    toolsDefined: 2,
+    toolsTokens: 120,
   });
   store.replaceToolCalls("r1", [
     { id: "call_1", name: "run_bash", arguments: '{"cmd":"ls"}' },

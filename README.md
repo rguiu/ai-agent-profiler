@@ -16,7 +16,7 @@ Working now (capture core):
 - Per-session raw trace capture (requests, responses, streaming events, timing) with secret redaction.
 - Token, latency, cost, and tool metrics derived from raw traces (`aap parse`).
 - Read API + a minimal dark-mode web dashboard at `/ui`.
-- First insights: tool usage, repeated tool calls (by argument), per-session context growth, and tool-result **token amplification** (how much each tool call added to context).
+- First insights: tool usage, repeated tool calls (by argument), per-session context growth, tool-result **token amplification**, and **context composition** (message count, system-prompt size, tool-definition tokens per request + duplicated totals per session).
 - Per-request logging in the `aap serve` terminal.
 
 Planned:

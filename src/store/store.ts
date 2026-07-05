@@ -43,7 +43,11 @@ CREATE TABLE IF NOT EXISTS metrics (
   streaming       INTEGER,
   tool_call_count INTEGER,
   cost            REAL,
-  parsed_at       TEXT
+  parsed_at       TEXT,
+  message_count   INTEGER,
+  system_tokens   INTEGER,
+  tools_defined   INTEGER,
+  tools_tokens    INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -96,6 +100,10 @@ export interface MetricsRow {
   toolCallCount: number;
   cost: number | null;
   parsedAt: string;
+  messageCount: number;
+  systemTokens: number;
+  toolsDefined: number;
+  toolsTokens: number;
 }
 
 export interface SessionSummary {
@@ -188,6 +196,10 @@ export interface RequestDetail {
   tool_call_count: number | null;
   cost: number | null;
   parsed_at: string | null;
+  message_count: number | null;
+  system_tokens: number | null;
+  tools_defined: number | null;
+  tools_tokens: number | null;
   toolCalls: ToolCall[];
   events?: unknown[];
 }
@@ -219,10 +231,17 @@ export interface GrowthPoint {
   output_tokens: number | null;
 }
 
+export interface SessionContext {
+  requests: number;
+  system_tokens_total: number;
+  tools_tokens_total: number;
+}
+
 export interface SessionAnalysis {
   toolUsage: ToolUsage[];
   repeated: RepeatedToolCall[];
   growth: GrowthPoint[];
+  context: SessionContext;
 }
 
 export class Store {
@@ -249,6 +268,7 @@ export class Store {
   private readonly toolUsageSessionStmt;
   private readonly repeatedToolCallsStmt;
   private readonly contextGrowthStmt;
+  private readonly sessionContextStmt;
 
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
@@ -287,9 +307,11 @@ export class Store {
     `);
     this.upsertMetricsStmt = db.prepare(`
       INSERT INTO metrics (request_id, format, model, input_tokens, output_tokens,
-                           stop_reason, streaming, tool_call_count, cost, parsed_at)
+                           stop_reason, streaming, tool_call_count, cost, parsed_at,
+                           message_count, system_tokens, tools_defined, tools_tokens)
       VALUES (@request_id, @format, @model, @input_tokens, @output_tokens,
-              @stop_reason, @streaming, @tool_call_count, @cost, @parsed_at)
+              @stop_reason, @streaming, @tool_call_count, @cost, @parsed_at,
+              @message_count, @system_tokens, @tools_defined, @tools_tokens)
       ON CONFLICT(request_id) DO UPDATE SET
         format          = excluded.format,
         model           = excluded.model,
@@ -299,7 +321,11 @@ export class Store {
         streaming       = excluded.streaming,
         tool_call_count = excluded.tool_call_count,
         cost            = excluded.cost,
-        parsed_at       = excluded.parsed_at
+        parsed_at       = excluded.parsed_at,
+        message_count   = excluded.message_count,
+        system_tokens   = excluded.system_tokens,
+        tools_defined   = excluded.tools_defined,
+        tools_tokens    = excluded.tools_tokens
     `);
     this.deleteToolCallsStmt = db.prepare(
       `DELETE FROM tool_calls WHERE request_id = ?`,
@@ -355,7 +381,8 @@ export class Store {
              r.started_at, r.ended_at, r.status, r.latency_ms,
              r.request_bytes, r.response_bytes, r.error,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
-             m.streaming, m.tool_call_count, m.cost, m.parsed_at
+             m.streaming, m.tool_call_count, m.cost, m.parsed_at,
+             m.message_count, m.system_tokens, m.tools_defined, m.tools_tokens
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.id = ?
@@ -398,6 +425,13 @@ export class Store {
       FROM requests r LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
       ORDER BY r.started_at
+    `);
+    this.sessionContextStmt = db.prepare(`
+      SELECT COUNT(m.request_id) AS requests,
+             COALESCE(SUM(m.system_tokens), 0) AS system_tokens_total,
+             COALESCE(SUM(m.tools_tokens), 0) AS tools_tokens_total
+      FROM requests r JOIN metrics m ON m.request_id = r.id
+      WHERE r.session_id = ?
     `);
   }
 
@@ -453,6 +487,10 @@ export class Store {
       tool_call_count: row.toolCallCount,
       cost: row.cost,
       parsed_at: row.parsedAt,
+      message_count: row.messageCount,
+      system_tokens: row.systemTokens,
+      tools_defined: row.toolsDefined,
+      tools_tokens: row.toolsTokens,
     });
   }
 
@@ -476,6 +514,7 @@ export class Store {
       toolUsage: this.toolUsageSessionStmt.all(id) as ToolUsage[],
       repeated: this.repeatedToolCallsStmt.all(id) as RepeatedToolCall[],
       growth: this.contextGrowthStmt.all(id) as GrowthPoint[],
+      context: this.sessionContextStmt.get(id) as SessionContext,
     };
     return { session, requests, analysis };
   }
@@ -512,6 +551,10 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "tool_calls", "tool_id", "TEXT");
   ensureColumn(db, "tool_calls", "result_bytes", "INTEGER");
   ensureColumn(db, "tool_calls", "result_tokens", "INTEGER");
+  ensureColumn(db, "metrics", "message_count", "INTEGER");
+  ensureColumn(db, "metrics", "system_tokens", "INTEGER");
+  ensureColumn(db, "metrics", "tools_defined", "INTEGER");
+  ensureColumn(db, "metrics", "tools_tokens", "INTEGER");
   return new Store(db);
 }
 

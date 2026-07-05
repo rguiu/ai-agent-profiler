@@ -178,8 +178,9 @@ describe("parseTrace", () => {
     expect(result.model).toBeNull();
   });
 
-  it("extracts tool results from the request body (both formats)", () => {
+  it("extracts tool results and context from the request body", () => {
     const requestBody = JSON.stringify({
+      system: "You are a helpful assistant",
       messages: [
         {
           role: "user",
@@ -189,6 +190,7 @@ describe("parseTrace", () => {
         },
         { role: "tool", tool_call_id: "c2", content: "bbbbbb" },
       ],
+      tools: [{ name: "read", description: "Read file" }, { name: "write" }],
     });
     const events: TraceEvent[] = [
       { type: "request", headers: {} },
@@ -212,6 +214,10 @@ describe("parseTrace", () => {
       { id: "t1", bytes: 4, tokens: 1 },
       { id: "c2", bytes: 6, tokens: 2 },
     ]);
+    expect(result.context.messageCount).toBe(2);
+    expect(result.context.systemTokens).toBeGreaterThan(0);
+    expect(result.context.toolsDefined).toBe(2);
+    expect(result.context.toolsTokens).toBeGreaterThan(0);
   });
 
   it("returns empty when there is no response body", () => {

@@ -70,7 +70,7 @@ Only after the capture core is solid.
 The reason the project exists — enabled by the raw traces captured above.
 
 - **Analysis engine** — detect repeated prompts, repeated files, repeated tool calls, large context growth, potential optimisations. _(Started: the session view surfaces tool usage, repeated tool calls by argument, and a context-growth series; `/tools` gives global tool usage.)_
-- **Context analysis** — repeated / unused context, context amplification.
+- **Context analysis** — repeated / unused context, context amplification. _(Started: per-request breakdown of system-prompt tokens, message count, and tool-definition tokens, plus per-session totals showing cumulative duplication of the static system + tools payload.)_
 - **Tool efficiency** — output bytes, estimated prompt tokens, execution time, downstream token cost, subsequent tool dependencies. _(Started: tool-result token amplification — each tool call is linked to its result in the next request and its byte/token size recorded.)_
 - **MCP analysis** — servers used, call frequency, payload sizes, latency, token impact.
 - **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports.

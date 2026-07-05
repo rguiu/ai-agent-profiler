@@ -20,6 +20,13 @@ export interface ParsedToolResult {
   tokens: number;
 }
 
+export interface ParsedContext {
+  messageCount: number;
+  systemTokens: number;
+  toolsDefined: number;
+  toolsTokens: number;
+}
+
 export interface ParsedTrace {
   format: "anthropic" | "openai" | "unknown";
   model: string | null;
@@ -28,6 +35,7 @@ export interface ParsedTrace {
   stopReason: string | null;
   toolCalls: ParsedToolCall[];
   toolResults: ParsedToolResult[];
+  context: ParsedContext;
   streaming: boolean;
 }
 
@@ -318,12 +326,25 @@ function extractResultText(content: unknown): string {
   return out;
 }
 
-function parseToolResults(events: TraceEvent[]): ParsedToolResult[] {
+function parseRequestBody(events: TraceEvent[]): {
+  toolResults: ParsedToolResult[];
+  context: ParsedContext;
+} {
+  const empty = {
+    toolResults: [] as ParsedToolResult[],
+    context: {
+      messageCount: 0,
+      systemTokens: 0,
+      toolsDefined: 0,
+      toolsTokens: 0,
+    },
+  };
+
   const requestEvent = events.find((e) => e.type === "request");
   const chunks = events
     .filter((e) => e.type === "request_body" && typeof e.data === "string")
     .map((e) => Buffer.from(e.data as string, "base64"));
-  if (chunks.length === 0) return [];
+  if (chunks.length === 0) return empty;
 
   const body = decompress(
     Buffer.concat(chunks),
@@ -333,26 +354,32 @@ function parseToolResults(events: TraceEvent[]): ParsedToolResult[] {
   try {
     parsed = JSON.parse(body.toString("utf8"));
   } catch {
-    return [];
+    return empty;
   }
   const record = asRecord(parsed);
-  if (!record) return [];
+  if (!record) return empty;
 
-  const results: ParsedToolResult[] = [];
+  const messages = asArray(record.messages);
+  const toolResults: ParsedToolResult[] = [];
   const add = (id: string | null, content: unknown): void => {
     if (!id) return;
     const text = extractResultText(content);
-    results.push({
+    toolResults.push({
       id,
       bytes: Buffer.byteLength(text),
       tokens: estimateTokens(text),
     });
   };
 
-  for (const message of asArray(record.messages)) {
+  let systemText = extractResultText(record.system ?? "");
+  for (const message of messages) {
     const msg = asRecord(message);
     if (!msg) continue;
-    if (msg.role === "tool") {
+    const role = asString(msg.role);
+    if (role === "system" || role === "developer") {
+      systemText += extractResultText(msg.content);
+    }
+    if (role === "tool") {
       add(asString(msg.tool_call_id), msg.content);
       continue;
     }
@@ -363,11 +390,19 @@ function parseToolResults(events: TraceEvent[]): ParsedToolResult[] {
       }
     }
   }
-  return results;
+
+  const tools = asArray(record.tools);
+  const context: ParsedContext = {
+    messageCount: messages.length,
+    systemTokens: estimateTokens(systemText),
+    toolsDefined: tools.length,
+    toolsTokens: tools.length > 0 ? estimateTokens(JSON.stringify(tools)) : 0,
+  };
+  return { toolResults, context };
 }
 
 export function parseTrace(events: TraceEvent[]): ParsedTrace {
-  const toolResults = parseToolResults(events);
+  const { toolResults, context } = parseRequestBody(events);
   const base: ParsedTrace = {
     format: "unknown",
     model: null,
@@ -376,6 +411,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
     stopReason: null,
     toolCalls: [],
     toolResults,
+    context,
     streaming: false,
   };
 
@@ -403,6 +439,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
       ...parseAnthropic(objects),
       format: "anthropic",
       toolResults,
+      context,
       streaming,
     };
   }
@@ -411,6 +448,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
       ...parseOpenAI(objects),
       format: "openai",
       toolResults,
+      context,
       streaming,
     };
   }

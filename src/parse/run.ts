@@ -45,6 +45,10 @@ export function runParse(
         toolCallCount: result.toolCalls.length,
         cost,
         parsedAt: new Date().toISOString(),
+        messageCount: result.context.messageCount,
+        systemTokens: result.context.systemTokens,
+        toolsDefined: result.context.toolsDefined,
+        toolsTokens: result.context.toolsTokens,
       });
       store.replaceToolCalls(target.id, result.toolCalls);
       for (const toolResult of result.toolResults) toolResults.push(toolResult);

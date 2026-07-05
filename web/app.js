@@ -214,10 +214,23 @@ async function sessionDetail(id) {
     }
     <h2>Context growth</h2>
     ${growthChart(analysis.growth)}
+    <h2>Context cost</h2>
+    ${contextSummary(analysis.context)}
     <h2>Tool usage</h2>
     ${toolBars(analysis.toolUsage)}
     <h2>Repeated tool calls</h2>
     ${repeatedTable(analysis.repeated)}`;
+}
+
+function contextSummary(ctx) {
+  if (!ctx || !ctx.requests)
+    return `<p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+  return `<div class="kv">
+      <div class="k">parsed requests</div><div class="v">${num(ctx.requests)}</div>
+      <div class="k">system-prompt tokens (resent)</div><div class="v">~${num(ctx.system_tokens_total)}</div>
+      <div class="k">tool-definition tokens (resent)</div><div class="v">~${num(ctx.tools_tokens_total)}</div>
+    </div>
+    <p class="muted">The system prompt and tool definitions are largely static but re-sent on every request — this is the cumulative token cost of that duplication.</p>`;
 }
 
 async function requestDetail(id) {
@@ -247,6 +260,9 @@ async function requestDetail(id) {
       <div class="k">latency</div><div class="v">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</div>
       <div class="k">model</div><div class="v">${esc(r.model) || "—"}</div>
       <div class="k">tokens</div><div class="v">in ${r.input_tokens ?? "—"} / out ${r.output_tokens ?? "—"}</div>
+      <div class="k">messages</div><div class="v">${r.message_count ?? "—"}</div>
+      <div class="k">system prompt</div><div class="v">~${num(r.system_tokens ?? 0)} tok</div>
+      <div class="k">tools defined</div><div class="v">${r.tools_defined ?? "—"} (~${num(r.tools_tokens ?? 0)} tok)</div>
       <div class="k">stop reason</div><div class="v">${esc(r.stop_reason) || "—"}</div>
       <div class="k">cost</div><div class="v">${cost(r.cost)}</div>
       <div class="k">bytes</div><div class="v">req ${fmtBytes(r.request_bytes)} / resp ${fmtBytes(r.response_bytes)}</div>
