@@ -94,6 +94,8 @@ aap serve            # start the proxy + read API (also prints a line per reques
 aap run <agent>      # launch an agent through the profiler, e.g. aap run claude
                      #   tag a run: aap run --meta task=explain --meta iter=1 opencode
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
+aap sessions         # list captured sessions (aap sessions rm <id> to delete)
+aap commands         # break shell commands down by token cost (which to optimise)
 aap export <id>      # export a session report (Markdown; add --json for JSON)
 aap compare <ids>    # compare sessions side by side (add --json for JSON)
 aap mcp              # start an MCP server (stdio) for agent self-introspection

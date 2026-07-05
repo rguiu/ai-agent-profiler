@@ -544,6 +544,59 @@ export class Store {
     return rows.map((r) => r.id);
   }
 
+  resolveSessionId(prefix: string): string | undefined {
+    const rows = this.db
+      .prepare("SELECT id FROM sessions WHERE id = ? OR id LIKE ? LIMIT 2")
+      .all(prefix, `${prefix}%`) as { id: string }[];
+    const exact = rows.find((r) => r.id === prefix);
+    if (exact) return exact.id;
+    return rows.length === 1 ? rows[0]?.id : undefined;
+  }
+
+  bashToolCalls(
+    sessionId?: string,
+  ): Array<{ arguments: string | null; result_tokens: number | null }> {
+    const filter = "lower(tc.name) IN ('bash', 'shell', 'sh')";
+    if (sessionId) {
+      return this.db
+        .prepare(
+          `SELECT tc.arguments, tc.result_tokens FROM tool_calls tc
+           JOIN requests r ON r.id = tc.request_id
+           WHERE ${filter} AND r.session_id = ?`,
+        )
+        .all(sessionId) as Array<{
+        arguments: string | null;
+        result_tokens: number | null;
+      }>;
+    }
+    return this.db
+      .prepare(
+        `SELECT tc.arguments, tc.result_tokens FROM tool_calls tc WHERE ${filter}`,
+      )
+      .all() as Array<{
+      arguments: string | null;
+      result_tokens: number | null;
+    }>;
+  }
+
+  deleteSession(id: string): void {
+    const txn = this.db.transaction((sid: string) => {
+      this.db
+        .prepare(
+          "DELETE FROM tool_calls WHERE request_id IN (SELECT id FROM requests WHERE session_id = ?)",
+        )
+        .run(sid);
+      this.db
+        .prepare(
+          "DELETE FROM metrics WHERE request_id IN (SELECT id FROM requests WHERE session_id = ?)",
+        )
+        .run(sid);
+      this.db.prepare("DELETE FROM requests WHERE session_id = ?").run(sid);
+      this.db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
+    });
+    txn(id);
+  }
+
   getRequest(id: string): RequestDetail | undefined {
     const row = this.getRequestStmt.get(id) as
       Omit<RequestDetail, "toolCalls" | "events"> | undefined;

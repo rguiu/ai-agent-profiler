@@ -108,6 +108,39 @@ describe("Store", () => {
     expect(req.response_bytes).toBe(20);
   });
 
+  it("resolves a session id by prefix and deletes a session", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({ id: "abcdef12-3456", startedAt: "t" });
+    store.insertRequest({
+      id: "r1",
+      sessionId: "abcdef12-3456",
+      provider: "deepseek",
+      method: "POST",
+      path: "/x",
+      traceFile: "/t",
+      startedAt: "t",
+    });
+    store.finishRequest("r1", {
+      status: 200,
+      latencyMs: 1,
+      requestBytes: 1,
+      responseBytes: 1,
+      endedAt: "t",
+      error: null,
+    });
+
+    expect(store.resolveSessionId("abcdef12")).toBe("abcdef12-3456");
+    expect(store.resolveSessionId("zzz")).toBeUndefined();
+
+    store.deleteSession("abcdef12-3456");
+    const remaining = store.rawQuery(
+      "SELECT COUNT(*) AS c FROM requests",
+    ) as Array<{ c: number }>;
+    store.close();
+    expect(remaining[0]?.c).toBe(0);
+  });
+
   it("finds session ids by metadata", () => {
     const dir = tmpDir();
     const store = openStore(dir);

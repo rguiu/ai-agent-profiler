@@ -1,3 +1,5 @@
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { loadConfig } from "../config/index.js";
 import { openStore } from "../store/index.js";
 
@@ -14,10 +16,35 @@ function pad(value: string, width: number): string {
 }
 
 export function sessions(args: string[]): void {
-  const json = args.includes("--json");
   const config = loadConfig();
   const store = openStore(config.storage.dir);
   try {
+    if (args[0] === "rm") {
+      const ids = args.slice(1).filter((a) => !a.startsWith("--"));
+      if (ids.length === 0) {
+        console.error("Usage: aap sessions rm <session-id> [...]");
+        process.exitCode = 1;
+        return;
+      }
+      for (const idOrPrefix of ids) {
+        const id = store.resolveSessionId(idOrPrefix);
+        if (!id) {
+          console.error(
+            `session "${idOrPrefix}" not found (or ambiguous prefix)`,
+          );
+          continue;
+        }
+        store.deleteSession(id);
+        rmSync(join(config.storage.dir, "traces", id), {
+          recursive: true,
+          force: true,
+        });
+        console.log(`deleted ${id}`);
+      }
+      return;
+    }
+
+    const json = args.includes("--json");
     const rows = store.listSessions();
     if (json) {
       console.log(JSON.stringify(rows, null, 2));

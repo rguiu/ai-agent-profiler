@@ -3,6 +3,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "../config/index.js";
+import { commandBreakdown } from "./commands.js";
 import { collectSummaries } from "./compare.js";
 import { recommend } from "../recommend/index.js";
 import { openStore, type Store } from "../store/index.js";
@@ -164,6 +165,23 @@ function registerTools(server: McpServer, store: Store): void {
         content: [
           { type: "text", text: JSON.stringify({ summaries, missing }) },
         ],
+      };
+    },
+  );
+
+  server.tool(
+    "command_breakdown",
+    "Break down shell (bash) commands the agent ran, grouped by program, with call counts and cumulative result tokens — shows which commands cost the most context.",
+    {
+      session: z
+        .string()
+        .optional()
+        .describe("Optional session id to scope to"),
+    },
+    async ({ session }) => {
+      const rows = commandBreakdown(store.bashToolCalls(session));
+      return {
+        content: [{ type: "text", text: JSON.stringify(rows) }],
       };
     },
   );
