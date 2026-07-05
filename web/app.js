@@ -83,10 +83,12 @@ function toolBars(items) {
     return `<p class="empty">No tool calls recorded. Run <code>aap parse</code>.</p>`;
   const max = Math.max(...items.map((t) => t.count), 1);
   return `<div class="bars">${items
-    .map(
-      (t) =>
-        `<div class="bar-row"><span class="bar-label mono">${esc(t.name)}</span><span class="bar-track"><span class="bar-fill" style="width:${((t.count / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${num(t.count)}</span></div>`,
-    )
+    .map((t) => {
+      const amp = t.result_tokens
+        ? ` · ~${num(t.result_tokens)} result tok`
+        : "";
+      return `<div class="bar-row"><span class="bar-label mono">${esc(t.name)}</span><span class="bar-track"><span class="bar-fill" style="width:${((t.count / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${num(t.count)}${amp}</span></div>`;
+    })
     .join("")}</div>`;
 }
 
@@ -267,7 +269,7 @@ async function requestDetail(id) {
 function toolCallsHtml(calls) {
   if (!calls.length)
     return `<p class="empty">No tool calls in this response.</p>`;
-  return `<table><thead><tr><th>#</th><th>Tool</th><th>Arguments</th></tr></thead><tbody>${calls
+  return `<table><thead><tr><th>#</th><th>Tool</th><th>Arguments</th><th class="num">Result (~tok)</th></tr></thead><tbody>${calls
     .map((t, i) => {
       let args = t.arguments || "";
       try {
@@ -275,7 +277,11 @@ function toolCallsHtml(calls) {
       } catch {
         /* leave raw if not valid JSON (e.g. partial stream) */
       }
-      return `<tr><td class="num">${i}</td><td>${esc(t.name)}</td><td class="mono">${esc(args) || '<span class="muted">—</span>'}</td></tr>`;
+      const result =
+        t.result_tokens != null
+          ? `~${num(t.result_tokens)}`
+          : '<span class="muted">—</span>';
+      return `<tr><td class="num">${i}</td><td>${esc(t.name)}</td><td class="mono">${esc(args) || '<span class="muted">—</span>'}</td><td class="num">${result}</td></tr>`;
     })
     .join("")}</tbody></table>`;
 }

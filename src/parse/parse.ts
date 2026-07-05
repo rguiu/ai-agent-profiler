@@ -9,8 +9,15 @@ export interface TraceEvent {
 }
 
 export interface ParsedToolCall {
+  id: string;
   name: string;
   arguments: string;
+}
+
+export interface ParsedToolResult {
+  id: string;
+  bytes: number;
+  tokens: number;
 }
 
 export interface ParsedTrace {
@@ -20,6 +27,7 @@ export interface ParsedTrace {
   outputTokens: number | null;
   stopReason: string | null;
   toolCalls: ParsedToolCall[];
+  toolResults: ParsedToolResult[];
   streaming: boolean;
 }
 
@@ -159,6 +167,7 @@ function applyAnthropicMessage(
       if (name) {
         const input = asRecord(record.input);
         acc.toolCalls.push({
+          id: asString(record.id) ?? "",
           name,
           arguments: input ? JSON.stringify(input) : "",
         });
@@ -169,7 +178,7 @@ function applyAnthropicMessage(
 
 function parseAnthropic(objects: unknown[]): Extract {
   const acc = emptyExtract();
-  const byIndex = new Map<number, { name: string; args: string }>();
+  const byIndex = new Map<number, { id: string; name: string; args: string }>();
   for (const object of objects) {
     const record = asRecord(object);
     if (!record) continue;
@@ -198,6 +207,7 @@ function parseAnthropic(objects: unknown[]): Extract {
           const name = asString(block.name) ?? "";
           const input = asRecord(block.input);
           byIndex.set(index, {
+            id: asString(block.id) ?? "",
             name,
             args:
               input && Object.keys(input).length > 0
@@ -220,14 +230,18 @@ function parseAnthropic(objects: unknown[]): Extract {
     }
   }
   for (const [, entry] of [...byIndex.entries()].sort((a, b) => a[0] - b[0])) {
-    acc.toolCalls.push({ name: entry.name, arguments: entry.args });
+    acc.toolCalls.push({
+      id: entry.id,
+      name: entry.name,
+      arguments: entry.args,
+    });
   }
   return acc;
 }
 
 function parseOpenAI(objects: unknown[]): Extract {
   const acc = emptyExtract();
-  const byIndex = new Map<number, { name: string; args: string }>();
+  const byIndex = new Map<number, { id: string; name: string; args: string }>();
   const noIndex: ParsedToolCall[] = [];
 
   for (const object of objects) {
@@ -256,17 +270,19 @@ function parseOpenAI(objects: unknown[]): Extract {
         const fn = asRecord(toolRecord.function);
         const name = fn ? asString(fn.name) : null;
         const argFragment = fn ? asString(fn.arguments) : null;
+        const id = asString(toolRecord.id);
         const index = asNumber(toolRecord.index);
         if (index !== null) {
           let entry = byIndex.get(index);
           if (!entry) {
-            entry = { name: "", args: "" };
+            entry = { id: "", name: "", args: "" };
             byIndex.set(index, entry);
           }
+          if (id) entry.id = id;
           if (name) entry.name = name;
           if (argFragment) entry.args += argFragment;
         } else if (name) {
-          noIndex.push({ name, arguments: argFragment ?? "" });
+          noIndex.push({ id: id ?? "", name, arguments: argFragment ?? "" });
         }
       }
     }
@@ -276,19 +292,90 @@ function parseOpenAI(objects: unknown[]): Extract {
     byIndex.size > 0
       ? [...byIndex.entries()]
           .sort((a, b) => a[0] - b[0])
-          .map(([, entry]) => ({ name: entry.name, arguments: entry.args }))
+          .map(([, entry]) => ({
+            id: entry.id,
+            name: entry.name,
+            arguments: entry.args,
+          }))
       : noIndex;
   return acc;
 }
 
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function extractResultText(content: unknown): string {
+  const asStr = asString(content);
+  if (asStr !== null) return asStr;
+  let out = "";
+  for (const block of asArray(content)) {
+    const record = asRecord(block);
+    if (!record) continue;
+    const text = asString(record.text);
+    out += text !== null ? text : JSON.stringify(block);
+  }
+  return out;
+}
+
+function parseToolResults(events: TraceEvent[]): ParsedToolResult[] {
+  const requestEvent = events.find((e) => e.type === "request");
+  const chunks = events
+    .filter((e) => e.type === "request_body" && typeof e.data === "string")
+    .map((e) => Buffer.from(e.data as string, "base64"));
+  if (chunks.length === 0) return [];
+
+  const body = decompress(
+    Buffer.concat(chunks),
+    headerValue(requestEvent?.headers, "content-encoding"),
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.toString("utf8"));
+  } catch {
+    return [];
+  }
+  const record = asRecord(parsed);
+  if (!record) return [];
+
+  const results: ParsedToolResult[] = [];
+  const add = (id: string | null, content: unknown): void => {
+    if (!id) return;
+    const text = extractResultText(content);
+    results.push({
+      id,
+      bytes: Buffer.byteLength(text),
+      tokens: estimateTokens(text),
+    });
+  };
+
+  for (const message of asArray(record.messages)) {
+    const msg = asRecord(message);
+    if (!msg) continue;
+    if (msg.role === "tool") {
+      add(asString(msg.tool_call_id), msg.content);
+      continue;
+    }
+    for (const block of asArray(msg.content)) {
+      const blockRecord = asRecord(block);
+      if (blockRecord?.type === "tool_result") {
+        add(asString(blockRecord.tool_use_id), blockRecord.content);
+      }
+    }
+  }
+  return results;
+}
+
 export function parseTrace(events: TraceEvent[]): ParsedTrace {
-  const empty: ParsedTrace = {
+  const toolResults = parseToolResults(events);
+  const base: ParsedTrace = {
     format: "unknown",
     model: null,
     inputTokens: null,
     outputTokens: null,
     stopReason: null,
     toolCalls: [],
+    toolResults,
     streaming: false,
   };
 
@@ -296,7 +383,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
   const chunks = events
     .filter((e) => e.type === "response_body" && typeof e.data === "string")
     .map((e) => Buffer.from(e.data as string, "base64"));
-  if (chunks.length === 0) return empty;
+  if (chunks.length === 0) return base;
 
   const body = decompress(
     Buffer.concat(chunks),
@@ -309,15 +396,25 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
     text.startsWith("data:") ||
     text.startsWith("event:");
   const objects = streaming ? extractSSE(text) : parseWholeJson(text);
-  if (objects.length === 0) return { ...empty, streaming };
+  if (objects.length === 0) return { ...base, streaming };
 
   if (looksAnthropic(objects)) {
-    return { ...parseAnthropic(objects), format: "anthropic", streaming };
+    return {
+      ...parseAnthropic(objects),
+      format: "anthropic",
+      toolResults,
+      streaming,
+    };
   }
   if (looksOpenAI(objects)) {
-    return { ...parseOpenAI(objects), format: "openai", streaming };
+    return {
+      ...parseOpenAI(objects),
+      format: "openai",
+      toolResults,
+      streaming,
+    };
   }
-  return { ...empty, streaming };
+  return { ...base, streaming };
 }
 
 export function computeCost(

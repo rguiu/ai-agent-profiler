@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import type { Config } from "../config/index.js";
 import type { Store } from "../store/index.js";
-import { computeCost, parseTrace, type TraceEvent } from "./parse.js";
+import {
+  computeCost,
+  parseTrace,
+  type ParsedToolResult,
+  type TraceEvent,
+} from "./parse.js";
 
 export interface ParseSummary {
   total: number;
@@ -15,6 +20,7 @@ export function runParse(
   opts: { all: boolean },
 ): ParseSummary {
   const targets = store.requestsToParse(opts.all);
+  const toolResults: ParsedToolResult[] = [];
   let parsed = 0;
   let failed = 0;
 
@@ -41,11 +47,19 @@ export function runParse(
         parsedAt: new Date().toISOString(),
       });
       store.replaceToolCalls(target.id, result.toolCalls);
+      for (const toolResult of result.toolResults) toolResults.push(toolResult);
       parsed++;
     } catch (err) {
       failed++;
       console.error(`parse: ${target.id} failed: ${(err as Error).message}`);
     }
+  }
+
+  // Correlate tool results (from request bodies) back to the tool calls that
+  // produced them, matched by tool id. Done after all calls are (re)written so
+  // it is order-independent within a run.
+  for (const toolResult of toolResults) {
+    store.recordToolResult(toolResult.id, toolResult.bytes, toolResult.tokens);
   }
 
   return { total: targets.length, parsed, failed };

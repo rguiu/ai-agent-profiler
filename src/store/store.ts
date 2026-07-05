@@ -47,14 +47,18 @@ CREATE TABLE IF NOT EXISTS metrics (
 );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  request_id TEXT NOT NULL,
-  ordinal    INTEGER NOT NULL,
-  name       TEXT NOT NULL,
-  arguments  TEXT
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id    TEXT NOT NULL,
+  ordinal       INTEGER NOT NULL,
+  name          TEXT NOT NULL,
+  arguments     TEXT,
+  tool_id       TEXT,
+  result_bytes  INTEGER,
+  result_tokens INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls (request_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_id ON tool_calls (tool_id);
 `;
 
 export interface RequestRow {
@@ -150,9 +154,13 @@ export interface ToolCall {
   ordinal: number;
   name: string;
   arguments: string | null;
+  tool_id: string | null;
+  result_bytes: number | null;
+  result_tokens: number | null;
 }
 
 export interface ToolCallInput {
+  id: string;
   name: string;
   arguments: string;
 }
@@ -195,6 +203,7 @@ export interface Stats {
 export interface ToolUsage {
   name: string;
   count: number;
+  result_tokens: number;
 }
 
 export interface RepeatedToolCall {
@@ -225,6 +234,7 @@ export class Store {
   private readonly upsertMetricsStmt;
   private readonly deleteToolCallsStmt;
   private readonly insertToolCallStmt;
+  private readonly recordToolResultStmt;
   private readonly replaceToolCallsTxn: (
     requestId: string,
     calls: readonly ToolCallInput[],
@@ -295,8 +305,12 @@ export class Store {
       `DELETE FROM tool_calls WHERE request_id = ?`,
     );
     this.insertToolCallStmt = db.prepare(`
-      INSERT INTO tool_calls (request_id, ordinal, name, arguments)
-      VALUES (@request_id, @ordinal, @name, @arguments)
+      INSERT INTO tool_calls (request_id, ordinal, name, arguments, tool_id)
+      VALUES (@request_id, @ordinal, @name, @arguments, @tool_id)
+    `);
+    this.recordToolResultStmt = db.prepare(`
+      UPDATE tool_calls SET result_bytes = @bytes, result_tokens = @tokens
+      WHERE tool_id = @tool_id
     `);
     this.replaceToolCallsTxn = db.transaction(
       (requestId: string, calls: readonly ToolCallInput[]) => {
@@ -307,6 +321,7 @@ export class Store {
             ordinal,
             name: call.name,
             arguments: call.arguments === "" ? null : call.arguments,
+            tool_id: call.id === "" ? null : call.id,
           });
         });
       },
@@ -346,7 +361,7 @@ export class Store {
       WHERE r.id = ?
     `);
     this.getToolCallsStmt = db.prepare(
-      `SELECT ordinal, name, arguments FROM tool_calls WHERE request_id = ? ORDER BY ordinal`,
+      `SELECT ordinal, name, arguments, tool_id, result_bytes, result_tokens FROM tool_calls WHERE request_id = ? ORDER BY ordinal`,
     );
     this.statsStmt = db.prepare(`
       SELECT
@@ -357,11 +372,14 @@ export class Store {
         COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost
     `);
     this.toolUsageGlobalStmt = db.prepare(`
-      SELECT name, COUNT(*) AS count FROM tool_calls
+      SELECT name, COUNT(*) AS count,
+             COALESCE(SUM(result_tokens), 0) AS result_tokens
+      FROM tool_calls
       GROUP BY name ORDER BY count DESC, name
     `);
     this.toolUsageSessionStmt = db.prepare(`
-      SELECT tc.name, COUNT(*) AS count
+      SELECT tc.name, COUNT(*) AS count,
+             COALESCE(SUM(tc.result_tokens), 0) AS result_tokens
       FROM tool_calls tc JOIN requests r ON r.id = tc.request_id
       WHERE r.session_id = ?
       GROUP BY tc.name ORDER BY count DESC, tc.name
@@ -442,6 +460,10 @@ export class Store {
     this.replaceToolCallsTxn(requestId, calls);
   }
 
+  recordToolResult(toolId: string, bytes: number, tokens: number): void {
+    this.recordToolResultStmt.run({ tool_id: toolId, bytes, tokens });
+  }
+
   listSessions(): SessionSummary[] {
     return this.listSessionsStmt.all() as SessionSummary[];
   }
@@ -487,6 +509,9 @@ export function openStore(dir: string): Store {
   db.pragma("busy_timeout = 5000");
   db.exec(SCHEMA);
   ensureColumn(db, "tool_calls", "arguments", "TEXT");
+  ensureColumn(db, "tool_calls", "tool_id", "TEXT");
+  ensureColumn(db, "tool_calls", "result_bytes", "INTEGER");
+  ensureColumn(db, "tool_calls", "result_tokens", "INTEGER");
   return new Store(db);
 }
 

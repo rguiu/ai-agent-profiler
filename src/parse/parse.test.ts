@@ -123,7 +123,7 @@ describe("parseTrace", () => {
     expect(result.outputTokens).toBe(25);
     expect(result.stopReason).toBe("tool_use");
     expect(result.toolCalls).toEqual([
-      { name: "get_weather", arguments: '{"location":"NYC"}' },
+      { id: "t1", name: "get_weather", arguments: '{"location":"NYC"}' },
     ]);
     expect(result.streaming).toBe(true);
   });
@@ -138,7 +138,7 @@ describe("parseTrace", () => {
     expect(result.outputTokens).toBe(8);
     expect(result.stopReason).toBe("tool_calls");
     expect(result.toolCalls).toEqual([
-      { name: "search", arguments: '{"q":"x"}' },
+      { id: "t1", name: "search", arguments: '{"q":"x"}' },
     ]);
     expect(result.streaming).toBe(true);
   });
@@ -152,7 +152,9 @@ describe("parseTrace", () => {
     expect(result.inputTokens).toBe(5);
     expect(result.outputTokens).toBe(7);
     expect(result.stopReason).toBe("end_turn");
-    expect(result.toolCalls).toEqual([{ name: "lookup", arguments: "{}" }]);
+    expect(result.toolCalls).toEqual([
+      { id: "t", name: "lookup", arguments: "{}" },
+    ]);
     expect(result.streaming).toBe(false);
   });
 
@@ -174,6 +176,42 @@ describe("parseTrace", () => {
     );
     expect(result.format).toBe("unknown");
     expect(result.model).toBeNull();
+  });
+
+  it("extracts tool results from the request body (both formats)", () => {
+    const requestBody = JSON.stringify({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "t1", content: "aaaa" },
+          ],
+        },
+        { role: "tool", tool_call_id: "c2", content: "bbbbbb" },
+      ],
+    });
+    const events: TraceEvent[] = [
+      { type: "request", headers: {} },
+      {
+        type: "request_body",
+        data: Buffer.from(requestBody).toString("base64"),
+      },
+      {
+        type: "response",
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+      {
+        type: "response_body",
+        data: Buffer.from(ANTHROPIC_JSON).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    const result = parseTrace(events);
+    expect(result.toolResults).toEqual([
+      { id: "t1", bytes: 4, tokens: 1 },
+      { id: "c2", bytes: 6, tokens: 2 },
+    ]);
   });
 
   it("returns empty when there is no response body", () => {

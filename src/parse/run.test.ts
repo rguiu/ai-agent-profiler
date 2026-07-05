@@ -144,4 +144,108 @@ describe("runParse", () => {
     expect(runParse(store, {}, { all: true }).parsed).toBe(1);
     store.close();
   });
+
+  it("correlates a tool result in a later request back to its tool call", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+
+    const noToolResponse = [
+      `data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":30}}}`,
+      ``,
+      `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+      ``,
+    ].join("\n");
+    const write = (name: string, events: unknown[]): string => {
+      const file = join(dir, name);
+      writeFileSync(
+        file,
+        events.map((e) => JSON.stringify(e)).join("\n") + "\n",
+      );
+      return file;
+    };
+
+    // r1 response calls tool_use id "t1"
+    const r1 = write("r1.ndjson", [
+      { type: "request", headers: {} },
+      {
+        type: "response",
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      },
+      {
+        type: "response_body",
+        data: Buffer.from(ANTHROPIC_SSE).toString("base64"),
+      },
+      { type: "end" },
+    ]);
+    // r2 request body carries the tool_result for "t1"
+    const r2Body = JSON.stringify({
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: "RESULT-OUTPUT",
+            },
+          ],
+        },
+      ],
+    });
+    const r2 = write("r2.ndjson", [
+      { type: "request", headers: {} },
+      { type: "request_body", data: Buffer.from(r2Body).toString("base64") },
+      {
+        type: "response",
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      },
+      {
+        type: "response_body",
+        data: Buffer.from(noToolResponse).toString("base64"),
+      },
+      { type: "end" },
+    ]);
+
+    for (const [id, file, started] of [
+      ["req-1", r1, "2026-01-01T00:00:00Z"],
+      ["req-2", r2, "2026-01-01T00:01:00Z"],
+    ] as const) {
+      store.insertRequest({
+        id,
+        sessionId: "s1",
+        provider: "anthropic",
+        method: "POST",
+        path: "/x",
+        traceFile: file,
+        startedAt: started,
+      });
+      store.finishRequest(id, {
+        status: 200,
+        latencyMs: 1,
+        requestBytes: 1,
+        responseBytes: 1,
+        endedAt: started,
+        error: null,
+      });
+    }
+
+    runParse(store, {}, { all: false });
+
+    const db = new Database(join(dir, "aap.sqlite"));
+    const row = db
+      .prepare(
+        "SELECT result_bytes, result_tokens FROM tool_calls WHERE tool_id = ?",
+      )
+      .get("t1") as {
+      result_bytes: number | null;
+      result_tokens: number | null;
+    };
+    db.close();
+    store.close();
+
+    expect(row.result_bytes).toBe(Buffer.byteLength("RESULT-OUTPUT"));
+    expect(row.result_tokens).toBe(Math.ceil("RESULT-OUTPUT".length / 4));
+  });
 });

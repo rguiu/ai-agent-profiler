@@ -97,7 +97,8 @@ requests   (id, session_id, provider, method, path, trace_file,
             request_bytes, response_bytes, error)
 metrics    (request_id, format, model, input_tokens, output_tokens,
             stop_reason, streaming, tool_call_count, cost, parsed_at)
-tool_calls (id, request_id, ordinal, name, arguments)
+tool_calls (id, request_id, ordinal, name, arguments,
+            tool_id, result_bytes, result_tokens)
 ```
 
 `requests` is written on the hot path during capture (M2). `metrics` and

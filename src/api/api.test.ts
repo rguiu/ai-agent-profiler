@@ -69,7 +69,7 @@ function seed(store: Store, dir: string): void {
     parsedAt: "2026-01-01T00:00:02Z",
   });
   store.replaceToolCalls("r1", [
-    { name: "run_bash", arguments: '{"cmd":"ls"}' },
+    { id: "call_1", name: "run_bash", arguments: '{"cmd":"ls"}' },
   ]);
 }
 
@@ -156,13 +156,27 @@ describe("read API", () => {
       id: string;
       model: string;
       cost: number;
-      toolCalls: Array<{ ordinal: number; name: string; arguments: string }>;
+      toolCalls: Array<{
+        ordinal: number;
+        name: string;
+        arguments: string;
+        tool_id: string | null;
+        result_bytes: number | null;
+        result_tokens: number | null;
+      }>;
       events?: unknown[];
     };
     expect(detail.id).toBe("r1");
     expect(detail.model).toBe("claude-3-5-sonnet-20241022");
     expect(detail.toolCalls).toEqual([
-      { ordinal: 0, name: "run_bash", arguments: '{"cmd":"ls"}' },
+      {
+        ordinal: 0,
+        name: "run_bash",
+        arguments: '{"cmd":"ls"}',
+        tool_id: "call_1",
+        result_bytes: null,
+        result_tokens: null,
+      },
     ]);
     expect(detail.events).toBeUndefined();
   });
@@ -195,19 +209,25 @@ describe("read API", () => {
     const { port } = await startStack();
     const tools = (await (
       await fetch(`http://127.0.0.1:${port}/tools`)
-    ).json()) as Array<{ name: string; count: number }>;
-    expect(tools).toEqual([{ name: "run_bash", count: 1 }]);
+    ).json()) as Array<{ name: string; count: number; result_tokens: number }>;
+    expect(tools).toEqual([{ name: "run_bash", count: 1, result_tokens: 0 }]);
 
     const detail = (await (
       await fetch(`http://127.0.0.1:${port}/sessions/s1`)
     ).json()) as {
       analysis: {
-        toolUsage: Array<{ name: string; count: number }>;
+        toolUsage: Array<{
+          name: string;
+          count: number;
+          result_tokens: number;
+        }>;
         repeated: unknown[];
         growth: unknown[];
       };
     };
-    expect(detail.analysis.toolUsage).toEqual([{ name: "run_bash", count: 1 }]);
+    expect(detail.analysis.toolUsage).toEqual([
+      { name: "run_bash", count: 1, result_tokens: 0 },
+    ]);
     expect(detail.analysis.growth).toHaveLength(1);
     expect(detail.analysis.repeated).toEqual([]);
   });
