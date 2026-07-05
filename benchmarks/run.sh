@@ -84,6 +84,16 @@ TASK_N=0
 VERIFIED=0
 [ "$DRY" = "1" ] || { mkdir -p "$SCRATCH"; : > "$RESULTS"; }
 
+# Preflight: verification pins the session id (AAP_SESSION_ID) and tags the result
+# via `aap tag` — both need a current build. Warn early rather than after LLM calls.
+if [ "$NOVERIFY" != "1" ] && [ "$DRY" != "1" ]; then
+  if ! aap help 2>/dev/null | grep -q "aap tag"; then
+    echo "warning: your installed 'aap' has no 'tag' command, so verify results won't be" >&2
+    echo "         recorded on sessions. Rebuild it: 'npm run build' (re-link if needed)," >&2
+    echo "         or pass --no-verify to skip scoring." >&2
+  fi
+fi
+
 run_task() {
   id="$1"; prompt="$2"; verify="$3"
   [ -n "$verify" ] || { [ "$NOVERIFY" = "1" ] || verify="$DEFAULT_VERIFY"; }
@@ -113,8 +123,11 @@ run_task() {
     status=fail
   fi
   echo "    verify=$status  (log: $scratch/.verify.log)"
-  aap tag "$sid" "verify=$status" >/dev/null 2>&1 \
-    || echo "    warning: could not tag session $sid (is 'aap serve' running?)"
+  if ! aap tag "$sid" "verify=$status" >/dev/null 2>&1; then
+    echo "    warning: could not tag session $sid — the session is recorded but not"
+    echo "             marked verify=$status. Ensure 'aap' is rebuilt (npm run build)"
+    echo "             so it supports 'aap tag' + AAP_SESSION_ID, then: aap tag <id> verify=$status"
+  fi
   printf '%s\t%s\t%s\n' "$id" "$AGENT" "$status" >> "$RESULTS"
   VERIFIED=$((VERIFIED + 1))
 }
