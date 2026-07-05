@@ -1,8 +1,11 @@
 import { FileCapture } from "../capture/index.js";
 import { loadConfig } from "../config/index.js";
+import { runParse } from "../parse/index.js";
 import { consoleRequestLogger, createProxyServer } from "../proxy/index.js";
 import { SessionRegistry } from "../session/index.js";
 import { openStore } from "../store/index.js";
+
+const PARSE_INTERVAL_MS = 3000;
 
 export function serve(): void {
   const config = loadConfig();
@@ -29,7 +32,22 @@ export function serve(): void {
     console.log(`storage: ${config.storage.dir}`);
   });
 
+  // Capture stays on the hot path; parsing runs on a background tick so that
+  // finished requests turn into metrics/tool calls without a manual `aap parse`.
+  const parseTimer = setInterval(() => {
+    try {
+      const summary = runParse(store, config.pricing, { all: false });
+      if (summary.parsed > 0) {
+        console.log(`parsed ${summary.parsed} request(s)`);
+      }
+    } catch (err) {
+      console.error(`background parse failed: ${(err as Error).message}`);
+    }
+  }, PARSE_INTERVAL_MS);
+  parseTimer.unref();
+
   const shutdown = (): void => {
+    clearInterval(parseTimer);
     server.close(() => {
       store.close();
       process.exit(0);
