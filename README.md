@@ -29,28 +29,9 @@ Planned:
 
 ## Dashboard preview
 
-A sketch of the dark-mode dashboard at `/ui` (illustrative layout, not a screenshot):
+The dark-mode dashboard at `/ui`:
 
-```
-+----------------------------------------------------------------------------+
-| AI Agent Profiler       Dashboard   Sessions                    [Refresh]  |
-+----------------------------------------------------------------------------+
-|  +---------+ +---------+ +--------------+ +--------------+ +-----------+     |
-|  | SESSIONS| | REQUESTS| | INPUT TOKENS | | OUTPUT TOKENS| | EST. COST |     |
-|  |    3    | |    35   | |    711,590   | |    11,871    | |   $0.42   |     |
-|  +---------+ +---------+ +--------------+ +--------------+ +-----------+     |
-|                                                                            |
-|  Tool usage                                                                |
-|   webfetch  ##############################   10 . ~32,482 result tok       |
-|   read      #####################             8 . ~18,413 result tok       |
-|   bash      ###                               1 . ~3 result tok            |
-|                                                                            |
-|  Recent sessions                                                           |
-|   SESSION    CLIENT    CWD               REQS   IN        OUT     COST      |
-|   5d11f321   opencode  .../book           18    519,620   8,465   $0.31     |
-|   38ecd4ca   opencode  .../humanfraction  12    138,403   1,774   $0.08     |
-+----------------------------------------------------------------------------+
-```
+![AI Agent Profiler dashboard](docs/dashboard.png)
 
 A session page surfaces the analysis and recommendations:
 
