@@ -1,12 +1,14 @@
 # Roadmap
 
-Priorities for AI Agent Profiler. The near-term focus is the **capture core** — reliably recording raw, high-fidelity traces. Analysis, API, and UI are deliberately deferred until the data model is proven against real traffic.
+The **capture core is complete** — the profiler captures, parses, and surfaces real agent
+traffic today (verified with live opencode + DeepSeek sessions). Work now continues on
+analysis, presentation, and the research capabilities that are the project's reason to exist.
 
 See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 
 ---
 
-## Now: Capture Core
+## Done: Capture Core (M0–M4)
 
 ### M0 — Scaffold & docs
 
@@ -23,7 +25,7 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 - [x] Single-port listener; path routing `/<session_id>/<provider>/...`.
 - [x] Byte-faithful streaming passthrough (request + SSE response), unbuffered, correct headers/status/error propagation.
 - [x] `aap serve` (start proxy) and `aap run <agent>` (wrapper: session_id + cwd/repo, set base URLs, exec agent).
-- [ ] **Validate** Claude Code and Opencode both work end-to-end through the prefixed base URL with zero behaviour change (manual: needs the agents + provider credentials).
+- [x] **Validated** end-to-end with real **opencode + DeepSeek** (captured sessions tagged `client: opencode`). Claude Code path is built but not yet formally confirmed.
 
 **Done when:** a real Claude Code / Opencode session runs through the proxy indistinguishably from a direct connection.
 
@@ -53,15 +55,26 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 
 ---
 
-## Later: Analysis & Presentation (deferred)
+## Later: Analysis & Presentation
 
-Only after the capture core is solid.
+- [x] **Read API** — `/health`, `/sessions`, `/sessions/:id`, `/requests/:id` (`?events=1`), `/stats`, `/tools`.
+- [x] **Web UI** — dark-mode dashboard at `/ui`: tool-usage bars, sessions, session detail (context-growth chart, tool usage, repeated tool calls, context cost), request detail with reconstructed response and per-tool result tokens. No framework. _Remaining: latency/cost-over-time charts, live auto-refresh._
+- [x] **MCP server** (`aap mcp`) — 7 stdio tools for agent self-introspection: `list_sessions`, `get_session`, `get_request`, `search_requests`, `stats`, `top_tools`, `raw_sql`.
+- [~] **Search** — by model, tool, provider (via MCP `search_requests` + `raw_sql`). _Remaining: UI search bar; full-text search over prompts/filenames._
+- [ ] **Export** — session as JSON / Markdown.
+- [ ] **Custom run metadata** — let external tools (Armada, benchmark harnesses) tag traffic with their own context (run/task/node id), recorded for the profiler but never sent to the LLM. Designed in [`ARCHITECTURE.md`](ARCHITECTURE.md#custom-metadata-designed-not-yet-built); deferred until a concrete integration exists.
 
-- **REST API** — complete the endpoints (`/requests/:id`, `/metrics`, `/stats`, search).
-- **Web UI** — a minimal dark-mode dashboard is built (served at `/ui`: dashboard with tool-usage bars, sessions, session detail with **context-growth chart / tool usage / repeated tool calls**, request detail with reconstructed response), no framework. Remaining: more charts (latency/cost over time), live auto-refresh.
-- **Search** — by prompt, filename, model, tool, repository. _(Started: `aap mcp` exposes `search_requests` (provider/model/tool) and `raw_sql` over the SQLite index; a UI search bar is still pending.)_
-- **Export** — session as JSON / Markdown.
-- **Custom run metadata** — let external tools (Armada, benchmark harnesses) tag traffic with their own context (run/task/node id), recorded for the profiler but never sent to the LLM. Designed in [`ARCHITECTURE.md`](ARCHITECTURE.md#custom-metadata-designed-not-yet-built); deferred until a concrete integration exists.
+---
+
+## Delivered beyond the original plan
+
+Shipped while building the above, not in the M0–M4 scope:
+
+- Agent **self-introspection via MCP** (`aap mcp`).
+- **Live per-request logging** in the `aap serve` terminal.
+- **Run-from-anywhere** config resolution (`$AAP_CONFIG` → `~/.config/aap/config.toml` → `./config.toml`).
+- **opencode routing** via injected `OPENCODE_CONFIG_CONTENT` (per-run session ids without editing `opencode.json`).
+- **Tool-call arguments** capture and a request **`Started`** timestamp column.
 
 ---
 
@@ -69,12 +82,12 @@ Only after the capture core is solid.
 
 The reason the project exists — enabled by the raw traces captured above.
 
-- **Analysis engine** — detect repeated prompts, repeated files, repeated tool calls, large context growth, potential optimisations. _(Started: the session view surfaces tool usage, repeated tool calls by argument, and a context-growth series; `/tools` gives global tool usage.)_
-- **Context analysis** — repeated / unused context, context amplification. _(Started: per-request breakdown of system-prompt tokens, message count, and tool-definition tokens, plus per-session totals showing cumulative duplication of the static system + tools payload.)_
-- **Tool efficiency** — output bytes, estimated prompt tokens, execution time, downstream token cost, subsequent tool dependencies. _(Started: tool-result token amplification — each tool call is linked to its result in the next request and its byte/token size recorded.)_
-- **MCP analysis** — servers used, call frequency, payload sizes, latency, token impact.
-- **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports.
-- **Recommendations** — e.g. "this directory listing generated 5,800 prompt tokens", "the same file was read 12 times", "replacing shell search with structured symbol lookup could reduce prompt size by 80%".
+- [~] **Analysis engine** — detect repeated prompts, repeated files, repeated tool calls, large context growth, potential optimisations. _(Done: tool usage, repeated tool calls by argument, context-growth series, global tool usage via `/tools`.)_
+- [~] **Context analysis** — repeated / unused context, context amplification. _(Done: per-request system-prompt tokens, message count, and tool-definition tokens, plus per-session totals showing cumulative duplication of the static system + tools payload.)_
+- [~] **Tool efficiency** — output bytes, estimated prompt tokens, execution time, downstream token cost, subsequent tool dependencies. _(Done: tool-result token amplification — each tool call linked to its result in the next request with byte/token size.)_
+- [ ] **MCP-server analysis** — for MCP servers an agent uses: call frequency, payload sizes, latency, token impact. (Distinct from our own `aap mcp` introspection server, which is done.)
+- [ ] **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports.
+- [ ] **Recommendations** — e.g. "this directory listing generated 5,800 prompt tokens", "the same file was read 12 times", "replacing shell search with structured symbol lookup could reduce prompt size by 80%".
 
 ---
 
