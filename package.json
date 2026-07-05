@@ -1,12 +1,31 @@
 {
   "name": "ai-agent-profiler",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Local-first, read-only profiler for AI coding agents.",
+  "license": "MIT",
+  "author": "Raul Guiu <raulguiu@gmail.com>",
+  "keywords": [
+    "ai",
+    "agent",
+    "profiler",
+    "llm",
+    "proxy",
+    "claude-code",
+    "opencode",
+    "observability",
+    "tokens",
+    "mcp"
+  ],
   "bin": {
     "aap": "dist/cli/aap.js"
   },
+  "files": [
+    "dist",
+    "web",
+    "config.example.toml"
+  ],
   "scripts": {
     "dev": "tsx src/cli/aap.ts",
     "build": "tsc -p tsconfig.json",

@@ -19,7 +19,7 @@ Working now (capture core):
 - First insights: tool usage, repeated tool calls (by argument), per-session context growth, tool-result **token amplification**, and **context composition** (message count, system-prompt size, tool-definition tokens per request + duplicated totals per session).
 - **Recommendations** — actionable findings per session (repeated file reads, redundant tool calls, high amplification, context duplication, context growth).
 - **Export** — a session report as Markdown (or JSON) via `aap export`.
-- **MCP server** (`aap mcp`) — 8 tools exposing the profiler's data to an AI agent for self-introspection (list_sessions, get_session, get_request, search_requests, recommend, stats, top_tools, raw_sql).
+- **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data to an AI agent for self-introspection (list_sessions, get_session, get_request, search_requests, recommend, compare, stats, top_tools, command_breakdown, raw_sql).
 - Per-request logging in the `aap serve` terminal.
 
 Planned:
@@ -146,8 +146,9 @@ it and redacts it from stored traces. If a provider's base path isn't `/v1`, set
 
 `aap mcp` starts a stdio MCP server so an agent can query its own captured behaviour —
 "which requests cost the most?", "which file did I read most often?", "why so many `bash`
-calls?". Tools: `list_sessions`, `get_session`, `get_request`, `search_requests`, `stats`,
-`top_tools`, and `raw_sql` (read-only SELECT over the SQLite index).
+calls?". Tools: `list_sessions`, `get_session`, `get_request`, `search_requests`,
+`recommend`, `compare`, `stats`, `top_tools`, `command_breakdown`, and `raw_sql` (read-only
+SELECT over the SQLite index).
 
 Add it to `opencode.json`:
 
@@ -159,8 +160,47 @@ Add it to `opencode.json`:
 }
 ```
 
+## Benchmarks
+
+`benchmarks/` contains a corpus of small, self-contained fixtures (each with a planted,
+verifiable bug) and a runner that executes the same tasks through an agent, tagged for
+profiling. Use it to measure — with real data — where an agent wastes tokens and tools.
+
+```
+aap serve
+./benchmarks/run.sh opencode --fixture task-queue
+aap sessions           # find the runs
+aap commands           # which shell commands cost the most
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md).
+
+## Development
+
+Requires Node 20+.
+
+```
+npm install
+npm run dev -- <command>   # run the CLI via tsx, e.g. npm run dev -- sessions
+npm test                   # vitest
+npm run typecheck          # tsc --noEmit
+npm run lint               # eslint
+npm run format             # prettier --write
+npm run build              # compile to dist/
+```
+
+The proxy is written with Node's native `http`/`https` for byte-faithful streaming; the
+SQLite index uses `better-sqlite3`. Source is under `src/` (proxy, capture, store, parse,
+recommend, api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
+
 ## Documentation
 
 - [`VISION.md`](VISION.md) — why the project exists.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
-- [`ROADMAP.md`](ROADMAP.md) — what comes next.
+- [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
+- [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
+- [`docs/aish-requirements.md`](docs/aish-requirements.md) — evidence-driven AISH capability skeleton.
+
+## License
+
+[MIT](LICENSE) © Raul Guiu
