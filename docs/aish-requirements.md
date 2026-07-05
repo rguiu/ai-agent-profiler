@@ -23,6 +23,12 @@ For each capability, fill the four slots as benchmark data arrives:
 A capability with no baseline is a hypothesis, not a requirement. Promote it only when the
 baseline shows the problem is real and material.
 
+> **Status of the metrics:** every **Profiler metric** referenced below is _already
+> implemented_ in the profiler today (capture → `aap parse` → API/`aap compare`/recommendations).
+> The only exceptions are listed under [Open metrics](#open-metrics-not-yet-built-in-the-profiler).
+> So filling the baselines requires **only running the benchmark suite** — no further profiler
+> work is needed first.
+
 ### Template
 
 ```
@@ -38,6 +44,19 @@ baseline shows the problem is real and material.
 ---
 
 ## Candidate capabilities
+
+At a glance — each capability and the already-implemented metric that justifies it:
+
+| #   | Capability                     | Justifying profiler metric (available today)           |
+| --- | ------------------------------ | ------------------------------------------------------ |
+| 1   | Ranged / structured reads      | read-tool result tokens (amplification)                |
+| 2   | Repo-aware symbol search       | search-tool result tokens (`top_tools`, `aap compare`) |
+| 3   | Result summarisation           | `high_amplification` recommendation                    |
+| 4   | Observation / read caching     | `repeated_file_read` recommendation                    |
+| 5   | Lean tool definitions          | `context_duplication` (`metrics.tools_tokens`)         |
+| 6   | Context compaction             | context-growth series (`analysis.growth`)              |
+| 7   | Structured (typed) tool output | bytes-per-token (`result_bytes` / `result_tokens`)     |
+| 8   | Fewer round-trips              | requests per task (`stats.requests`, `aap compare`)    |
 
 ### 1. Ranged / structured file reads
 
