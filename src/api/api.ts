@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { recommend } from "../recommend/index.js";
 import type { Store } from "../store/index.js";
 
 export function handleApi(
@@ -25,7 +26,7 @@ export function handleApi(
       writeError(res, 404, `session "${id}" not found`);
       return true;
     }
-    writeJson(res, 200, detail);
+    writeJson(res, 200, { ...detail, recommendations: recommend(detail) });
     return true;
   }
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "../config/index.js";
+import { recommend } from "../recommend/index.js";
 import { openStore, type Store } from "../store/index.js";
 
 function readEvents(traceFile: string): unknown[] | undefined {
@@ -132,6 +133,22 @@ function registerTools(server: McpServer, store: Store): void {
       const rows = store.rawQuery(sql, ...params);
       return {
         content: [{ type: "text", text: JSON.stringify(rows) }],
+      };
+    },
+  );
+
+  server.tool(
+    "recommend",
+    "Analyse a session and return actionable findings (repeated file reads, redundant tool calls, high token amplification, context duplication, context growth)",
+    { id: z.string().describe("Session id") },
+    async ({ id }) => {
+      const detail = store.getSession(id);
+      if (!detail)
+        return {
+          content: [{ type: "text", text: `Session "${id}" not found` }],
+        };
+      return {
+        content: [{ type: "text", text: JSON.stringify(recommend(detail)) }],
       };
     },
   );

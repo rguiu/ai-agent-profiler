@@ -61,7 +61,7 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 - [x] **Web UI** — dark-mode dashboard at `/ui`: tool-usage bars, sessions, session detail (context-growth chart, tool usage, repeated tool calls, context cost), request detail with reconstructed response and per-tool result tokens. No framework. _Remaining: latency/cost-over-time charts, live auto-refresh._
 - [x] **MCP server** (`aap mcp`) — 7 stdio tools for agent self-introspection: `list_sessions`, `get_session`, `get_request`, `search_requests`, `stats`, `top_tools`, `raw_sql`.
 - [~] **Search** — by model, tool, provider (via MCP `search_requests` + `raw_sql`). _Remaining: UI search bar; full-text search over prompts/filenames._
-- [ ] **Export** — session as JSON / Markdown.
+- [x] **Export** — session report as Markdown or JSON via `aap export <id> [--json]`.
 - [ ] **Custom run metadata** — let external tools (Armada, benchmark harnesses) tag traffic with their own context (run/task/node id), recorded for the profiler but never sent to the LLM. Designed in [`ARCHITECTURE.md`](ARCHITECTURE.md#custom-metadata-designed-not-yet-built); deferred until a concrete integration exists.
 
 ---
@@ -87,7 +87,7 @@ The reason the project exists — enabled by the raw traces captured above.
 - [~] **Tool efficiency** — output bytes, estimated prompt tokens, execution time, downstream token cost, subsequent tool dependencies. _(Done: tool-result token amplification — each tool call linked to its result in the next request with byte/token size.)_
 - [ ] **MCP-server analysis** — for MCP servers an agent uses: call frequency, payload sizes, latency, token impact. (Distinct from our own `aap mcp` introspection server, which is done.)
 - [ ] **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports.
-- [ ] **Recommendations** — e.g. "this directory listing generated 5,800 prompt tokens", "the same file was read 12 times", "replacing shell search with structured symbol lookup could reduce prompt size by 80%".
+- [x] **Recommendations** — actionable findings from the analysis: repeated file reads, redundant tool calls, high token amplification, static context duplication, context growth. Exposed via the API, the `/ui` session page, the `recommend` MCP tool, and `aap export`.
 
 ---
 

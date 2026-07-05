@@ -170,7 +170,7 @@ async function sessions() {
 }
 
 async function sessionDetail(id) {
-  const { session, requests, analysis } = await api(
+  const { session, requests, analysis, recommendations } = await api(
     `/sessions/${encodeURIComponent(id)}`,
   );
   const rows = requests
@@ -202,6 +202,8 @@ async function sessionDetail(id) {
       <div class="k">repo</div><div class="v">${esc(session.repo) || "—"}</div>
       <div class="k">started</div><div class="v">${esc(session.started_at) || "—"}</div>
     </div>
+    <h2>Recommendations</h2>
+    ${recommendationsHtml(recommendations)}
     <h2>Requests (${requests.length})</h2>
     ${
       requests.length
@@ -220,6 +222,17 @@ async function sessionDetail(id) {
     ${toolBars(analysis.toolUsage)}
     <h2>Repeated tool calls</h2>
     ${repeatedTable(analysis.repeated)}`;
+}
+
+function recommendationsHtml(recs) {
+  if (!recs || !recs.length)
+    return `<p class="empty">No issues detected (run <code>aap parse</code> first if metrics look empty).</p>`;
+  return `<div class="recs">${recs
+    .map(
+      (r) =>
+        `<div class="rec rec-${esc(r.severity)}"><span class="rec-sev">${esc(r.severity)}</span><div class="rec-body"><div class="rec-title">${esc(r.title)}</div><div class="rec-detail muted">${esc(r.detail)}</div></div></div>`,
+    )
+    .join("")}</div>`;
 }
 
 function contextSummary(ctx) {

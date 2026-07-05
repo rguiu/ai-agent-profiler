@@ -17,7 +17,9 @@ Working now (capture core):
 - Token, latency, cost, and tool metrics derived from raw traces (`aap parse`).
 - Read API + a minimal dark-mode web dashboard at `/ui`.
 - First insights: tool usage, repeated tool calls (by argument), per-session context growth, tool-result **token amplification**, and **context composition** (message count, system-prompt size, tool-definition tokens per request + duplicated totals per session).
-- **MCP server** (`aap mcp`) — 7 tools exposing the profiler's data to an AI agent for self-introspection (list_sessions, get_session, get_request, search_requests, stats, top_tools, raw_sql).
+- **Recommendations** — actionable findings per session (repeated file reads, redundant tool calls, high amplification, context duplication, context growth).
+- **Export** — a session report as Markdown (or JSON) via `aap export`.
+- **MCP server** (`aap mcp`) — 8 tools exposing the profiler's data to an AI agent for self-introspection (list_sessions, get_session, get_request, search_requests, recommend, stats, top_tools, raw_sql).
 - Per-request logging in the `aap serve` terminal.
 
 Planned:
@@ -91,6 +93,7 @@ cp config.example.toml ~/.config/aap/config.toml   # edit providers / pricing
 aap serve            # start the proxy + read API (also prints a line per request)
 aap run <agent>      # launch an agent through the profiler, e.g. aap run claude
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
+aap export <id>      # export a session report (Markdown; add --json for JSON)
 aap mcp              # start an MCP server (stdio) for agent self-introspection
 aap config           # print the resolved configuration
 ```
