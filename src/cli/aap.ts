@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { ConfigError, loadConfig } from "../config/index.js";
+import { compareSessions } from "./compare.js";
 import { exportSession } from "./export.js";
 import { mcp } from "./mcp.js";
 import { parse } from "./parse.js";
@@ -14,6 +15,7 @@ Usage:
   aap run <agent>      Launch an agent through the profiler
   aap parse [--all]    Derive metrics from captured traces
   aap export <id>      Export a session report (Markdown; --json for JSON)
+  aap compare <ids...> Compare sessions side by side (--json for JSON)
   aap mcp              Start an MCP server for agent introspection
   aap config           Print the resolved configuration
   aap help             Show this help
@@ -34,6 +36,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "export":
       exportSession(argv.slice(1));
+      return;
+    case "compare":
+      compareSessions(argv.slice(1));
       return;
     case "mcp":
       await mcp();

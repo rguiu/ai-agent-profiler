@@ -86,7 +86,7 @@ The reason the project exists — enabled by the raw traces captured above.
 - [~] **Context analysis** — repeated / unused context, context amplification. _(Done: per-request system-prompt tokens, message count, and tool-definition tokens, plus per-session totals showing cumulative duplication of the static system + tools payload.)_
 - [~] **Tool efficiency** — output bytes, estimated prompt tokens, execution time, downstream token cost, subsequent tool dependencies. _(Done: tool-result token amplification — each tool call linked to its result in the next request with byte/token size.)_
 - [ ] **MCP-server analysis** — for MCP servers an agent uses: call frequency, payload sizes, latency, token impact. (Distinct from our own `aap mcp` introspection server, which is done.)
-- [ ] **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports.
+- [~] **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports. _(Started: `aap compare <ids...>` and the `compare` MCP tool produce side-by-side session reports — the comparison half. The task-runner harness (headless invocation, workspace reset, verify command) is still pending and depends on the custom-metadata channel.)_
 - [x] **Recommendations** — actionable findings from the analysis: repeated file reads, redundant tool calls, high token amplification, static context duplication, context growth. Exposed via the API, the `/ui` session page, the `recommend` MCP tool, and `aap export`.
 
 ---

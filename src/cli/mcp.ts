@@ -3,6 +3,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "../config/index.js";
+import { collectSummaries } from "./compare.js";
 import { recommend } from "../recommend/index.js";
 import { openStore, type Store } from "../store/index.js";
 
@@ -149,6 +150,20 @@ function registerTools(server: McpServer, store: Store): void {
         };
       return {
         content: [{ type: "text", text: JSON.stringify(recommend(detail)) }],
+      };
+    },
+  );
+
+  server.tool(
+    "compare",
+    "Compare two or more sessions side by side (requests, tokens, cost, tool calls, tool result tokens, wall time, recommendation count)",
+    { ids: z.array(z.string()).describe("Session ids to compare") },
+    async ({ ids }) => {
+      const { summaries, missing } = collectSummaries(store, ids);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify({ summaries, missing }) },
+        ],
       };
     },
   );
