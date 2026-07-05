@@ -27,6 +27,56 @@ Planned:
 - Web UI, search, and export.
 - Analysis engine (repeated context/files, tool efficiency, recommendations).
 
+## Dashboard preview
+
+A sketch of the dark-mode dashboard at `/ui` (illustrative layout, not a screenshot):
+
+```
++----------------------------------------------------------------------------+
+| AI Agent Profiler       Dashboard   Sessions                    [Refresh]  |
++----------------------------------------------------------------------------+
+|  +---------+ +---------+ +--------------+ +--------------+ +-----------+     |
+|  | SESSIONS| | REQUESTS| | INPUT TOKENS | | OUTPUT TOKENS| | EST. COST |     |
+|  |    3    | |    35   | |    711,590   | |    11,871    | |   $0.42   |     |
+|  +---------+ +---------+ +--------------+ +--------------+ +-----------+     |
+|                                                                            |
+|  Tool usage                                                                |
+|   webfetch  ##############################   10 . ~32,482 result tok       |
+|   read      #####################             8 . ~18,413 result tok       |
+|   bash      ###                               1 . ~3 result tok            |
+|                                                                            |
+|  Recent sessions                                                           |
+|   SESSION    CLIENT    CWD               REQS   IN        OUT     COST      |
+|   5d11f321   opencode  .../book           18    519,620   8,465   $0.31     |
+|   38ecd4ca   opencode  .../humanfraction  12    138,403   1,774   $0.08     |
++----------------------------------------------------------------------------+
+```
+
+A session page surfaces the analysis and recommendations:
+
+```
+Sessions / 5d11f321
+Session 5d11f321      client opencode      cwd .../book
+
+Recommendations
+  | HIGH  webfetch results added ~32,482 tokens to context
+  |       Across 10 calls this output entered later prompts -- summarise it.
+  | HIGH  Tool definitions re-sent on every request (~96,390 tokens total)
+  | INFO  Context grew from ~607 to ~63,522 tokens (104x over 17 requests)
+
+Context growth (input tokens per request, max ~63,522)
+  63k |                                             .------
+      |                                    .--------'
+  30k |                     .--------------'
+      |        .------------'
+   0  +--------'
+
+Requests
+  #  Started    Provider  Model            Status  Latency   In       Tools
+  1  22:07:42   deepseek  deepseek-v4-pro    200    8.4s      607        0
+  7  22:40:08   deepseek  deepseek-v4-pro    200    5.2s      16,905     2
+```
+
 ## How it works
 
 You launch your agent through a small wrapper that points its provider base URL at the profiler and tags the session:
