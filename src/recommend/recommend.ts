@@ -10,6 +10,7 @@ export interface Recommendation {
 const REPEATED_MIN = 3;
 const AMPLIFICATION_MIN = 3000;
 const TOOLS_OVERHEAD_MIN = 2000;
+const CACHE_HIT_MIN = 0.5;
 const GROWTH_MIN = 10000;
 const GROWTH_FACTOR = 3;
 
@@ -79,13 +80,26 @@ export function recommend(detail: SessionDetail): Recommendation[] {
   const ctx = analysis.context;
   if (ctx.requests >= 3 && ctx.tools_tokens_total >= TOOLS_OVERHEAD_MIN) {
     const perRequest = Math.round(ctx.tools_tokens_total / ctx.requests);
-    recs.push({
-      kind: "context_duplication",
-      severity:
-        ctx.tools_tokens_total >= TOOLS_OVERHEAD_MIN * 3 ? "high" : "warn",
-      title: `Tool definitions re-sent on every request (~${n(ctx.tools_tokens_total)} tokens total)`,
-      detail: `~${n(perRequest)} tokens of tool definitions were sent on each of ${ctx.requests} requests — a static payload duplicated across the whole session.`,
-    });
+    const cacheRatio =
+      ctx.input_tokens_total > 0
+        ? ctx.cached_input_tokens_total / ctx.input_tokens_total
+        : 0;
+    const big = ctx.tools_tokens_total >= TOOLS_OVERHEAD_MIN * 3;
+    if (cacheRatio >= CACHE_HIT_MIN) {
+      recs.push({
+        kind: "context_duplication",
+        severity: "info",
+        title: `Tool definitions re-sent on every request (~${n(ctx.tools_tokens_total)} tokens total), but ${Math.round(cacheRatio * 100)}% of input was served from cache`,
+        detail: `~${n(perRequest)} tokens of tool definitions were sent on each of ${ctx.requests} requests, yet ~${Math.round(cacheRatio * 100)}% of input tokens hit the provider's prompt cache — so this static payload is cheap. Keep the tool/system prefix byte-stable to preserve cache hits.`,
+      });
+    } else {
+      recs.push({
+        kind: "context_duplication",
+        severity: big ? "high" : "warn",
+        title: `Tool definitions re-sent on every request (~${n(ctx.tools_tokens_total)} tokens total)`,
+        detail: `~${n(perRequest)} tokens of tool definitions were sent on each of ${ctx.requests} requests — a static payload duplicated across the whole session${ctx.input_tokens_total > 0 ? `, with only ~${Math.round(cacheRatio * 100)}% of input served from cache` : ""}. Ensure the tool/system prefix is byte-stable (so prompt caching can apply) and trim unused tools.`,
+      });
+    }
   }
 
   const inputs = analysis.growth

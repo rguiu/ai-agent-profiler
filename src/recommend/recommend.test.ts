@@ -19,7 +19,13 @@ function detail(overrides: Partial<SessionDetail["analysis"]>): SessionDetail {
       toolUsage: [],
       repeated: [],
       growth: [],
-      context: { requests: 0, system_tokens_total: 0, tools_tokens_total: 0 },
+      context: {
+        requests: 0,
+        system_tokens_total: 0,
+        tools_tokens_total: 0,
+        input_tokens_total: 0,
+        cached_input_tokens_total: 0,
+      },
       ...overrides,
     },
   };
@@ -74,11 +80,31 @@ describe("recommend", () => {
           requests: 10,
           system_tokens_total: 500,
           tools_tokens_total: 8000,
+          input_tokens_total: 100000,
+          cached_input_tokens_total: 0,
         },
       }),
     );
     expect(recs[0]?.kind).toBe("context_duplication");
+    expect(recs[0]?.severity).toBe("high");
     expect(recs[0]?.title).toContain("re-sent");
+  });
+
+  it("downgrades context duplication when input is largely cached", () => {
+    const recs = recommend(
+      detail({
+        context: {
+          requests: 10,
+          system_tokens_total: 500,
+          tools_tokens_total: 8000,
+          input_tokens_total: 100000,
+          cached_input_tokens_total: 90000,
+        },
+      }),
+    );
+    expect(recs[0]?.kind).toBe("context_duplication");
+    expect(recs[0]?.severity).toBe("info");
+    expect(recs[0]?.title).toContain("served from cache");
   });
 
   it("flags large context growth", () => {

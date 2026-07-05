@@ -225,6 +225,56 @@ describe("parseTrace", () => {
     expect(result.format).toBe("unknown");
     expect(result.toolCalls).toEqual([]);
   });
+
+  it("extracts DeepSeek prompt-cache hit tokens", () => {
+    const body = JSON.stringify({
+      object: "chat.completion",
+      model: "deepseek-chat",
+      choices: [{ index: 0, message: { role: "assistant" }, finish_reason: "stop" }],
+      usage: {
+        prompt_tokens: 1000,
+        completion_tokens: 5,
+        prompt_cache_hit_tokens: 900,
+        prompt_cache_miss_tokens: 100,
+      },
+    });
+    const result = parseTrace(traceFor("application/json", Buffer.from(body)));
+    expect(result.format).toBe("openai");
+    expect(result.inputTokens).toBe(1000);
+    expect(result.cachedInputTokens).toBe(900);
+  });
+
+  it("extracts OpenAI cached_tokens from prompt_tokens_details", () => {
+    const body = JSON.stringify({
+      object: "chat.completion",
+      model: "gpt-4o",
+      choices: [{ index: 0, message: { role: "assistant" }, finish_reason: "stop" }],
+      usage: {
+        prompt_tokens: 500,
+        completion_tokens: 5,
+        prompt_tokens_details: { cached_tokens: 256 },
+      },
+    });
+    const result = parseTrace(traceFor("application/json", Buffer.from(body)));
+    expect(result.cachedInputTokens).toBe(256);
+  });
+
+  it("extracts Anthropic cache_read_input_tokens", () => {
+    const body = JSON.stringify({
+      type: "message",
+      model: "claude-3-haiku",
+      content: [{ type: "text", text: "hi" }],
+      stop_reason: "end_turn",
+      usage: {
+        input_tokens: 20,
+        output_tokens: 7,
+        cache_read_input_tokens: 1800,
+      },
+    });
+    const result = parseTrace(traceFor("application/json", Buffer.from(body)));
+    expect(result.format).toBe("anthropic");
+    expect(result.cachedInputTokens).toBe(1800);
+  });
 });
 
 describe("computeCost", () => {

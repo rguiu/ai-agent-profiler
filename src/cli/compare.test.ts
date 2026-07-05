@@ -38,7 +38,13 @@ function makeDetail(id: string, requests: number): SessionDetail {
       toolUsage: [{ name: "read", count: requests, result_tokens: 500 }],
       repeated: [],
       growth: [],
-      context: { requests, system_tokens_total: 0, tools_tokens_total: 0 },
+      context: {
+        requests,
+        system_tokens_total: 0,
+        tools_tokens_total: 0,
+        input_tokens_total: 0,
+        cached_input_tokens_total: 0,
+      },
     },
   };
 }

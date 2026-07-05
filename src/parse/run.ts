@@ -39,6 +39,7 @@ export function runParse(
         format: result.format,
         model: result.model,
         inputTokens: result.inputTokens,
+        cachedInputTokens: result.cachedInputTokens,
         outputTokens: result.outputTokens,
         stopReason: result.stopReason,
         streaming: result.streaming ? 1 : 0,

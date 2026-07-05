@@ -61,6 +61,7 @@ function seed(store: Store, dir: string): void {
     format: "anthropic",
     model: "claude-3-5-sonnet-20241022",
     inputTokens: 100,
+    cachedInputTokens: 0,
     outputTokens: 50,
     stopReason: "tool_use",
     streaming: 1,

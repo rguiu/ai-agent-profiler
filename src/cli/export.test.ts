@@ -47,6 +47,8 @@ function makeDetail(): SessionDetail {
         requests: 1,
         system_tokens_total: 30,
         tools_tokens_total: 200,
+        input_tokens_total: 0,
+        cached_input_tokens_total: 0,
       },
     },
   };

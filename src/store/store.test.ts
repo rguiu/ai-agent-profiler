@@ -224,6 +224,7 @@ describe("Store", () => {
         format: "anthropic",
         model: "m",
         inputTokens,
+        cachedInputTokens: 0,
         outputTokens: 10,
         stopReason: "tool_use",
         streaming: 1,

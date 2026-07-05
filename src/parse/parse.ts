@@ -31,6 +31,7 @@ export interface ParsedTrace {
   format: "anthropic" | "openai" | "unknown";
   model: string | null;
   inputTokens: number | null;
+  cachedInputTokens: number | null;
   outputTokens: number | null;
   stopReason: string | null;
   toolCalls: ParsedToolCall[];
@@ -47,6 +48,7 @@ interface ModelPricing {
 interface Extract {
   model: string | null;
   inputTokens: number | null;
+  cachedInputTokens: number | null;
   outputTokens: number | null;
   stopReason: string | null;
   toolCalls: ParsedToolCall[];
@@ -56,6 +58,7 @@ function emptyExtract(): Extract {
   return {
     model: null,
     inputTokens: null,
+    cachedInputTokens: null,
     outputTokens: null,
     stopReason: null,
     toolCalls: [],
@@ -165,6 +168,8 @@ function applyAnthropicMessage(
     if (input !== null) acc.inputTokens = input;
     const output = asNumber(usage.output_tokens);
     if (output !== null) acc.outputTokens = output;
+    const cached = asNumber(usage.cache_read_input_tokens);
+    if (cached !== null) acc.cachedInputTokens = cached;
   }
   const stop = asString(message.stop_reason);
   if (stop) acc.stopReason = stop;
@@ -247,6 +252,14 @@ function parseAnthropic(objects: unknown[]): Extract {
   return acc;
 }
 
+function openAICachedTokens(usage: Record<string, unknown>): number | null {
+  const hit = asNumber(usage.prompt_cache_hit_tokens);
+  if (hit !== null) return hit;
+  const details = asRecord(usage.prompt_tokens_details);
+  if (details) return asNumber(details.cached_tokens);
+  return null;
+}
+
 function parseOpenAI(objects: unknown[]): Extract {
   const acc = emptyExtract();
   const byIndex = new Map<number, { id: string; name: string; args: string }>();
@@ -263,6 +276,8 @@ function parseOpenAI(objects: unknown[]): Extract {
       if (input !== null) acc.inputTokens = input;
       const output = asNumber(usage.completion_tokens);
       if (output !== null) acc.outputTokens = output;
+      const cached = openAICachedTokens(usage);
+      if (cached !== null) acc.cachedInputTokens = cached;
     }
     for (const choice of asArray(record.choices)) {
       const choiceRecord = asRecord(choice);
@@ -407,6 +422,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
     format: "unknown",
     model: null,
     inputTokens: null,
+    cachedInputTokens: null,
     outputTokens: null,
     stopReason: null,
     toolCalls: [],
