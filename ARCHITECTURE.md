@@ -2,7 +2,7 @@
 
 This document records the high-level design of AI Agent Profiler and the reasoning behind each major decision. Read it (with `VISION.md`) before making changes, so that changes stay aligned with the project's intent.
 
-The current focus is the **capture core**: reliably record raw, high-fidelity traces of agent ↔ provider traffic. Everything else (full REST API, Web UI, charts, analysis engine) is deferred until the data model is proven.
+The **capture core is complete** — the profiler reliably records raw, high-fidelity traces of agent ↔ provider traffic — and a **first analysis layer** is built on top of it: derived metrics, a read API, a web dashboard, recommendations, command-usage and message-stack analysis, export, compare, and an MCP server. The guiding principle still holds: capture stays on the hot path and pure; everything derived is computed off it from the raw traces. The only things still deferred are the research capabilities and any (optional, opt-in) behaviour-changing "optimize" mode.
 
 ---
 
@@ -45,14 +45,16 @@ The current focus is the **capture core**: reliably record raw, high-fidelity tr
 +--------------------------+
 | AI Agent Profiler        |
 |                          |
-|  cli/      aap serve|run|parse|mcp
-|  proxy/    listener, routing, passthrough + tee
+|  cli/      aap serve|run|parse|sessions|commands|tag|export|compare|mcp|config
+|  proxy/    listener, routing, passthrough + tee, /health + /_control
 |  session/  registry + control endpoint
 |  capture/  async NDJSON sink, redaction
 |  store/    sqlite index
-|  parse/    off-hot-path metrics
+|  parse/    off-hot-path metrics + message-stack breakdown
+|  analyze/  pure shell-command classifier + categories
+|  recommend/ per-session findings (amplification, duplication, search→read...)
+|  api/      read endpoints (/sessions, /requests, /stats, /tools, /commands)
 |  config/   file + env loader
-|  api/      minimal read endpoints (later)
 |  ui/       static web dashboard (/ui)
 +------------+-------------+
              |  byte-faithful passthrough (prefix stripped)
@@ -73,7 +75,8 @@ The current focus is the **capture core**: reliably record raw, high-fidelity tr
 3. **Passthrough.** The proxy strips `/<session_id>/<provider>` and forwards the remaining path (e.g. `/v1/messages`) upstream over HTTPS, byte-for-byte. The upstream response streams straight back to the agent, unbuffered.
 4. **Tee (async).** In parallel, request bytes and the response stream are teed into an async capture sink (a `PassThrough`) that writes NDJSON to the session's trace file. This never applies backpressure to the client stream.
 5. **Index.** Metadata rows (session, request, response) with file pointers + timing are written to SQLite.
-6. **Parse (off hot path).** After the response completes, a parser reads the raw trace to extract model, token usage, stop reason, and tool calls, and computes cost from the pricing config, writing results back to SQLite.
+6. **Parse (off hot path).** A parser reads the raw trace to extract model, token usage (including provider prompt-cache hit tokens), stop reason, tool calls, and context composition (message count, system-prompt and tool-definition tokens), and computes cost from the pricing config, writing results back to SQLite. It runs re-runnably via `aap parse` and automatically on a low-frequency background tick inside `aap serve`, so finished requests become metrics without a manual step — never on the request hot path.
+7. **Read & analyse (off hot path).** The read API (`api/`), MCP server, and `/ui` derive everything on demand from the indexed metrics and the raw traces: per-session recommendations, tool-result amplification, context growth, the shell-command breakdown, and a per-request message-stack composition (`GET /requests/:id/messages`).
 
 **Fallback:** a request without the `/<session_id>/` prefix (agent run directly, no wrapper) is attributed to a synthetic "unattributed" session, grouped by an idle-timeout window.
 
@@ -92,19 +95,22 @@ Each line is one event: `request`, `request_body`, `response`, `response_body`, 
 **SQLite index (derived, queryable).** Plain SQL, no ORM. Current tables:
 
 ```
-sessions   (id, client, cwd, repo, started_at, first_seen_at, last_seen_at)
+sessions   (id, client, cwd, repo, meta, started_at, first_seen_at, last_seen_at)
 requests   (id, session_id, provider, method, path, trace_file,
             started_at, ended_at, status, latency_ms,
             request_bytes, response_bytes, error)
-metrics    (request_id, format, model, input_tokens, output_tokens,
-            stop_reason, streaming, tool_call_count, cost, parsed_at)
+metrics    (request_id, format, model, input_tokens, cached_input_tokens,
+            output_tokens, stop_reason, streaming, tool_call_count, cost,
+            parsed_at, message_count, system_tokens, tools_defined, tools_tokens)
 tool_calls (id, request_id, ordinal, name, arguments,
             tool_id, result_bytes, result_tokens)
 ```
 
 `requests` is written on the hot path during capture (M2). `metrics` and
-`tool_calls` are derived off the hot path by `aap parse` (M3), which reads the
-raw traces and is fully re-runnable and idempotent (keyed by `request_id`).
+`tool_calls` are derived off the hot path — by `aap parse` and by the background
+parse tick in `aap serve` — reading the raw traces; both are fully re-runnable and
+idempotent (keyed by `request_id`). New columns are added by lightweight
+`ensureColumn` migrations, so an existing index upgrades in place.
 The SQLite index can always be rebuilt from the raw traces. Traces are authoritative.
 
 ---
@@ -157,7 +163,11 @@ profiler only** and is **never forwarded to the LLM**, so it stays behaviour-neu
    `aap run` populates it from `--meta key=value` flags plus `AAP_META_*` env vars and
    `ARMADA_NODE_NAME`. It is a pure side channel to the proxy — it never touches provider
    traffic — so it works regardless of what the agent supports. Stored as a `meta` JSON
-   column on `sessions`; surfaced in the read API, `/ui`, and MCP `get_session`.
+   column on `sessions`; surfaced in the read API, `/ui`, and MCP `get_session`. A session's
+   meta can also be **merged after the fact** with `aap tag <session> key=value`
+   (`store.updateSessionMeta`) — used by the benchmark harness to record a `verify=pass|fail`
+   result once a task has been scored. A caller may pin the session id up front via
+   `AAP_SESSION_ID` so the run and its later tag refer to the same session.
 
 2. **Per-request metadata — via reserved `x-aap-*` headers (deferred).**
    The client sets headers under a reserved prefix; the proxy would record them as request
@@ -167,18 +177,18 @@ profiler only** and is **never forwarded to the LLM**, so it stays behaviour-neu
 
 ---
 
-## Explicitly deferred / out of scope for the capture core
+## Explicitly deferred / out of scope
 
-Kept out until the raw data model is proven, per the "record first, analyse later" principle:
+Per the "record first, analyse later" principle, and the read-only invariant:
 
-- Full REST API and Web UI (dashboard, session/request views, charts).
-- Analysis engine (repeated prompts/files, context amplification, recommendations).
-- Benchmark mode and MCP-specific analysis.
-- Any behaviour-changing feature (response caching, MCP framework, request rewriting). These conflict with the "invisible proxy" principle and require explicit justification + opt-out defaults.
+- **Ordered behavioural analysis** that needs signals not yet captured — e.g. "was a tool result actually referenced later?" (for pruning/summarisation evidence), and ordered `search → read(same file)` sequence detection (the current `inefficient_search` heuristic is aggregate co-occurrence).
+- **Multi-run benchmark aggregation** — distributions/scoring across repeated runs of the same task (single-run verify + tagging is done).
+- **MCP-server analysis** — call frequency, payload sizes, and token impact of an agent's _own_ MCP servers (distinct from our `aap mcp` introspection server).
+- **Any behaviour-changing feature** (response caching, MCP framework, request rewriting, an "optimize" mode that prunes/compacts the wire). These conflict with the "invisible proxy" principle; if ever built they must be an explicit, off-by-default `--optimize` mode, justified by a baseline metric and never regressing task success. See [`docs/aish-requirements.md`](docs/aish-requirements.md).
 
 ---
 
 ## Open items to validate
 
-- Confirm Claude Code **and** Opencode both tolerate a base URL with a path prefix (they append `/v1/messages` etc.) and that routing/stripping is byte-exact. Validated in M1 before capture is built on top.
-- Exact SQLite schema and NDJSON event shapes are finalised during M2/M3 against real captured traffic.
+- **Opencode + DeepSeek** is validated end-to-end (base URL with a path prefix, byte-exact routing/stripping, capture → parse → analysis). The **Claude Code** path is built but not yet formally confirmed against a live run.
+- The SQLite schema and NDJSON event shapes are stable against real captured traffic; further columns are added via in-place `ensureColumn` migrations rather than rewrites.
