@@ -1,0 +1,10 @@
+# Example custom task file for benchmarks/run.sh --tasks
+#
+# Format: one task per line as  id|prompt
+# Blank lines and lines starting with # are ignored.
+# Run with, e.g.:
+#   ./benchmarks/run.sh opencode --dir ~/my/project --tasks benchmarks/tasks.example.txt
+
+explain|Explain what this project does and give an overview of its structure. Do not change any files.
+find-tests|Find the test files and describe how tests are run. Do not change any files.
+add-log|Add a debug log line at the start of the main entry function, then revert nothing else.

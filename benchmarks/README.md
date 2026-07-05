@@ -15,16 +15,28 @@ task and per agent:
 - **context growth** and **duplicated static context** (system prompt + tool defs re-sent)
 - number of **recommendations** the profiler raised
 
-## The fixture
+## Where the tasks run (the target project)
 
-`benchmarks/fixture/` is a tiny zero-dependency CSV parser with a **deliberate bug** (the
-header row is parsed as a data row, so `npm test` has one failing test). It's small enough
-to reason about but real enough to exercise reading, searching, editing, and test-fix loops.
+By default the tasks run against the bundled **`benchmarks/fixture/`** — a tiny
+zero-dependency CSV parser with a **deliberate bug** (the header row is parsed as a data
+row, so `npm test` has one failing test). It's small enough to reason about but real enough
+to exercise reading, searching, editing, and the test-fix loop. It's self-contained, so
+cross-agent runs are comparable.
 
-Each task runs against a **fresh copy** of the fixture in a scratch dir, so runs are
-reproducible and never touch the repo.
+You can point the benchmark at other code instead:
+
+| Target             | Flag               | Use it for                                             |
+| ------------------ | ------------------ | ------------------------------------------------------ |
+| Bundled fixture    | _(default)_        | Reproducible cross-agent comparison + a verifiable fix |
+| Your own directory | `--dir <path>`     | Benchmarking on your real project                      |
+| A cloned repo      | `--repo <git-url>` | A shared, downloadable target (shallow-cloned)         |
+
+In every case the target is **copied fresh into a scratch dir per task**, so edits never
+touch the original and each run starts from the same state.
 
 ## Tasks
+
+Built-in tasks for the **fixture**:
 
 | id            | stresses                                | prompt (summary)                                        |
 | ------------- | --------------------------------------- | ------------------------------------------------------- |
@@ -32,6 +44,30 @@ reproducible and never touch the repo.
 | `locate`      | search/grep token cost                  | Find where `parseLine` is defined and used (read-only)  |
 | `fix-bug`     | tool-call loop, iteration, verification | Fix the failing test                                    |
 | `add-feature` | multi-file edit + test                  | Add a `trim` option to `parse()` and test it            |
+
+For a **custom target** (`--dir`/`--repo`) the built-in fixture tasks don't apply, so
+`run.sh` falls back to two generic read-only tasks (`explain`, `locate`). To run your own
+tasks against any target, pass a task file:
+
+```
+./benchmarks/run.sh opencode --dir ~/my/project --tasks benchmarks/tasks.example.txt
+```
+
+A task file is one task per line as `id|prompt` (see `benchmarks/tasks.example.txt`).
+
+## How `run.sh` works
+
+`./benchmarks/run.sh <agent> [target] [--tasks file] [--dry-run]`:
+
+1. Maps the agent to its headless flag (`opencode run "…"`, `claude -p "…"`).
+2. Resolves the target source dir (fixture, `--dir`, or a shallow `--repo` clone).
+3. For each task: wipes the scratch dir, copies the target in fresh, drops any `.git`, then
+   runs `aap run --meta task=<id> --meta agent=<name> <agent> <flag> "<prompt>"` from inside
+   the scratch dir. `aap run` injects proxy routing and registers the tagged session, so the
+   profiler captures the whole run.
+4. Prints the next steps.
+
+Use `--dry-run` to print the exact commands without executing them.
 
 ## Running
 
@@ -44,12 +80,11 @@ reproducible and never touch the repo.
    through the proxy automatically.
 3. Run the suite for an agent:
    ```
-   ./benchmarks/run.sh opencode
-   # tomorrow, on a machine with Claude Code:
-   ./benchmarks/run.sh claude
+   ./benchmarks/run.sh opencode                 # bundled fixture
+   ./benchmarks/run.sh opencode --dir ~/proj    # your project
+   ./benchmarks/run.sh claude  --repo https://github.com/you/repo   # a cloned repo
    ```
-   Every task is launched as `aap run --meta task=<id> --meta agent=<name> <agent> …`, so the
-   sessions are tagged.
+   Every task is launched tagged with `--meta task=<id> --meta agent=<name>`.
 
 ## Comparing
 
