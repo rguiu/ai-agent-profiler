@@ -13,4 +13,8 @@ export {
   type ToolCall,
   type ToolCallInput,
   type Stats,
+  type ToolUsage,
+  type RepeatedToolCall,
+  type GrowthPoint,
+  type SessionAnalysis,
 } from "./store.js";

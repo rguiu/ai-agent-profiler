@@ -191,6 +191,27 @@ describe("read API", () => {
     expect(stats.cost).toBeCloseTo(0.00105);
   });
 
+  it("exposes global tool usage and per-session analysis", async () => {
+    const { port } = await startStack();
+    const tools = (await (
+      await fetch(`http://127.0.0.1:${port}/tools`)
+    ).json()) as Array<{ name: string; count: number }>;
+    expect(tools).toEqual([{ name: "run_bash", count: 1 }]);
+
+    const detail = (await (
+      await fetch(`http://127.0.0.1:${port}/sessions/s1`)
+    ).json()) as {
+      analysis: {
+        toolUsage: Array<{ name: string; count: number }>;
+        repeated: unknown[];
+        growth: unknown[];
+      };
+    };
+    expect(detail.analysis.toolUsage).toEqual([{ name: "run_bash", count: 1 }]);
+    expect(detail.analysis.growth).toHaveLength(1);
+    expect(detail.analysis.repeated).toEqual([]);
+  });
+
   it("rejects non-GET methods", async () => {
     const { port } = await startStack();
     const res = await fetch(`http://127.0.0.1:${port}/sessions`, {

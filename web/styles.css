@@ -209,3 +209,60 @@ pre {
   color: var(--muted);
   padding: 24px 0;
 }
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 24px;
+}
+.bar-row {
+  display: grid;
+  grid-template-columns: 160px 1fr 60px;
+  align-items: center;
+  gap: 10px;
+}
+.bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bar-track {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  height: 16px;
+  overflow: hidden;
+}
+.bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.bar-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+svg.chart {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 24px;
+  max-width: 700px;
+}
+svg.chart .axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+svg.chart .axis-label {
+  fill: var(--muted);
+  font-size: 11px;
+}
+svg.chart .line {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+svg.chart circle {
+  fill: var(--accent);
+}

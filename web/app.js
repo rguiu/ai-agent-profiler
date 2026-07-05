@@ -49,9 +49,10 @@ function b64ToText(b64) {
 }
 
 async function dashboard() {
-  const [stats, sessions] = await Promise.all([
+  const [stats, sessions, tools] = await Promise.all([
     api("/stats"),
     api("/sessions"),
+    api("/tools"),
   ]);
   const cards = [
     ["Sessions", num(stats.sessions)],
@@ -70,9 +71,68 @@ async function dashboard() {
         )
         .join("")}
     </div>
+    <h2>Tool usage</h2>
+    ${toolBars(tools)}
     <h2>Recent sessions</h2>
     ${sessionsTable(sessions.slice(0, 15))}
   `;
+}
+
+function toolBars(items) {
+  if (!items || !items.length)
+    return `<p class="empty">No tool calls recorded. Run <code>aap parse</code>.</p>`;
+  const max = Math.max(...items.map((t) => t.count), 1);
+  return `<div class="bars">${items
+    .map(
+      (t) =>
+        `<div class="bar-row"><span class="bar-label mono">${esc(t.name)}</span><span class="bar-track"><span class="bar-fill" style="width:${((t.count / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${num(t.count)}</span></div>`,
+    )
+    .join("")}</div>`;
+}
+
+function repeatedTable(items) {
+  if (!items || !items.length)
+    return `<p class="empty">No repeated tool calls in this session.</p>`;
+  return `<table><thead><tr><th class="num">×</th><th>Tool</th><th>Arguments</th></tr></thead><tbody>${items
+    .map((t) => {
+      let args = t.arguments || "";
+      try {
+        if (args) args = JSON.stringify(JSON.parse(args));
+      } catch {
+        /* keep raw */
+      }
+      return `<tr><td class="num">${num(t.count)}</td><td>${esc(t.name)}</td><td class="mono">${esc(args) || '<span class="muted">—</span>'}</td></tr>`;
+    })
+    .join("")}</tbody></table>`;
+}
+
+function growthChart(points) {
+  const vals = (points || []).map((p) => p.input_tokens ?? 0);
+  if (vals.length < 2 || vals.every((v) => v === 0))
+    return `<p class="empty">Not enough parsed data yet — run <code>aap parse</code>.</p>`;
+  const w = 640;
+  const h = 160;
+  const pad = 28;
+  const max = Math.max(...vals, 1);
+  const stepX = (w - pad * 2) / (vals.length - 1);
+  const xy = (v, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - (v / max) * (h - pad * 2);
+    return [x, y];
+  };
+  const line = vals.map((v, i) => xy(v, i).join(",")).join(" ");
+  const dots = vals
+    .map((v, i) => {
+      const [x, y] = xy(v, i);
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" />`;
+    })
+    .join("");
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">
+    <text x="${pad}" y="16" class="axis-label">input tokens per request (max ${num(max)})</text>
+    <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" class="axis" />
+    <polyline points="${line}" class="line" fill="none" />
+    ${dots}
+  </svg>`;
 }
 
 function sessionsTable(sessions) {
@@ -108,7 +168,7 @@ async function sessions() {
 }
 
 async function sessionDetail(id) {
-  const { session, requests } = await api(
+  const { session, requests, analysis } = await api(
     `/sessions/${encodeURIComponent(id)}`,
   );
   const rows = requests
@@ -149,7 +209,13 @@ async function sessionDetail(id) {
       <th>Stop</th><th class="num">Tools</th><th class="num">Cost</th>
     </tr></thead><tbody>${rows}</tbody></table>`
         : `<p class="empty">No requests.</p>`
-    }`;
+    }
+    <h2>Context growth</h2>
+    ${growthChart(analysis.growth)}
+    <h2>Tool usage</h2>
+    ${toolBars(analysis.toolUsage)}
+    <h2>Repeated tool calls</h2>
+    ${repeatedTable(analysis.repeated)}`;
 }
 
 async function requestDetail(id) {

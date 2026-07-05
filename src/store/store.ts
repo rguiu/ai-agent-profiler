@@ -143,6 +143,7 @@ export interface SessionRequest {
 export interface SessionDetail {
   session: SessionRow;
   requests: SessionRequest[];
+  analysis: SessionAnalysis;
 }
 
 export interface ToolCall {
@@ -191,6 +192,30 @@ export interface Stats {
   cost: number;
 }
 
+export interface ToolUsage {
+  name: string;
+  count: number;
+}
+
+export interface RepeatedToolCall {
+  name: string;
+  arguments: string | null;
+  count: number;
+}
+
+export interface GrowthPoint {
+  id: string;
+  started_at: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+}
+
+export interface SessionAnalysis {
+  toolUsage: ToolUsage[];
+  repeated: RepeatedToolCall[];
+  growth: GrowthPoint[];
+}
+
 export class Store {
   private readonly upsertSessionStmt;
   private readonly insertRequestStmt;
@@ -210,6 +235,10 @@ export class Store {
   private readonly getRequestStmt;
   private readonly getToolCallsStmt;
   private readonly statsStmt;
+  private readonly toolUsageGlobalStmt;
+  private readonly toolUsageSessionStmt;
+  private readonly repeatedToolCallsStmt;
+  private readonly contextGrowthStmt;
 
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
@@ -327,6 +356,31 @@ export class Store {
         COALESCE((SELECT SUM(output_tokens) FROM metrics), 0) AS output_tokens,
         COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost
     `);
+    this.toolUsageGlobalStmt = db.prepare(`
+      SELECT name, COUNT(*) AS count FROM tool_calls
+      GROUP BY name ORDER BY count DESC, name
+    `);
+    this.toolUsageSessionStmt = db.prepare(`
+      SELECT tc.name, COUNT(*) AS count
+      FROM tool_calls tc JOIN requests r ON r.id = tc.request_id
+      WHERE r.session_id = ?
+      GROUP BY tc.name ORDER BY count DESC, tc.name
+    `);
+    this.repeatedToolCallsStmt = db.prepare(`
+      SELECT tc.name, tc.arguments, COUNT(*) AS count
+      FROM tool_calls tc JOIN requests r ON r.id = tc.request_id
+      WHERE r.session_id = ?
+      GROUP BY tc.name, tc.arguments
+      HAVING count > 1
+      ORDER BY count DESC, tc.name
+      LIMIT 50
+    `);
+    this.contextGrowthStmt = db.prepare(`
+      SELECT r.id, r.started_at, m.input_tokens, m.output_tokens
+      FROM requests r LEFT JOIN metrics m ON m.request_id = r.id
+      WHERE r.session_id = ?
+      ORDER BY r.started_at
+    `);
   }
 
   upsertSession(info: SessionInfo): void {
@@ -396,7 +450,16 @@ export class Store {
     const session = this.getSessionStmt.get(id) as SessionRow | undefined;
     if (!session) return undefined;
     const requests = this.getSessionRequestsStmt.all(id) as SessionRequest[];
-    return { session, requests };
+    const analysis: SessionAnalysis = {
+      toolUsage: this.toolUsageSessionStmt.all(id) as ToolUsage[],
+      repeated: this.repeatedToolCallsStmt.all(id) as RepeatedToolCall[],
+      growth: this.contextGrowthStmt.all(id) as GrowthPoint[],
+    };
+    return { session, requests, analysis };
+  }
+
+  globalToolUsage(): ToolUsage[] {
+    return this.toolUsageGlobalStmt.all() as ToolUsage[];
   }
 
   getRequest(id: string): RequestDetail | undefined {

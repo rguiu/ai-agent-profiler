@@ -97,4 +97,61 @@ describe("Store", () => {
     expect(ses.cwd).toBe("/x");
     expect(ses.started_at).toBe("t0");
   });
+
+  it("summarises tool usage, repeats, and context growth", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({ id: "s1", startedAt: "t0" });
+    const requests: Array<[string, string, number]> = [
+      ["r1", "2026-01-01T00:00:00Z", 100],
+      ["r2", "2026-01-01T00:01:00Z", 250],
+    ];
+    for (const [id, started, inputTokens] of requests) {
+      store.insertRequest({
+        id,
+        sessionId: "s1",
+        provider: "deepseek",
+        method: "POST",
+        path: "/x",
+        traceFile: "/t",
+        startedAt: started,
+      });
+      store.finishRequest(id, {
+        status: 200,
+        latencyMs: 1,
+        requestBytes: 1,
+        responseBytes: 1,
+        endedAt: started,
+        error: null,
+      });
+      store.upsertMetrics({
+        requestId: id,
+        format: "anthropic",
+        model: "m",
+        inputTokens,
+        outputTokens: 10,
+        stopReason: "tool_use",
+        streaming: 1,
+        toolCallCount: 1,
+        cost: 0,
+        parsedAt: "t",
+      });
+      store.replaceToolCalls(id, [
+        { name: "read", arguments: '{"file":"/x"}' },
+      ]);
+    }
+
+    const detail = store.getSession("s1");
+    const global = store.globalToolUsage();
+    store.close();
+
+    expect(detail?.analysis.toolUsage).toEqual([{ name: "read", count: 2 }]);
+    expect(detail?.analysis.repeated).toEqual([
+      { name: "read", arguments: '{"file":"/x"}', count: 2 },
+    ]);
+    expect(detail?.analysis.growth.map((g) => g.input_tokens)).toEqual([
+      100, 250,
+    ]);
+    expect(global).toEqual([{ name: "read", count: 2 }]);
+  });
 });
