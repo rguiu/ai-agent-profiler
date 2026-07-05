@@ -45,7 +45,7 @@ The current focus is the **capture core**: reliably record raw, high-fidelity tr
 +--------------------------+
 | AI Agent Profiler        |
 |                          |
-|  cli/      aap serve|run |
+|  cli/      aap serve|run|parse|mcp
 |  proxy/    listener, routing, passthrough + tee
 |  session/  registry + control endpoint
 |  capture/  async NDJSON sink, redaction
@@ -53,6 +53,7 @@ The current focus is the **capture core**: reliably record raw, high-fidelity tr
 |  parse/    off-hot-path metrics
 |  config/   file + env loader
 |  api/      minimal read endpoints (later)
+|  ui/       static web dashboard (/ui)
 +------------+-------------+
              |  byte-faithful passthrough (prefix stripped)
              v

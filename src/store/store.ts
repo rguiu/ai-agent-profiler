@@ -535,6 +535,11 @@ export class Store {
     return this.statsStmt.get() as Stats;
   }
 
+  rawQuery(sql: string, ...params: Array<string | number | null>): unknown[] {
+    const stmt = this.db.prepare(sql);
+    return stmt.all(...params);
+  }
+
   close(): void {
     this.db.close();
   }

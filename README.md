@@ -17,6 +17,7 @@ Working now (capture core):
 - Token, latency, cost, and tool metrics derived from raw traces (`aap parse`).
 - Read API + a minimal dark-mode web dashboard at `/ui`.
 - First insights: tool usage, repeated tool calls (by argument), per-session context growth, tool-result **token amplification**, and **context composition** (message count, system-prompt size, tool-definition tokens per request + duplicated totals per session).
+- **MCP server** (`aap mcp`) — 7 tools exposing the profiler's data to an AI agent for self-introspection (list_sessions, get_session, get_request, search_requests, stats, top_tools, raw_sql).
 - Per-request logging in the `aap serve` terminal.
 
 Planned:
@@ -90,6 +91,7 @@ cp config.example.toml ~/.config/aap/config.toml   # edit providers / pricing
 aap serve            # start the proxy + read API (also prints a line per request)
 aap run <agent>      # launch an agent through the profiler, e.g. aap run claude
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
+aap mcp              # start an MCP server (stdio) for agent self-introspection
 aap config           # print the resolved configuration
 ```
 
@@ -132,6 +134,23 @@ forwarded to `https://api.deepseek.com/v1/...`. opencode still supplies the API 
 (from `~/.local/share/opencode/auth.json` or `DEEPSEEK_API_KEY`); the proxy only forwards
 it and redacts it from stored traces. If a provider's base path isn't `/v1`, set
 `apiPath` on its `[providers.<name>]` entry.
+
+### Self-introspection via MCP
+
+`aap mcp` starts a stdio MCP server so an agent can query its own captured behaviour —
+"which requests cost the most?", "which file did I read most often?", "why so many `bash`
+calls?". Tools: `list_sessions`, `get_session`, `get_request`, `search_requests`, `stats`,
+`top_tools`, and `raw_sql` (read-only SELECT over the SQLite index).
+
+Add it to `opencode.json`:
+
+```json
+{
+  "mcp": {
+    "aap": { "type": "local", "command": ["aap", "mcp"], "enabled": true }
+  }
+}
+```
 
 ## Documentation
 
