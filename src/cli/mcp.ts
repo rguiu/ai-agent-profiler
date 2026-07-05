@@ -3,7 +3,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "../config/index.js";
-import { commandBreakdown } from "./commands.js";
+import { commandBreakdown } from "../analyze/index.js";
 import { collectSummaries } from "./compare.js";
 import { recommend } from "../recommend/index.js";
 import { openStore, type Store } from "../store/index.js";

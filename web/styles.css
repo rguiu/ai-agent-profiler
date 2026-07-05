@@ -314,3 +314,75 @@ svg.chart .line {
 svg.chart circle {
   fill: var(--accent);
 }
+
+.msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 24px;
+}
+.msg {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.msg summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.msg-body {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.pill.role-system {
+  color: var(--warn);
+}
+.pill.role-user {
+  color: var(--accent);
+}
+.pill.role-assistant {
+  color: var(--good);
+}
+.pill.role-tool {
+  color: var(--muted);
+}
+.bar-fill.role-system {
+  background: var(--warn);
+}
+.bar-fill.role-user {
+  background: var(--accent);
+}
+.bar-fill.role-assistant {
+  background: var(--good);
+}
+.bar-fill.role-tool {
+  background: var(--muted);
+}
+.bar-fill.role-tools {
+  background: var(--bad);
+}
+.pill.cat-search {
+  color: var(--accent);
+}
+.pill.cat-read {
+  color: var(--good);
+}
+.pill.cat-vcs {
+  color: var(--warn);
+}
+.pill.cat-build {
+  color: var(--bad);
+}
+.pill.cat-nav,
+.pill.cat-edit,
+.pill.cat-other {
+  color: var(--muted);
+}

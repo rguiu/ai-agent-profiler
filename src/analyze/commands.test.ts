@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCommand, commandBreakdown } from "./commands.js";
+import { categorize, classifyCommand, commandBreakdown } from "./commands.js";
 
 describe("classifyCommand", () => {
   it("reduces a command to its program name", () => {
@@ -34,8 +34,20 @@ describe("commandBreakdown", () => {
       { arguments: null, result_tokens: 10 },
     ]);
     expect(rows).toEqual([
-      { command: "cat", count: 1, resultTokens: 5000 },
-      { command: "grep", count: 2, resultTokens: 150 },
+      { command: "cat", category: "read", count: 1, resultTokens: 5000 },
+      { command: "grep", category: "search", count: 2, resultTokens: 150 },
     ]);
+  });
+});
+
+describe("categorize", () => {
+  it("maps commands to coarse purpose categories", () => {
+    expect(categorize("grep")).toBe("search");
+    expect(categorize("ls")).toBe("search");
+    expect(categorize("cat")).toBe("read");
+    expect(categorize("git status")).toBe("vcs");
+    expect(categorize("npm test")).toBe("build");
+    expect(categorize("cd")).toBe("nav");
+    expect(categorize("mystery-bin")).toBe("other");
   });
 });

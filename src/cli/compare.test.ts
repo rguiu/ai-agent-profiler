@@ -45,6 +45,7 @@ function makeDetail(id: string, requests: number): SessionDetail {
         input_tokens_total: 0,
         cached_input_tokens_total: 0,
       },
+      commands: [],
     },
   };
 }

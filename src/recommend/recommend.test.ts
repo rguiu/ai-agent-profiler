@@ -26,6 +26,7 @@ function detail(overrides: Partial<SessionDetail["analysis"]>): SessionDetail {
         input_tokens_total: 0,
         cached_input_tokens_total: 0,
       },
+      commands: [],
       ...overrides,
     },
   };
@@ -121,5 +122,33 @@ describe("recommend", () => {
 
   it("returns nothing for a clean session", () => {
     expect(recommend(detail({}))).toEqual([]);
+  });
+
+  it("flags a search→read pattern as evidence for a locate-and-read tool", () => {
+    const recs = recommend(
+      detail({
+        toolUsage: [{ name: "read", count: 4, result_tokens: 500 }],
+        commands: [
+          { command: "grep", category: "search", count: 3, resultTokens: 200 },
+          { command: "ls", category: "search", count: 2, resultTokens: 80 },
+          { command: "git status", category: "vcs", count: 1, resultTokens: 5 },
+        ],
+      }),
+    );
+    const rec = recs.find((r) => r.kind === "inefficient_search");
+    expect(rec).toBeDefined();
+    expect(rec?.title).toContain("locate-type");
+  });
+
+  it("does not flag search→read when there are no reads", () => {
+    const recs = recommend(
+      detail({
+        toolUsage: [],
+        commands: [
+          { command: "grep", category: "search", count: 5, resultTokens: 200 },
+        ],
+      }),
+    );
+    expect(recs.find((r) => r.kind === "inefficient_search")).toBeUndefined();
   });
 });

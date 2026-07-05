@@ -88,6 +88,9 @@ The reason the project exists — enabled by the raw traces captured above.
 - [ ] **MCP-server analysis** — for MCP servers an agent uses: call frequency, payload sizes, latency, token impact. (Distinct from our own `aap mcp` introspection server, which is done.)
 - [~] **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports. _(Started: `aap compare <ids...>` and the `compare` MCP tool produce side-by-side session reports — the comparison half. The task-runner harness (headless invocation, workspace reset, verify command) is still pending and depends on the custom-metadata channel.)_
 - [x] **Recommendations** — actionable findings from the analysis: repeated file reads, redundant tool calls, high token amplification, static context duplication, context growth. Exposed via the API, the `/ui` session page, the `recommend` MCP tool, and `aap export`.
+- [~] **Message-stack breakdown** — per request, split the sent context by element type (system / user / assistant / tool) with size + token estimate each, to see exactly what is re-sent every call. _Via a derived `GET /requests/:id/messages` endpoint (computed from the stored trace) and a collapsible split view on the `/ui` request page._
+- [~] **Command-usage analysis** — which shell programs the agent runs through `bash`, how often, and for what (category: search / read / vcs / build / nav / other), with result-token weight. _Via `aap commands` (session-scoped), a `GET /commands` endpoint, and a `/ui` panel. Evidence for AISH capability #9._
+- [~] **Inefficient search→read detection** — flag locate-type shell commands (`find`/`ls`/`grep`) used to find a file that is then read separately, as evidence for a repo-aware locate-and-read tool. _Via the `inefficient_search` recommendation. Evidence for AISH capability #10._
 
 ---
 

@@ -11,6 +11,7 @@ const REPEATED_MIN = 3;
 const AMPLIFICATION_MIN = 3000;
 const TOOLS_OVERHEAD_MIN = 2000;
 const CACHE_HIT_MIN = 0.5;
+const SEARCH_COMMANDS_MIN = 3;
 const GROWTH_MIN = 10000;
 const GROWTH_FACTOR = 3;
 
@@ -120,6 +121,26 @@ export function recommend(detail: SessionDetail): Recommendation[] {
       detail: `Input tokens grew ${(last / Math.max(first, 1)).toFixed(
         1,
       )}× over ${inputs.length} requests. Compaction or pruning could cut later prompt sizes.`,
+    });
+  }
+
+  const searchCommands = analysis.commands.filter(
+    (c) => c.category === "search",
+  );
+  const searchCalls = searchCommands.reduce((sum, c) => sum + c.count, 0);
+  const reads = analysis.toolUsage
+    .filter((t) => isReadLike(t.name))
+    .reduce((sum, t) => sum + t.count, 0);
+  if (searchCalls >= SEARCH_COMMANDS_MIN && reads > 0) {
+    const names = searchCommands
+      .map((c) => c.command)
+      .slice(0, 4)
+      .join(", ");
+    recs.push({
+      kind: "inefficient_search",
+      severity: searchCalls >= SEARCH_COMMANDS_MIN * 2 ? "warn" : "info",
+      title: `${searchCalls} locate-type shell command(s) alongside ${reads} file read(s)`,
+      detail: `The agent ran ${searchCalls} search/list command(s) (${names}) through the shell and separately read files ${reads} time(s). A repo-aware locate-and-read tool that resolves a filename and returns its content in one call would remove these search→read round-trips.`,
     });
   }
 

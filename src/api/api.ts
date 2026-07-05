@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { commandBreakdown } from "../analyze/index.js";
+import { summarizeMessages, type TraceEvent } from "../parse/index.js";
 import { recommend } from "../recommend/index.js";
 import type { Store } from "../store/index.js";
 
@@ -30,6 +32,24 @@ export function handleApi(
     return true;
   }
 
+  const messagesMatch = pathname.match(/^\/requests\/([^/]+)\/messages$/);
+  if (messagesMatch) {
+    if (!requireGet(req, res)) return true;
+    const id = decodeURIComponent(messagesMatch[1] ?? "");
+    const detail = store.getRequest(id);
+    if (!detail) {
+      writeError(res, 404, `request "${id}" not found`);
+      return true;
+    }
+    if (!detail.trace_file) {
+      writeError(res, 404, `request "${id}" has no trace`);
+      return true;
+    }
+    const events = readEvents(detail.trace_file) as TraceEvent[];
+    writeJson(res, 200, summarizeMessages(events));
+    return true;
+  }
+
   if (pathname.startsWith("/requests/")) {
     if (!requireGet(req, res)) return true;
     const id = extractId(pathname, "/requests/");
@@ -56,6 +76,22 @@ export function handleApi(
 
   if (pathname === "/tools") {
     if (requireGet(req, res)) writeJson(res, 200, store.globalToolUsage());
+    return true;
+  }
+
+  if (pathname === "/commands") {
+    if (!requireGet(req, res)) return true;
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const prefix = url.searchParams.get("session");
+    let sessionId: string | undefined;
+    if (prefix) {
+      sessionId = store.resolveSessionId(prefix);
+      if (!sessionId) {
+        writeError(res, 404, `session "${prefix}" not found`);
+        return true;
+      }
+    }
+    writeJson(res, 200, commandBreakdown(store.bashToolCalls(sessionId)));
     return true;
   }
 

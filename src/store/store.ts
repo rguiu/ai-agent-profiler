@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import { commandBreakdown, type CommandStat } from "../analyze/index.js";
 import type { SessionInfo } from "../session/index.js";
 
 const SCHEMA = `
@@ -248,6 +249,7 @@ export interface SessionAnalysis {
   repeated: RepeatedToolCall[];
   growth: GrowthPoint[];
   context: SessionContext;
+  commands: CommandStat[];
 }
 
 export class Store {
@@ -537,6 +539,7 @@ export class Store {
       repeated: this.repeatedToolCallsStmt.all(id) as RepeatedToolCall[],
       growth: this.contextGrowthStmt.all(id) as GrowthPoint[],
       context: this.sessionContextStmt.get(id) as SessionContext,
+      commands: commandBreakdown(this.bashToolCalls(id)),
     };
     return { session, requests, analysis };
   }

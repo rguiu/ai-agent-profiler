@@ -341,6 +341,25 @@ function extractResultText(content: unknown): string {
   return out;
 }
 
+function parseRequestJson(
+  events: TraceEvent[],
+): Record<string, unknown> | null {
+  const requestEvent = events.find((e) => e.type === "request");
+  const chunks = events
+    .filter((e) => e.type === "request_body" && typeof e.data === "string")
+    .map((e) => Buffer.from(e.data as string, "base64"));
+  if (chunks.length === 0) return null;
+  const body = decompress(
+    Buffer.concat(chunks),
+    headerValue(requestEvent?.headers, "content-encoding"),
+  );
+  try {
+    return asRecord(JSON.parse(body.toString("utf8")));
+  } catch {
+    return null;
+  }
+}
+
 function parseRequestBody(events: TraceEvent[]): {
   toolResults: ParsedToolResult[];
   context: ParsedContext;
@@ -355,23 +374,7 @@ function parseRequestBody(events: TraceEvent[]): {
     },
   };
 
-  const requestEvent = events.find((e) => e.type === "request");
-  const chunks = events
-    .filter((e) => e.type === "request_body" && typeof e.data === "string")
-    .map((e) => Buffer.from(e.data as string, "base64"));
-  if (chunks.length === 0) return empty;
-
-  const body = decompress(
-    Buffer.concat(chunks),
-    headerValue(requestEvent?.headers, "content-encoding"),
-  );
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body.toString("utf8"));
-  } catch {
-    return empty;
-  }
-  const record = asRecord(parsed);
+  const record = parseRequestJson(events);
   if (!record) return empty;
 
   const messages = asArray(record.messages);
@@ -414,6 +417,127 @@ function parseRequestBody(events: TraceEvent[]): {
     toolsTokens: tools.length > 0 ? estimateTokens(JSON.stringify(tools)) : 0,
   };
   return { toolResults, context };
+}
+
+export interface MessageSummary {
+  index: number;
+  role: string;
+  bytes: number;
+  tokens: number;
+  hasToolCalls: boolean;
+  toolCallNames: string[];
+  toolResultFor: string | null;
+  preview: string;
+}
+
+export interface RoleTotal {
+  role: string;
+  count: number;
+  bytes: number;
+  tokens: number;
+}
+
+export interface MessageStack {
+  model: string | null;
+  messageCount: number;
+  totalBytes: number;
+  totalTokens: number;
+  tools: { count: number; bytes: number; tokens: number };
+  totalsByRole: RoleTotal[];
+  messages: MessageSummary[];
+}
+
+// Break a captured request body into its per-message composition (role, size,
+// token estimate, tool-call/result links) so the UI can show exactly what is
+// re-sent on each call. Derived on the fly from the stored trace — no storage.
+export function summarizeMessages(events: TraceEvent[]): MessageStack {
+  const empty: MessageStack = {
+    model: null,
+    messageCount: 0,
+    totalBytes: 0,
+    totalTokens: 0,
+    tools: { count: 0, bytes: 0, tokens: 0 },
+    totalsByRole: [],
+    messages: [],
+  };
+
+  const record = parseRequestJson(events);
+  if (!record) return empty;
+
+  const toolsArr = asArray(record.tools);
+  const toolsJson = toolsArr.length > 0 ? JSON.stringify(toolsArr) : "";
+  const tools = {
+    count: toolsArr.length,
+    bytes: Buffer.byteLength(toolsJson),
+    tokens: toolsArr.length > 0 ? estimateTokens(toolsJson) : 0,
+  };
+
+  const raw: Record<string, unknown>[] = [];
+  const systemText = extractResultText(record.system ?? "");
+  if (systemText) raw.push({ role: "system", content: systemText });
+  for (const message of asArray(record.messages)) {
+    const msg = asRecord(message);
+    if (msg) raw.push(msg);
+  }
+
+  const totals = new Map<string, RoleTotal>();
+  let totalBytes = 0;
+  let totalTokens = 0;
+  const messages: MessageSummary[] = raw.map((msg, index) => {
+    const serialized = JSON.stringify(msg);
+    const bytes = Buffer.byteLength(serialized);
+    const tokens = estimateTokens(serialized);
+    const role = asString(msg.role) ?? "unknown";
+
+    const toolCallNames: string[] = [];
+    for (const call of asArray(msg.tool_calls)) {
+      const fn = asRecord(asRecord(call)?.function);
+      const name = fn ? asString(fn.name) : null;
+      if (name) toolCallNames.push(name);
+    }
+    let toolResultFor = asString(msg.tool_call_id);
+    for (const block of asArray(msg.content)) {
+      const b = asRecord(block);
+      if (b?.type === "tool_use") {
+        const name = asString(b.name);
+        if (name) toolCallNames.push(name);
+      } else if (b?.type === "tool_result") {
+        toolResultFor = asString(b.tool_use_id) ?? toolResultFor;
+      }
+    }
+
+    totalBytes += bytes;
+    totalTokens += tokens;
+    const acc = totals.get(role) ?? { role, count: 0, bytes: 0, tokens: 0 };
+    acc.count += 1;
+    acc.bytes += bytes;
+    acc.tokens += tokens;
+    totals.set(role, acc);
+
+    return {
+      index,
+      role,
+      bytes,
+      tokens,
+      hasToolCalls: toolCallNames.length > 0,
+      toolCallNames,
+      toolResultFor: toolResultFor ?? null,
+      preview: extractResultText(msg.content)
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200),
+    };
+  });
+
+  return {
+    model: asString(record.model),
+    messageCount: messages.length,
+    totalBytes,
+    totalTokens,
+    tools,
+    totalsByRole: [...totals.values()],
+    messages,
+  };
 }
 
 export function parseTrace(events: TraceEvent[]): ParsedTrace {

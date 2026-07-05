@@ -50,6 +50,7 @@ function makeDetail(): SessionDetail {
         input_tokens_total: 0,
         cached_input_tokens_total: 0,
       },
+      commands: [],
     },
   };
 }

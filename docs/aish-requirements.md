@@ -57,6 +57,8 @@ At a glance — each capability and the already-implemented metric that justifie
 | 6   | Context compaction             | context-growth series (`analysis.growth`)              |
 | 7   | Structured (typed) tool output | bytes-per-token (`result_bytes` / `result_tokens`)     |
 | 8   | Fewer round-trips              | requests per task (`stats.requests`, `aap compare`)    |
+| 9   | AISH shell (replaces `bash`)   | command usage/frequency/category (`aap commands`)      |
+| 10  | Locate-and-read (path-miss)    | search→read pattern (`inefficient_search` rec)         |
 
 ### 1. Ranged / structured file reads
 
@@ -156,9 +158,65 @@ At a glance — each capability and the already-implemented metric that justifie
 - Design sketch: batch tool APIs (read many files / multi-edit in one call).
 - Risk / notes: batching can hurt if it over-fetches; measure net tokens.
 
+### 9. AISH shell (replacing the generic `bash` tool)
+
+- Hypothesis: the agent is given one `bash` tool and drives everything through free-form
+  shell commands. Because it draws on pretraining, it reaches for verbose, token-expensive
+  programs (`ls -al`, `cat`, `grep -r`, `find`) and their raw text output floods context.
+  A purpose-built shell exposing lean, structured, repo-aware verbs would cut that waste.
+- Profiler metric: **which shell programs are actually used, how often, and for what** —
+  `aap commands` (per-command count + result tokens, now with a `category`: search / read /
+  vcs / build / nav / other), scoped per session. This shows whether the agent uses a small
+  subset of `bash` (and therefore how small AISH's verb set can be).
+- Baseline: TBD (opencode/DeepSeek: __, Claude Code: __)
+- Target: TBD
+- Design sketch: replace `bash` with `aish`, an AI-native shell whose verbs map to #1–#7
+  (ranged reads, symbol search, structured output, caching). See adoption note below.
+- Risk / notes — **the pretraining problem:** the model has never seen `aish`, so it will not
+  spontaneously use its verbs the way it uses `ls`/`cat`/`git`. Candidate approaches to
+  evaluate (each measurable): (a) keep the tool accepting ordinary shell-command **strings**
+  so the model still "thinks in bash", while AISH intercepts/optimises behind the scenes —
+  favours the **proxy `--optimize`** placement; (b) expose explicit typed verbs with a rich
+  description + few-shot examples in the tool schema and measure adoption rate; (c) hybrid:
+  accept shell strings but progressively steer toward verbs. Adoption itself becomes a metric.
+
+### 10. Locate-and-read (path-miss auto-search)
+
+- Hypothesis: when the human names a file without a full path, the agent burns a
+  search→read round-trip chain — e.g. `ls -alR` / `find` / `grep` to locate the file, then a
+  separate `read`. A `read(name)` that auto-searches on a path miss and returns the best match
+  folds those calls into one.
+- Profiler metric: **search→read pattern** — locate-type shell commands
+  (`find`/`ls`/`grep`/`rg`, the `search` category from #9) occurring alongside file reads;
+  surfaced by the new `inefficient_search` recommendation and `aap commands` category counts.
+- Baseline: TBD
+- Target: TBD
+- Design sketch: `read` accepts a bare filename; on miss, run an indexed search (see #2) and
+  return the unique match's content (or a compact candidate list if ambiguous).
+- Risk / notes: ambiguous names → wrong file; must return candidates instead of guessing.
+  Measure net round-trips and tokens across the locate+read episode, not per call.
+
 ---
 
-## Measurement protocol
+## Where does an optimisation run? AISH vs proxy `--optimize`
+
+Some capabilities here are **tool design** (belong in AISH) and some are **request/response
+rewriting** (could be enforced by the profiler proxy). This boundary is deliberately left
+open until measured; each capability above carries a hint, but the rule of thumb:
+
+- **AISH** — anything that requires new tool _semantics_ the agent invokes deliberately:
+  ranged/symbol reads (#1, #2), typed output (#7), batched verbs (#8), the shell itself (#9),
+  locate-and-read (#10).
+- **Proxy `--optimize` (candidate, not built)** — anything that rewrites the wire without the
+  agent's cooperation: summarising/truncating tool results (#3), de-duplicating repeated
+  observations (#4), pruning stale context with a stub notice (#6). These can be applied to an
+  _existing_ agent (no AISH required), which makes them attractive to prototype in the proxy.
+
+**Hard constraint:** the profiler's default mode is transparent and **read-only** (VISION.md —
+"never changes requests"). Any wire-rewriting therefore may only exist as an **explicit,
+off-by-default `--optimize` mode**, and — like every AISH capability — must be justified by a
+baseline metric and must not regress task success. It is **not** built today; it is recorded
+here so the AISH-vs-proxy decision is made on evidence rather than by default.
 
 Baselines come from the benchmark suite in [`benchmarks/`](../benchmarks/README.md):
 

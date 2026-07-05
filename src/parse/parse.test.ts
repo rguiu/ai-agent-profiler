@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { gzipSync } from "node:zlib";
-import { computeCost, parseTrace, type TraceEvent } from "./parse.js";
+import {
+  computeCost,
+  parseTrace,
+  summarizeMessages,
+  type TraceEvent,
+} from "./parse.js";
 
 function traceFor(
   contentType: string,
@@ -230,7 +235,9 @@ describe("parseTrace", () => {
     const body = JSON.stringify({
       object: "chat.completion",
       model: "deepseek-chat",
-      choices: [{ index: 0, message: { role: "assistant" }, finish_reason: "stop" }],
+      choices: [
+        { index: 0, message: { role: "assistant" }, finish_reason: "stop" },
+      ],
       usage: {
         prompt_tokens: 1000,
         completion_tokens: 5,
@@ -248,7 +255,9 @@ describe("parseTrace", () => {
     const body = JSON.stringify({
       object: "chat.completion",
       model: "gpt-4o",
-      choices: [{ index: 0, message: { role: "assistant" }, finish_reason: "stop" }],
+      choices: [
+        { index: 0, message: { role: "assistant" }, finish_reason: "stop" },
+      ],
       usage: {
         prompt_tokens: 500,
         completion_tokens: 5,
@@ -274,6 +283,84 @@ describe("parseTrace", () => {
     const result = parseTrace(traceFor("application/json", Buffer.from(body)));
     expect(result.format).toBe("anthropic");
     expect(result.cachedInputTokens).toBe(1800);
+  });
+});
+
+describe("summarizeMessages", () => {
+  function requestTrace(body: unknown): TraceEvent[] {
+    return [
+      { type: "request", headers: { "content-type": "application/json" } },
+      {
+        type: "request_body",
+        data: Buffer.from(JSON.stringify(body)).toString("base64"),
+      },
+      { type: "end" },
+    ];
+  }
+
+  it("splits an OpenAI request body by role with sizes", () => {
+    const stack = summarizeMessages(
+      requestTrace({
+        model: "gpt-4o",
+        tools: [
+          { type: "function", function: { name: "bash", parameters: {} } },
+        ],
+        messages: [
+          { role: "system", content: "You are a helper." },
+          { role: "user", content: "find the config" },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "c1",
+                type: "function",
+                function: { name: "bash", arguments: '{"command":"ls"}' },
+              },
+            ],
+          },
+          { role: "tool", tool_call_id: "c1", content: "a.txt" },
+        ],
+      }),
+    );
+    expect(stack.model).toBe("gpt-4o");
+    expect(stack.messageCount).toBe(4);
+    expect(stack.tools.count).toBe(1);
+    expect(stack.tools.tokens).toBeGreaterThan(0);
+    expect(stack.totalBytes).toBeGreaterThan(0);
+    const assistant = stack.messages.find((m) => m.role === "assistant");
+    expect(assistant?.hasToolCalls).toBe(true);
+    expect(assistant?.toolCallNames).toEqual(["bash"]);
+    const tool = stack.messages.find((m) => m.role === "tool");
+    expect(tool?.toolResultFor).toBe("c1");
+  });
+
+  it("treats Anthropic top-level system as a synthetic message", () => {
+    const stack = summarizeMessages(
+      requestTrace({
+        model: "claude-3-haiku",
+        system: "You are Claude.",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "t1", content: "done" },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(stack.messageCount).toBe(2);
+    expect(stack.messages[0]?.role).toBe("system");
+    expect(stack.messages[0]?.preview).toContain("Claude");
+    expect(stack.messages[1]?.toolResultFor).toBe("t1");
+  });
+
+  it("returns an empty stack when there is no request body", () => {
+    const stack = summarizeMessages([{ type: "request" }, { type: "end" }]);
+    expect(stack.messageCount).toBe(0);
+    expect(stack.messages).toEqual([]);
+    expect(stack.tools.count).toBe(0);
   });
 });
 

@@ -23,7 +23,8 @@ function esc(s) {
 const num = (n) => (n ?? 0).toLocaleString();
 const cost = (c) => (c ? `$${Number(c).toFixed(4)}` : "$0");
 const shortId = (id) => (id ? esc(String(id).slice(0, 8)) : "—");
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const shortPath = (p) => {
   const full = String(p ?? "");
   const short = full
@@ -58,10 +59,11 @@ function b64ToText(b64) {
 }
 
 async function dashboard() {
-  const [stats, sessions, tools] = await Promise.all([
+  const [stats, sessions, tools, commands] = await Promise.all([
     api("/stats"),
     api("/sessions"),
     api("/tools"),
+    api("/commands"),
   ]);
   const cards = [
     ["Sessions", num(stats.sessions)],
@@ -82,9 +84,24 @@ async function dashboard() {
     </div>
     <h2>Tool usage</h2>
     ${toolBars(tools)}
+    <h2>Shell commands</h2>
+    ${commandsTable(commands)}
     <h2>Recent sessions</h2>
     ${sessionsTable(sessions.slice(0, 15))}
   `;
+}
+
+function commandsTable(rows) {
+  if (!rows || !rows.length)
+    return `<p class="empty">No shell commands captured (run <code>aap parse</code>).</p>`;
+  return `<table><thead><tr>
+      <th>Command</th><th>Category</th><th class="num">Calls</th><th class="num">Result tokens</th>
+    </tr></thead><tbody>${rows
+      .map(
+        (r) =>
+          `<tr><td class="mono">${esc(r.command)}</td><td><span class="pill cat-${esc(r.category)}">${esc(r.category)}</span></td><td class="num">${num(r.count)}</td><td class="num">~${num(r.resultTokens)}</td></tr>`,
+      )
+      .join("")}</tbody></table>`;
 }
 
 function toolBars(items) {
@@ -179,9 +196,11 @@ async function sessions() {
 }
 
 async function sessionDetail(id) {
-  const { session, requests, analysis, recommendations } = await api(
-    `/sessions/${encodeURIComponent(id)}`,
-  );
+  const [{ session, requests, analysis, recommendations }, commands] =
+    await Promise.all([
+      api(`/sessions/${encodeURIComponent(id)}`),
+      api(`/commands?session=${encodeURIComponent(id)}`),
+    ]);
   const rows = requests
     .map(
       (r) => `<tr>
@@ -239,6 +258,8 @@ async function sessionDetail(id) {
     ${contextSummary(analysis.context)}
     <h2>Tool usage</h2>
     ${toolBars(analysis.toolUsage)}
+    <h2>Shell commands</h2>
+    ${commandsTable(commands)}
     <h2>Repeated tool calls</h2>
     ${repeatedTable(analysis.repeated)}`;
 }
@@ -266,7 +287,10 @@ function contextSummary(ctx) {
 }
 
 async function requestDetail(id) {
-  const r = await api(`/requests/${encodeURIComponent(id)}?events=1`);
+  const [r, stack] = await Promise.all([
+    api(`/requests/${encodeURIComponent(id)}?events=1`),
+    api(`/requests/${encodeURIComponent(id)}/messages`),
+  ]);
   const events = r.events || [];
   const responseEvent = events.find((e) => e.type === "response");
   const encoding =
@@ -301,6 +325,8 @@ async function requestDetail(id) {
     </div>
     <h2>Tool calls (${toolCalls.length})</h2>
     ${toolCallsHtml(toolCalls)}
+    <h2>Context sent (${stack.messageCount} messages)</h2>
+    ${messageStackHtml(stack)}
     <h2>Response</h2>
     <pre>${esc(responseText) || '<span class="muted">no body</span>'}</pre>
     <h2>Events (${events.length})</h2>
@@ -312,6 +338,45 @@ async function requestDetail(id) {
         })
         .join("")}
     </div>`;
+}
+
+function messageStackHtml(stack) {
+  if (!stack || !stack.messageCount)
+    return `<p class="empty">No request body captured for this request.</p>`;
+  const segments = [];
+  if (stack.tools.count)
+    segments.push({
+      role: "tools",
+      label: `tools (${stack.tools.count})`,
+      bytes: stack.tools.bytes,
+      tokens: stack.tools.tokens,
+    });
+  for (const t of stack.totalsByRole)
+    segments.push({
+      role: t.role,
+      label: `${t.role} (${t.count})`,
+      bytes: t.bytes,
+      tokens: t.tokens,
+    });
+  const grandBytes = stack.totalBytes + stack.tools.bytes || 1;
+  const bars = segments
+    .map((s) => {
+      const pct = ((s.bytes / grandBytes) * 100).toFixed(1);
+      return `<div class="bar-row"><span class="bar-label mono">${esc(s.label)}</span><span class="bar-track"><span class="bar-fill role-${esc(s.role)}" style="width:${pct}%"></span></span><span class="bar-val num">${fmtBytes(s.bytes)} · ~${num(s.tokens)} tok</span></div>`;
+    })
+    .join("");
+  const rows = stack.messages
+    .map((m) => {
+      const calls = m.toolCallNames.length
+        ? ` <span class="muted">→ ${esc(m.toolCallNames.join(", "))}</span>`
+        : "";
+      const result = m.toolResultFor
+        ? ` <span class="muted">⇐ tool result</span>`
+        : "";
+      return `<details class="msg"><summary><span class="pill role-${esc(m.role)}">${esc(m.role)}</span> <span class="num mono">${fmtBytes(m.bytes)} · ~${num(m.tokens)} tok</span>${calls}${result}</summary><div class="mono msg-body">${esc(m.preview) || '<span class="muted">(no text content)</span>'}</div></details>`;
+    })
+    .join("");
+  return `<div class="bars">${bars}</div><div class="msg-list">${rows}</div>`;
 }
 
 function toolCallsHtml(calls) {

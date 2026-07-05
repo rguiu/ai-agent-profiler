@@ -78,7 +78,11 @@ function seed(store: Store, dir: string): void {
   ]);
 }
 
-async function startStack(): Promise<{ port: number }> {
+async function startStack(): Promise<{
+  port: number;
+  store: Store;
+  dir: string;
+}> {
   const dir = mkdtempSync(join(tmpdir(), "aap-api-"));
   const store = openStore(dir);
   seed(store, dir);
@@ -107,7 +111,7 @@ async function startStack(): Promise<{ port: number }> {
   );
   cleanup.push(() => store.close());
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
-  return { port };
+  return { port, store, dir };
 }
 
 describe("read API", () => {
@@ -243,5 +247,117 @@ describe("read API", () => {
       method: "POST",
     });
     expect(res.status).toBe(405);
+  });
+
+  it("breaks a request into its message stack", async () => {
+    const { port, store, dir } = await startStack();
+    const body = {
+      model: "gpt-4o",
+      tools: [
+        { type: "function", function: { name: "bash", parameters: {} } },
+        { type: "function", function: { name: "read", parameters: {} } },
+      ],
+      messages: [
+        { role: "system", content: "You are a helper." },
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "c1",
+              type: "function",
+              function: { name: "bash", arguments: '{"command":"ls"}' },
+            },
+          ],
+        },
+        { role: "tool", tool_call_id: "c1", content: "a.txt b.txt" },
+      ],
+    };
+    const traceFile = join(dir, "r2.ndjson");
+    writeFileSync(
+      traceFile,
+      [
+        { type: "request", headers: { "content-type": "application/json" } },
+        {
+          type: "request_body",
+          data: Buffer.from(JSON.stringify(body)).toString("base64"),
+        },
+        { type: "end" },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n"),
+    );
+    store.insertRequest({
+      id: "r2",
+      sessionId: "s1",
+      provider: "openai",
+      method: "POST",
+      path: "/s1/openai/v1/chat/completions",
+      traceFile,
+      startedAt: "2026-01-01T00:00:05Z",
+    });
+
+    const stack = (await (
+      await fetch(`http://127.0.0.1:${port}/requests/r2/messages`)
+    ).json()) as {
+      messageCount: number;
+      tools: { count: number };
+      totalsByRole: Array<{ role: string; count: number }>;
+      messages: Array<{
+        role: string;
+        hasToolCalls: boolean;
+        toolCallNames: string[];
+        toolResultFor: string | null;
+      }>;
+    };
+    expect(stack.messageCount).toBe(4);
+    expect(stack.tools.count).toBe(2);
+    expect(stack.totalsByRole.map((t) => t.role).sort()).toEqual([
+      "assistant",
+      "system",
+      "tool",
+      "user",
+    ]);
+    const assistant = stack.messages.find((m) => m.role === "assistant");
+    expect(assistant?.hasToolCalls).toBe(true);
+    expect(assistant?.toolCallNames).toContain("bash");
+    expect(stack.messages.find((m) => m.role === "tool")?.toolResultFor).toBe(
+      "c1",
+    );
+  });
+
+  it("404s messages for an unknown request", async () => {
+    const { port } = await startStack();
+    const res = await fetch(`http://127.0.0.1:${port}/requests/nope/messages`);
+    expect(res.status).toBe(404);
+  });
+
+  it("breaks down shell commands with categories", async () => {
+    const { port, store } = await startStack();
+    store.replaceToolCalls("r1", [
+      { id: "b1", name: "bash", arguments: '{"command":"git status"}' },
+      { id: "b2", name: "bash", arguments: '{"command":"ls -la"}' },
+    ]);
+    const rows = (await (
+      await fetch(`http://127.0.0.1:${port}/commands`)
+    ).json()) as Array<{ command: string; category: string; count: number }>;
+    const byCommand = Object.fromEntries(rows.map((r) => [r.command, r]));
+    expect(byCommand["git status"]?.category).toBe("vcs");
+    expect(byCommand["ls"]?.category).toBe("search");
+  });
+
+  it("scopes command breakdown by session and 404s unknown ones", async () => {
+    const { port, store } = await startStack();
+    store.replaceToolCalls("r1", [
+      { id: "b1", name: "bash", arguments: '{"command":"git commit -m x"}' },
+    ]);
+    const scoped = (await (
+      await fetch(`http://127.0.0.1:${port}/commands?session=s1`)
+    ).json()) as Array<{ command: string }>;
+    expect(scoped.map((r) => r.command)).toContain("git commit");
+
+    const res = await fetch(`http://127.0.0.1:${port}/commands?session=nope`);
+    expect(res.status).toBe(404);
   });
 });
