@@ -64,6 +64,8 @@ AISH     → Optimisation
 
 No optimisation in AISH should exist because it "sounds like a good idea." Every optimisation should be backed by profiler data.
 
+Candidate AISH capabilities — each with a "hypothesis → profiler metric → baseline → target" slot to fill from benchmark data — are tracked in [`docs/aish-requirements.md`](docs/aish-requirements.md).
+
 ## The research-first test
 
 Most features should be evaluated with one question:
