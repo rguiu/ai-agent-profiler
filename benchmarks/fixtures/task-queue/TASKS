@@ -1,4 +1,4 @@
 explain|Explain what this project does and how task scheduling works in src/scheduler.js. Do not change any files.
 locate|Where is task priority ordering decided? Point to the exact file and function. Do not change any files.
-fix-bug|The test suite (npm test) has a failing test in test/scheduler.test.js. Find and fix the bug in the source so all tests pass.
-add-feature|Add a peek() method to the Queue class that returns the next task without changing its status, and add a test for it. Make sure npm test passes.
+fix-bug|The test suite (npm test) has a failing test in test/scheduler.test.js. Find and fix the bug in the source so all tests pass.|npm test
+add-feature|Add a peek() method to the Queue class that returns the next task without changing its status, and add a test for it. Make sure npm test passes.|npm test

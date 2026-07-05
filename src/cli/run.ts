@@ -33,6 +33,14 @@ export function buildProviderEnv(
   return env;
 }
 
+// A caller may pin the session id (e.g. a benchmark harness that needs to tag
+// the session with a verify result afterwards). Otherwise a fresh id is used.
+export function resolveSessionId(env: NodeJS.ProcessEnv): string {
+  const provided = env.AAP_SESSION_ID;
+  if (provided && /^[A-Za-z0-9._-]+$/.test(provided)) return provided;
+  return randomUUID();
+}
+
 export function parseRunArgs(
   args: string[],
   env: NodeJS.ProcessEnv,
@@ -66,7 +74,7 @@ export async function run(args: string[]): Promise<void> {
   }
 
   const config = loadConfig();
-  const sessionId = randomUUID();
+  const sessionId = resolveSessionId(process.env);
   const host = normalizeHost(config.server.host);
   const origin = `http://${host}:${config.server.port}`;
   const cwd = process.cwd();

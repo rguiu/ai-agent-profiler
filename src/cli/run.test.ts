@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../config/index.js";
-import { buildProviderEnv, parseRunArgs } from "./run.js";
+import { buildProviderEnv, parseRunArgs, resolveSessionId } from "./run.js";
 
 const providers: Pick<Config, "providers"> = {
   providers: {
@@ -85,5 +85,19 @@ describe("parseRunArgs", () => {
 
   it("returns no agent when only flags are given", () => {
     expect(parseRunArgs(["--meta", "x=1"], {}).agent).toBeUndefined();
+  });
+});
+
+describe("resolveSessionId", () => {
+  it("honours a valid AAP_SESSION_ID", () => {
+    expect(resolveSessionId({ AAP_SESSION_ID: "bench-fix-bug-1" })).toBe(
+      "bench-fix-bug-1",
+    );
+  });
+
+  it("generates a fresh id when unset or invalid", () => {
+    expect(resolveSessionId({}).length).toBeGreaterThan(0);
+    const bad = resolveSessionId({ AAP_SESSION_ID: "has spaces/and!" });
+    expect(bad).not.toBe("has spaces/and!");
   });
 });

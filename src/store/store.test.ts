@@ -153,6 +153,25 @@ describe("Store", () => {
     expect(ids).toEqual(["a", "b"]);
   });
 
+  it("merges a patch into session metadata", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({
+      id: "s1",
+      startedAt: "t",
+      meta: { task: "fix-bug", agent: "opencode" },
+    });
+    expect(store.updateSessionMeta("s1", { verify: "pass" })).toBe(true);
+    expect(store.updateSessionMeta("missing", { verify: "pass" })).toBe(false);
+    const detail = store.getSession("s1");
+    store.close();
+    expect(detail?.session.meta).toEqual({
+      task: "fix-bug",
+      agent: "opencode",
+      verify: "pass",
+    });
+  });
+
   it("stores and reads back session metadata", () => {
     const dir = tmpDir();
     const store = openStore(dir);

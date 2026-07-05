@@ -61,8 +61,9 @@ original and each run starts from the same state.
 1. Create `benchmarks/fixtures/<name>/` — a small, self-contained project. Prefer zero
    dependencies and a runnable check (e.g. `node --test`) so success is verifiable. Plant a
    clear, single bug for a `fix-bug` task.
-2. Add a `TASKS` file next to it — one task per line as `id|prompt`. Keep read-only tasks
-   explicit ("Do not change any files").
+2. Add a `TASKS` file next to it — one task per line as `id|prompt[|verify]`. The optional
+   3rd field is a shell command run in the task's scratch dir after the agent finishes
+   (exit 0 = pass), e.g. `npm test`. Keep read-only tasks explicit ("Do not change any files").
 3. Run it: `./benchmarks/run.sh opencode --fixture <name>`.
 
 Design fixtures to stress the things the profiler measures: whole-file vs ranged reads
@@ -89,7 +90,7 @@ To run your own tasks against any target, pass a file (one `id|prompt` per line 
 
 ## How `run.sh` works
 
-`./benchmarks/run.sh <agent> [target] [--tasks file] [--dry-run]`:
+`./benchmarks/run.sh <agent> [target] [--tasks file] [--verify cmd] [--no-verify] [--dry-run]`:
 
 1. Maps the agent to its headless, auto-approving invocation: opencode →
    `opencode run --auto`, claude → `claude -p --dangerously-skip-permissions`. Without
@@ -99,11 +100,17 @@ To run your own tasks against any target, pass a file (one `id|prompt` per line 
 3. Resolves tasks: `--tasks` file, else the target's own `TASKS`, else generic read-only tasks.
 4. For each task: copies the target into its **own** scratch dir (`/tmp/aap-bench/<task>`),
    drops `.git`/`TASKS`, then runs
-   `aap run --meta task=<id> --meta agent=<name> <agent> <invoke> "<prompt>"` from inside it.
+   `aap run --meta task=<id> --meta agent=<name> <agent> <invoke> "<prompt>"` from inside it,
+   pinning the session id via `AAP_SESSION_ID` so it can be tagged afterwards.
    A separate dir per task matters: agents group sessions by project directory, so a shared
    path would bleed one task's conversation into the next.
+5. **Verify (scoring):** if the task has a verify command (3rd `TASKS` field, or `--verify`
+   default), it runs in the scratch dir after the agent finishes. Exit 0 → `pass`, else
+   `fail`. The result is tagged onto the profiler session (`aap tag <sid> verify=pass|fail`)
+   and written to `/tmp/aap-bench/results.tsv`, and a pass/fail summary prints at the end.
+   `--no-verify` skips this. Read-only tasks (`explain`/`locate`) have no verify command.
 
-Use `--dry-run` to print the exact commands without executing them.
+Use `--dry-run` to print the exact commands (including the verify step) without executing them.
 
 ## Running
 
@@ -128,6 +135,10 @@ aap compare --task fix-bug     # side-by-side across every agent that ran fix-bu
 aap compare --task explain
 ```
 
+Sessions from a verified task are tagged `verify=pass|fail`, so you can filter baselines by
+task success (e.g. via the `raw_sql` MCP tool or `aap sessions`) — a token win only counts if
+the agent still solved the task.
+
 Or open the dashboard at `http://localhost:8080/ui`, pick a session, and read its
 **Recommendations** and **Context cost**. For a shareable writeup:
 
@@ -141,6 +152,6 @@ aap export <session-id>        # Markdown report
   and compare distributions, not single points.
 - Token counts for tool results and context composition are **estimates** (~chars/4); they're
   reliable for _relative_ comparison between agents, not billing-exact.
-- Success (did the agent actually fix the bug?) is not auto-verified yet — check
-  `npm test` in the scratch dir, or add a verify step. Automated verification is the next
-  piece of full benchmark mode.
+- Success is auto-verified via each task's verify command (`npm test` for the bundled
+  fixtures) and tagged onto the session as `verify=pass|fail`. A metric improvement only
+  counts when `verify=pass` — never trade task success for token savings.

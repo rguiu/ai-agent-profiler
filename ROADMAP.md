@@ -75,6 +75,7 @@ Shipped while building the above, not in the M0–M4 scope:
 - **Run-from-anywhere** config resolution (`$AAP_CONFIG` → `~/.config/aap/config.toml` → `./config.toml`).
 - **opencode routing** via injected `OPENCODE_CONFIG_CONTENT` (per-run session ids without editing `opencode.json`).
 - **Tool-call arguments** capture and a request **`Started`** timestamp column.
+- **Session tagging** (`aap tag <id> key=value`) + caller-pinned session ids (`AAP_SESSION_ID`), used by the benchmark harness to record verify results on a session after the run.
 
 ---
 
@@ -86,7 +87,7 @@ The reason the project exists — enabled by the raw traces captured above.
 - [~] **Context analysis** — repeated / unused context, context amplification. _(Done: per-request system-prompt tokens, message count, and tool-definition tokens, plus per-session totals showing cumulative duplication of the static system + tools payload. Also captures provider prompt-cache hit tokens (`metrics.cached_input_tokens`) so the `context_duplication` recommendation is cache-aware.)_
 - [~] **Tool efficiency** — output bytes, estimated prompt tokens, execution time, downstream token cost, subsequent tool dependencies. _(Done: tool-result token amplification — each tool call linked to its result in the next request with byte/token size.)_
 - [ ] **MCP-server analysis** — for MCP servers an agent uses: call frequency, payload sizes, latency, token impact. (Distinct from our own `aap mcp` introspection server, which is done.)
-- [~] **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports. _(Started: `aap compare <ids...>` and the `compare` MCP tool produce side-by-side session reports — the comparison half. The task-runner harness (headless invocation, workspace reset, verify command) is still pending and depends on the custom-metadata channel.)_
+- [~] **Benchmark mode** — run identical tasks across Claude Code / Opencode / AISH; comparison reports. _(Done: `aap compare <ids...>` and the `compare` MCP tool produce side-by-side session reports; the `benchmarks/run.sh` task-runner does headless invocation, fresh per-task workspace reset, and **verify-and-score** — each `fix-bug`/`add-feature` run is checked (`npm test`) and the session tagged `verify=pass|fail` via `aap tag`, so baselines filter by task success. Remaining: multi-run distributions / aggregate scoring across repeated runs.)_
 - [x] **Recommendations** — actionable findings from the analysis: repeated file reads, redundant tool calls, high token amplification, static context duplication, context growth. Exposed via the API, the `/ui` session page, the `recommend` MCP tool, and `aap export`.
 - [x] **Message-stack breakdown** — per request, split the sent context by element type (system / user / assistant / tool) with size + token estimate each, to see exactly what is re-sent every call. _Via a derived `GET /requests/:id/messages` endpoint (computed from the stored trace) and a collapsible split view on the `/ui` request page._
 - [x] **Command-usage analysis** — which shell programs the agent runs through `bash`, how often, and for what (category: search / read / vcs / build / nav / other), with result-token weight. _Via `aap commands` (session-scoped), a `GET /commands` endpoint, and a `/ui` panel. Evidence for AISH capability #9._

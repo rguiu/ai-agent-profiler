@@ -8,6 +8,7 @@ import { parse } from "./parse.js";
 import { run } from "./run.js";
 import { serve } from "./serve.js";
 import { sessions } from "./sessions.js";
+import { tag } from "./tag.js";
 
 function printHelp(): void {
   console.log(`aap — AI Agent Profiler
@@ -18,6 +19,7 @@ Usage:
   aap parse [--all]    Derive metrics from captured traces
   aap sessions         List captured sessions (rm <id> to delete)
   aap commands         Break down shell commands by token cost
+  aap tag <id> k=v     Tag a session with metadata (e.g. verify=pass)
   aap export <id>      Export a session report (Markdown; --json for JSON)
   aap compare <ids...> Compare sessions side by side (--json for JSON)
   aap mcp              Start an MCP server for agent introspection
@@ -43,6 +45,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "commands":
       commands(argv.slice(1));
+      return;
+    case "tag":
+      tag(argv.slice(1));
       return;
     case "export":
       exportSession(argv.slice(1));

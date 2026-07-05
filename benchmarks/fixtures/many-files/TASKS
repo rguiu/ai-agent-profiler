@@ -1,4 +1,4 @@
 explain|Explain how the handler registry in src/registry.js works. Do not change any files.
 locate|List all files under src/handlers/ that define a handler, and show where each is registered in src/registry.js. Do not change any files.
-fix-bug|The test suite (npm test) fails: exactly one handler returns the wrong value. Find which handler file is wrong and fix it so all tests pass.
-add-feature|Add a handler40 that triples its input, register it, and add a test asserting run("40", 5) === 15. Make sure npm test passes.
+fix-bug|The test suite (npm test) fails: exactly one handler returns the wrong value. Find which handler file is wrong and fix it so all tests pass.|npm test
+add-feature|Add a handler40 that triples its input, register it, and add a test asserting run("40", 5) === 15. Make sure npm test passes.|npm test

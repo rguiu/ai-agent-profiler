@@ -548,6 +548,20 @@ export class Store {
     return this.toolUsageGlobalStmt.all() as ToolUsage[];
   }
 
+  // Merge a patch into an existing session's meta (used to tag a session with,
+  // e.g., a benchmark verify result after the run finishes). Returns false if
+  // no such session exists.
+  updateSessionMeta(id: string, patch: Record<string, string>): boolean {
+    const row = this.getSessionStmt.get(id) as
+      { meta: string | null } | undefined;
+    if (!row) return false;
+    const merged = { ...(parseMeta(row.meta) ?? {}), ...patch };
+    this.db
+      .prepare("UPDATE sessions SET meta = ? WHERE id = ?")
+      .run(JSON.stringify(merged), id);
+    return true;
+  }
+
   sessionIdsByMeta(key: string, value: string): string[] {
     const rows = this.db
       .prepare(

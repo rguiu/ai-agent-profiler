@@ -1,4 +1,4 @@
 explain|Explain what this project does and how src/parser.js works. Do not change any files.
 locate|Where is parseLine defined and where is it used? List files and line numbers. Do not change any files.
-fix-bug|The test suite (npm test) has a failing test. Find and fix the bug in the source so all tests pass.
-add-feature|Add a boolean 'trim' option to parse(options) that strips leading/trailing whitespace from each cell. Add a test and make sure npm test passes.
+fix-bug|The test suite (npm test) has a failing test. Find and fix the bug in the source so all tests pass.|npm test
+add-feature|Add a boolean 'trim' option to parse(options) that strips leading/trailing whitespace from each cell. Add a test and make sure npm test passes.|npm test

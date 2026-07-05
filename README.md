@@ -112,6 +112,7 @@ aap run <agent>      # launch an agent through the profiler, e.g. aap run claude
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
 aap sessions         # list captured sessions (aap sessions rm <id> to delete)
 aap commands         # break shell commands down by token cost (which to optimise)
+aap tag <id> k=v     # tag a session with metadata (e.g. verify=pass)
 aap export <id>      # export a session report (Markdown; add --json for JSON)
 aap compare <ids>    # compare sessions side by side (add --json for JSON)
 aap mcp              # start an MCP server (stdio) for agent self-introspection
