@@ -116,7 +116,10 @@ At a glance — each capability and the already-implemented metric that justifie
 - Hypothesis: full tool schemas are re-sent on every request, a large static overhead that
   scales with session length. AISH sends compact defs and/or loads tools on demand.
 - Profiler metric: **context duplication** — `metrics.tools_tokens` per request × request
-  count (session "Context cost"); the `context_duplication` recommendation.
+  count (session "Context cost"); the `context_duplication` recommendation. The profiler also
+  captures **prompt-cache hit tokens** (`metrics.cached_input_tokens`, per-session hit ratio),
+  and `context_duplication` is **cache-aware** — it downgrades when the static prefix is
+  largely served from provider cache, so the metric reflects real cost, not just raw tokens.
 - Baseline: TBD
 - Target: TBD
 - Design sketch: minimal schemas; progressive disclosure / tool namespaces loaded when
@@ -217,6 +220,10 @@ open until measured; each capability above carries a hint, but the rule of thumb
 off-by-default `--optimize` mode**, and — like every AISH capability — must be justified by a
 baseline metric and must not regress task success. It is **not** built today; it is recorded
 here so the AISH-vs-proxy decision is made on evidence rather than by default.
+
+---
+
+## Measurement protocol
 
 Baselines come from the benchmark suite in [`benchmarks/`](../benchmarks/README.md):
 

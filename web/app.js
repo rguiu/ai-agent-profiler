@@ -278,12 +278,19 @@ function recommendationsHtml(recs) {
 function contextSummary(ctx) {
   if (!ctx || !ctx.requests)
     return `<p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+  const cacheRow =
+    ctx.input_tokens_total > 0
+      ? `<div class="k">prompt-cache hit</div><div class="v">${Math.round(
+          (ctx.cached_input_tokens_total / ctx.input_tokens_total) * 100,
+        )}% of input (~${num(ctx.cached_input_tokens_total)} tok)</div>`
+      : "";
   return `<div class="kv">
       <div class="k">parsed requests</div><div class="v">${num(ctx.requests)}</div>
       <div class="k">system-prompt tokens (resent)</div><div class="v">~${num(ctx.system_tokens_total)}</div>
       <div class="k">tool-definition tokens (resent)</div><div class="v">~${num(ctx.tools_tokens_total)}</div>
+      ${cacheRow}
     </div>
-    <p class="muted">The system prompt and tool definitions are largely static but re-sent on every request — this is the cumulative token cost of that duplication.</p>`;
+    <p class="muted">The system prompt and tool definitions are largely static but re-sent on every request — this is the cumulative token cost of that duplication. Where the provider serves the stable prefix from its prompt cache, that cost is largely offset (see the cache-hit rate above).</p>`;
 }
 
 async function requestDetail(id) {

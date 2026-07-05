@@ -6,7 +6,7 @@ It sits as a transparent proxy between a coding agent (Claude Code, Opencode) an
 
 It is a **performance profiler for autonomous coding agents** — not an observability dashboard, not an enterprise proxy, not an LLM profiler. See [`VISION.md`](VISION.md).
 
-> Status: **capture core complete** — transparent proxy, raw trace capture, derived metrics, a read API, and a minimal web dashboard all work. Charts, search/export, and analysis are next. See [`ROADMAP.md`](ROADMAP.md).
+> Status: **capture core complete + first analysis layer shipped** — transparent proxy, raw trace capture, derived metrics, a read API, a dark-mode web dashboard, recommendations, command-usage and message-stack analysis, export, compare, and an MCP server all work. Research capabilities and (optional, opt-in) optimisation experiments are next. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Features
 
@@ -17,15 +17,21 @@ Working now (capture core):
 - Token, latency, cost, and tool metrics derived from raw traces (`aap parse`).
 - Read API + a minimal dark-mode web dashboard at `/ui`.
 - First insights: tool usage, repeated tool calls (by argument), per-session context growth, tool-result **token amplification**, and **context composition** (message count, system-prompt size, tool-definition tokens per request + duplicated totals per session).
-- **Recommendations** — actionable findings per session (repeated file reads, redundant tool calls, high amplification, context duplication, context growth).
+- **Prompt-cache awareness** — captures provider cache-hit tokens (`metrics.cached_input_tokens`) so the context-duplication finding reflects real cost, not just raw re-sent tokens.
+- **Message-stack breakdown** — per request, the sent context split by element type (system / user / assistant / tool) with size + token estimate, via `GET /requests/:id/messages` and a split view on the `/ui` request page.
+- **Command-usage analysis** — which shell programs run through `bash`, how often, and by category (search / read / vcs / build / nav / edit), via `aap commands`, `GET /commands`, and a `/ui` panel.
+- **Recommendations** — actionable findings per session (repeated file reads, redundant tool calls, high amplification, context duplication, context growth, inefficient search→read).
 - **Export** — a session report as Markdown (or JSON) via `aap export`.
 - **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data to an AI agent for self-introspection (list_sessions, get_session, get_request, search_requests, recommend, compare, stats, top_tools, command_breakdown, raw_sql).
 - Per-request logging in the `aap serve` terminal.
 
 Planned:
 
-- Web UI, search, and export.
-- Analysis engine (repeated context/files, tool efficiency, recommendations).
+- Claude Code path validation (built, not yet formally confirmed).
+- Benchmark task-runner harness (headless invocation, workspace reset, verify command).
+- UI search bar + full-text search over prompts/filenames; latency/cost-over-time charts; live auto-refresh.
+- MCP-server analysis (call frequency, payload sizes, token impact of an agent's own MCP servers).
+- Optional, off-by-default `--optimize` experiments (measured against a baseline) — see [`docs/aish-requirements.md`](docs/aish-requirements.md).
 
 ## Dashboard preview
 
@@ -121,8 +127,11 @@ Inspect captured data over HTTP (same port as the proxy):
 GET /ui                        # web dashboard (also at /)
 GET /stats                     # totals: sessions, requests, tokens, cost
 GET /sessions                  # sessions with rolled-up metrics
-GET /sessions/:id              # session detail with its requests
+GET /sessions/:id              # session detail with its requests + analysis
 GET /requests/:id?events=1     # request detail + raw trace events
+GET /requests/:id/messages     # per-message context breakdown (roles, sizes)
+GET /tools                     # global tool-usage totals
+GET /commands                  # shell-command breakdown (?session=<id> to scope)
 GET /health
 ```
 
