@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   request_id TEXT NOT NULL,
   ordinal    INTEGER NOT NULL,
-  name       TEXT NOT NULL
+  name       TEXT NOT NULL,
+  arguments  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls (request_id);
@@ -147,6 +148,12 @@ export interface SessionDetail {
 export interface ToolCall {
   ordinal: number;
   name: string;
+  arguments: string | null;
+}
+
+export interface ToolCallInput {
+  name: string;
+  arguments: string;
 }
 
 export interface RequestDetail {
@@ -195,7 +202,7 @@ export class Store {
   private readonly insertToolCallStmt;
   private readonly replaceToolCallsTxn: (
     requestId: string,
-    names: readonly string[],
+    calls: readonly ToolCallInput[],
   ) => void;
   private readonly listSessionsStmt;
   private readonly getSessionStmt;
@@ -259,14 +266,19 @@ export class Store {
       `DELETE FROM tool_calls WHERE request_id = ?`,
     );
     this.insertToolCallStmt = db.prepare(`
-      INSERT INTO tool_calls (request_id, ordinal, name)
-      VALUES (@request_id, @ordinal, @name)
+      INSERT INTO tool_calls (request_id, ordinal, name, arguments)
+      VALUES (@request_id, @ordinal, @name, @arguments)
     `);
     this.replaceToolCallsTxn = db.transaction(
-      (requestId: string, names: readonly string[]) => {
+      (requestId: string, calls: readonly ToolCallInput[]) => {
         this.deleteToolCallsStmt.run(requestId);
-        names.forEach((name, ordinal) => {
-          this.insertToolCallStmt.run({ request_id: requestId, ordinal, name });
+        calls.forEach((call, ordinal) => {
+          this.insertToolCallStmt.run({
+            request_id: requestId,
+            ordinal,
+            name: call.name,
+            arguments: call.arguments === "" ? null : call.arguments,
+          });
         });
       },
     );
@@ -305,7 +317,7 @@ export class Store {
       WHERE r.id = ?
     `);
     this.getToolCallsStmt = db.prepare(
-      `SELECT ordinal, name FROM tool_calls WHERE request_id = ? ORDER BY ordinal`,
+      `SELECT ordinal, name, arguments FROM tool_calls WHERE request_id = ? ORDER BY ordinal`,
     );
     this.statsStmt = db.prepare(`
       SELECT
@@ -372,8 +384,8 @@ export class Store {
     });
   }
 
-  replaceToolCalls(requestId: string, names: readonly string[]): void {
-    this.replaceToolCallsTxn(requestId, names);
+  replaceToolCalls(requestId: string, calls: readonly ToolCallInput[]): void {
+    this.replaceToolCallsTxn(requestId, calls);
   }
 
   listSessions(): SessionSummary[] {
@@ -411,5 +423,20 @@ export function openStore(dir: string): Store {
   db.pragma("synchronous = NORMAL");
   db.pragma("busy_timeout = 5000");
   db.exec(SCHEMA);
+  ensureColumn(db, "tool_calls", "arguments", "TEXT");
   return new Store(db);
+}
+
+function ensureColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (!columns.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }

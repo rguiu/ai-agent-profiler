@@ -23,6 +23,7 @@ function esc(s) {
 const num = (n) => (n ?? 0).toLocaleString();
 const cost = (c) => (c ? `$${Number(c).toFixed(4)}` : "$0");
 const shortId = (id) => (id ? esc(String(id).slice(0, 8)) : "—");
+const dt = (s) => (s ? esc(String(s).replace("T", " ").slice(0, 19)) : "—");
 
 function fmtBytes(n) {
   if (!n) return "0";
@@ -114,6 +115,7 @@ async function sessionDetail(id) {
     .map(
       (r) => `<tr>
       <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a></td>
+      <td class="mono muted">${dt(r.started_at)}</td>
       <td>${esc(r.provider)}</td>
       <td>${esc(r.method)}</td>
       <td class="mono">${esc(r.path)}</td>
@@ -142,7 +144,7 @@ async function sessionDetail(id) {
     ${
       requests.length
         ? `<table><thead><tr>
-      <th>Request</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
+      <th>Request</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
       <th class="num">Latency</th><th>Model</th><th class="num">In</th><th class="num">Out</th>
       <th>Stop</th><th class="num">Tools</th><th class="num">Cost</th>
     </tr></thead><tbody>${rows}</tbody></table>`
@@ -164,7 +166,7 @@ async function requestDetail(id) {
         .filter((e) => e.type === "response_body")
         .map((e) => b64ToText(e.data))
         .join("");
-  const tools = (r.toolCalls || []).map((t) => esc(t.name)).join(", ") || "—";
+  const toolCalls = r.toolCalls || [];
 
   app.innerHTML = `
     <div class="crumb"><a href="#/sessions/${encodeURIComponent(r.session_id)}">${shortId(r.session_id)}</a> / ${shortId(r.id)}</div>
@@ -172,15 +174,17 @@ async function requestDetail(id) {
     <div class="kv">
       <div class="k">provider</div><div class="v">${esc(r.provider)}</div>
       <div class="k">path</div><div class="v">${esc(r.path)}</div>
+      <div class="k">started</div><div class="v">${dt(r.started_at)}</div>
       <div class="k">status</div><div class="v">${statusCell(r.status)}</div>
       <div class="k">latency</div><div class="v">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</div>
       <div class="k">model</div><div class="v">${esc(r.model) || "—"}</div>
       <div class="k">tokens</div><div class="v">in ${r.input_tokens ?? "—"} / out ${r.output_tokens ?? "—"}</div>
       <div class="k">stop reason</div><div class="v">${esc(r.stop_reason) || "—"}</div>
-      <div class="k">tools</div><div class="v">${tools}</div>
       <div class="k">cost</div><div class="v">${cost(r.cost)}</div>
       <div class="k">bytes</div><div class="v">req ${fmtBytes(r.request_bytes)} / resp ${fmtBytes(r.response_bytes)}</div>
     </div>
+    <h2>Tool calls (${toolCalls.length})</h2>
+    ${toolCallsHtml(toolCalls)}
     <h2>Response</h2>
     <pre>${esc(responseText) || '<span class="muted">no body</span>'}</pre>
     <h2>Events (${events.length})</h2>
@@ -192,6 +196,22 @@ async function requestDetail(id) {
         })
         .join("")}
     </div>`;
+}
+
+function toolCallsHtml(calls) {
+  if (!calls.length)
+    return `<p class="empty">No tool calls in this response.</p>`;
+  return `<table><thead><tr><th>#</th><th>Tool</th><th>Arguments</th></tr></thead><tbody>${calls
+    .map((t, i) => {
+      let args = t.arguments || "";
+      try {
+        if (args) args = JSON.stringify(JSON.parse(args));
+      } catch {
+        /* leave raw if not valid JSON (e.g. partial stream) */
+      }
+      return `<tr><td class="num">${i}</td><td>${esc(t.name)}</td><td class="mono">${esc(args) || '<span class="muted">—</span>'}</td></tr>`;
+    })
+    .join("")}</tbody></table>`;
 }
 
 async function render() {

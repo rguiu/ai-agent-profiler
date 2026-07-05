@@ -8,13 +8,18 @@ export interface TraceEvent {
   [key: string]: unknown;
 }
 
+export interface ParsedToolCall {
+  name: string;
+  arguments: string;
+}
+
 export interface ParsedTrace {
   format: "anthropic" | "openai" | "unknown";
   model: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
   stopReason: string | null;
-  toolCalls: string[];
+  toolCalls: ParsedToolCall[];
   streaming: boolean;
 }
 
@@ -28,7 +33,7 @@ interface Extract {
   inputTokens: number | null;
   outputTokens: number | null;
   stopReason: string | null;
-  toolCalls: string[];
+  toolCalls: ParsedToolCall[];
 }
 
 function emptyExtract(): Extract {
@@ -151,13 +156,20 @@ function applyAnthropicMessage(
     const record = asRecord(block);
     if (record?.type === "tool_use") {
       const name = asString(record.name);
-      if (name) acc.toolCalls.push(name);
+      if (name) {
+        const input = asRecord(record.input);
+        acc.toolCalls.push({
+          name,
+          arguments: input ? JSON.stringify(input) : "",
+        });
+      }
     }
   }
 }
 
 function parseAnthropic(objects: unknown[]): Extract {
   const acc = emptyExtract();
+  const byIndex = new Map<number, { name: string; args: string }>();
   for (const object of objects) {
     const record = asRecord(object);
     if (!record) continue;
@@ -180,22 +192,43 @@ function parseAnthropic(objects: unknown[]): Extract {
         break;
       }
       case "content_block_start": {
+        const index = asNumber(record.index);
         const block = asRecord(record.content_block);
-        if (block?.type === "tool_use") {
-          const name = asString(block.name);
-          if (name) acc.toolCalls.push(name);
+        if (block?.type === "tool_use" && index !== null) {
+          const name = asString(block.name) ?? "";
+          const input = asRecord(block.input);
+          byIndex.set(index, {
+            name,
+            args:
+              input && Object.keys(input).length > 0
+                ? JSON.stringify(input)
+                : "",
+          });
+        }
+        break;
+      }
+      case "content_block_delta": {
+        const index = asNumber(record.index);
+        const delta = asRecord(record.delta);
+        if (index !== null && delta?.type === "input_json_delta") {
+          const fragment = asString(delta.partial_json) ?? "";
+          const entry = byIndex.get(index);
+          if (entry) entry.args += fragment;
         }
         break;
       }
     }
+  }
+  for (const [, entry] of [...byIndex.entries()].sort((a, b) => a[0] - b[0])) {
+    acc.toolCalls.push({ name: entry.name, arguments: entry.args });
   }
   return acc;
 }
 
 function parseOpenAI(objects: unknown[]): Extract {
   const acc = emptyExtract();
-  const toolsByIndex = new Map<number, string>();
-  const toolsFallback: string[] = [];
+  const byIndex = new Map<number, { name: string; args: string }>();
+  const noIndex: ParsedToolCall[] = [];
 
   for (const object of objects) {
     const record = asRecord(object);
@@ -222,23 +255,29 @@ function parseOpenAI(objects: unknown[]): Extract {
         if (!toolRecord) continue;
         const fn = asRecord(toolRecord.function);
         const name = fn ? asString(fn.name) : null;
-        if (!name) continue;
+        const argFragment = fn ? asString(fn.arguments) : null;
         const index = asNumber(toolRecord.index);
         if (index !== null) {
-          if (!toolsByIndex.has(index)) toolsByIndex.set(index, name);
-        } else {
-          toolsFallback.push(name);
+          let entry = byIndex.get(index);
+          if (!entry) {
+            entry = { name: "", args: "" };
+            byIndex.set(index, entry);
+          }
+          if (name) entry.name = name;
+          if (argFragment) entry.args += argFragment;
+        } else if (name) {
+          noIndex.push({ name, arguments: argFragment ?? "" });
         }
       }
     }
   }
 
   acc.toolCalls =
-    toolsByIndex.size > 0
-      ? [...toolsByIndex.entries()]
+    byIndex.size > 0
+      ? [...byIndex.entries()]
           .sort((a, b) => a[0] - b[0])
-          .map(([, name]) => name)
-      : toolsFallback;
+          .map(([, entry]) => ({ name: entry.name, arguments: entry.args }))
+      : noIndex;
   return acc;
 }
 

@@ -68,7 +68,9 @@ function seed(store: Store, dir: string): void {
     cost: 0.00105,
     parsedAt: "2026-01-01T00:00:02Z",
   });
-  store.replaceToolCalls("r1", ["run_bash"]);
+  store.replaceToolCalls("r1", [
+    { name: "run_bash", arguments: '{"cmd":"ls"}' },
+  ]);
 }
 
 async function startStack(): Promise<{ port: number }> {
@@ -154,12 +156,14 @@ describe("read API", () => {
       id: string;
       model: string;
       cost: number;
-      toolCalls: Array<{ ordinal: number; name: string }>;
+      toolCalls: Array<{ ordinal: number; name: string; arguments: string }>;
       events?: unknown[];
     };
     expect(detail.id).toBe("r1");
     expect(detail.model).toBe("claude-3-5-sonnet-20241022");
-    expect(detail.toolCalls).toEqual([{ ordinal: 0, name: "run_bash" }]);
+    expect(detail.toolCalls).toEqual([
+      { ordinal: 0, name: "run_bash", arguments: '{"cmd":"ls"}' },
+    ]);
     expect(detail.events).toBeUndefined();
   });
 

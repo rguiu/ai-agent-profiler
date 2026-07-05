@@ -11,5 +11,6 @@ export {
   type SessionDetail,
   type RequestDetail,
   type ToolCall,
+  type ToolCallInput,
   type Stats,
 } from "./store.js";

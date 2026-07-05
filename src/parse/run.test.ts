@@ -25,6 +25,8 @@ const ANTHROPIC_SSE = [
   ``,
   `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"get_weather"}}`,
   ``,
+  `data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"city":"Paris"}' } })}`,
+  ``,
   `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":25}}`,
   ``,
 ].join("\n");
@@ -98,9 +100,9 @@ describe("runParse", () => {
       .get("req-1") as MetricRecord;
     const tools = db
       .prepare(
-        "SELECT name FROM tool_calls WHERE request_id = ? ORDER BY ordinal",
+        "SELECT name, arguments FROM tool_calls WHERE request_id = ? ORDER BY ordinal",
       )
-      .all("req-1") as { name: string }[];
+      .all("req-1") as { name: string; arguments: string | null }[];
     db.close();
 
     expect(metric.format).toBe("anthropic");
@@ -112,6 +114,7 @@ describe("runParse", () => {
     expect(metric.tool_call_count).toBe(1);
     expect(metric.cost).toBeCloseTo(10e-6 * 3 + 25e-6 * 15);
     expect(tools.map((t) => t.name)).toEqual(["get_weather"]);
+    expect(tools[0]?.arguments).toBe('{"city":"Paris"}');
   });
 
   it("is idempotent and skips already-parsed requests", () => {

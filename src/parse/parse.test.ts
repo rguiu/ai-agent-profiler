@@ -17,33 +17,89 @@ function traceFor(
   ];
 }
 
-const ANTHROPIC_SSE = [
-  `event: message_start`,
-  `data: {"type":"message_start","message":{"model":"claude-3-5-sonnet-20241022","usage":{"input_tokens":10,"output_tokens":1}}}`,
-  ``,
-  `event: content_block_start`,
-  `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"get_weather"}}`,
-  ``,
-  `event: message_delta`,
-  `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":25}}`,
-  ``,
-  `event: message_stop`,
-  `data: {"type":"message_stop"}`,
-  ``,
-].join("\n");
+function sse(events: unknown[]): string {
+  return events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+}
 
-const OPENAI_SSE = [
-  `data: {"object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
-  ``,
-  `data: {"object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"search","arguments":""}}]},"finish_reason":null}]}`,
-  ``,
-  `data: {"object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
-  ``,
-  `data: {"object":"chat.completion.chunk","model":"gpt-4o","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}`,
-  ``,
-  `data: [DONE]`,
-  ``,
-].join("\n");
+const ANTHROPIC_SSE = sse([
+  {
+    type: "message_start",
+    message: {
+      model: "claude-3-5-sonnet-20241022",
+      usage: { input_tokens: 10, output_tokens: 1 },
+    },
+  },
+  {
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "tool_use", id: "t1", name: "get_weather" },
+  },
+  {
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "input_json_delta", partial_json: '{"location":"NYC"}' },
+  },
+  {
+    type: "message_delta",
+    delta: { stop_reason: "tool_use" },
+    usage: { output_tokens: 25 },
+  },
+  { type: "message_stop" },
+]);
+
+const OPENAI_SSE =
+  sse([
+    {
+      object: "chat.completion.chunk",
+      model: "gpt-4o",
+      choices: [
+        { index: 0, delta: { role: "assistant" }, finish_reason: null },
+      ],
+    },
+    {
+      object: "chat.completion.chunk",
+      model: "gpt-4o",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "t1",
+                function: { name: "search", arguments: "" },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    },
+    {
+      object: "chat.completion.chunk",
+      model: "gpt-4o",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [{ index: 0, function: { arguments: '{"q":"x"}' } }],
+          },
+          finish_reason: null,
+        },
+      ],
+    },
+    {
+      object: "chat.completion.chunk",
+      model: "gpt-4o",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+    },
+    {
+      object: "chat.completion.chunk",
+      model: "gpt-4o",
+      choices: [],
+      usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+    },
+  ]) + "data: [DONE]\n\n";
 
 const ANTHROPIC_JSON = JSON.stringify({
   type: "message",
@@ -66,7 +122,9 @@ describe("parseTrace", () => {
     expect(result.inputTokens).toBe(10);
     expect(result.outputTokens).toBe(25);
     expect(result.stopReason).toBe("tool_use");
-    expect(result.toolCalls).toEqual(["get_weather"]);
+    expect(result.toolCalls).toEqual([
+      { name: "get_weather", arguments: '{"location":"NYC"}' },
+    ]);
     expect(result.streaming).toBe(true);
   });
 
@@ -79,7 +137,9 @@ describe("parseTrace", () => {
     expect(result.inputTokens).toBe(12);
     expect(result.outputTokens).toBe(8);
     expect(result.stopReason).toBe("tool_calls");
-    expect(result.toolCalls).toEqual(["search"]);
+    expect(result.toolCalls).toEqual([
+      { name: "search", arguments: '{"q":"x"}' },
+    ]);
     expect(result.streaming).toBe(true);
   });
 
@@ -92,7 +152,7 @@ describe("parseTrace", () => {
     expect(result.inputTokens).toBe(5);
     expect(result.outputTokens).toBe(7);
     expect(result.stopReason).toBe("end_turn");
-    expect(result.toolCalls).toEqual(["lookup"]);
+    expect(result.toolCalls).toEqual([{ name: "lookup", arguments: "{}" }]);
     expect(result.streaming).toBe(false);
   });
 
