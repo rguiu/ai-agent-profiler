@@ -30,6 +30,13 @@ Bundled fixtures:
 | ------------ | --------------------------------------- | ----------------------------------------------- |
 | `csv-parser` | one small module + tests, 1 planted bug | reading, fixing, a small edit                   |
 | `task-queue` | multi-file lib (queue/scheduler/store)  | cross-file reasoning, locating logic, fix + add |
+| `big-file`   | one ~220-line module (data + funcs)     | whole-file vs ranged reads (read amplification) |
+| `many-files` | 40 tiny handler modules + a registry    | search / exploration cost (find the wrong file) |
+
+Each fixture maps onto AISH capabilities the profiler measures: `big-file` → ranged reads
+(#1) and result amplification (#3); `many-files` → repo-aware search (#2); all of them →
+context growth (#6) and duplicated tool-def overhead (#5). See
+[`docs/aish-requirements.md`](../docs/aish-requirements.md).
 
 Pick one with `--fixture`:
 

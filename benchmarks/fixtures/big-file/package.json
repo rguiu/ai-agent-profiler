@@ -1,0 +1,10 @@
+{
+  "name": "glossary",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A large glossary module (benchmark fixture).",
+  "scripts": {
+    "test": "node --test"
+  }
+}

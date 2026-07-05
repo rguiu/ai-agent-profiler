@@ -1,0 +1,10 @@
+{
+  "name": "handlers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Many small handler modules (benchmark fixture).",
+  "scripts": {
+    "test": "node --test"
+  }
+}

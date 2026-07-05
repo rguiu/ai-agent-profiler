@@ -1,0 +1,4 @@
+explain|Explain what the define() function in src/glossary.js does. Do not change any files.
+locate|Find the define() function and describe how it looks up a term. Do not read the whole GLOSSARY table if you can avoid it. Do not change any files.
+fix-bug|The test suite (npm test) has a failing test for case-insensitive lookup. Fix the bug in src/glossary.js so all tests pass.
+add-feature|Add a search(substring) function that returns all terms whose definition contains the substring (case-insensitive), and add a test. Make sure npm test passes.
