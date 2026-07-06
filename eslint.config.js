@@ -10,6 +10,8 @@ export default tseslint.config(
       "notes/",
       "coverage/",
       "benchmarks/fixtures/",
+      ".opencode/",
+      ".claude/",
     ],
   },
   js.configs.recommended,

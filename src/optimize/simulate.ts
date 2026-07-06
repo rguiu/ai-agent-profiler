@@ -2,7 +2,7 @@
 // layer to quantify what would have been saved without re-running the agent.
 
 import { readFile } from "node:fs/promises";
-import type { Store, SessionDetail, ToolCall } from "../store/index.js";
+import type { Store, ToolCall } from "../store/index.js";
 import { OptimizeLayer, type OptimizeConfig, type OptimizeAction } from "./layer.js";
 
 export interface SimulationResult {
