@@ -33,6 +33,22 @@ upstream = "https://api.deepseek.com"
 [providers.bedrock]
 upstream = "https://bedrock-runtime.eu-west-1.amazonaws.com"
 
+# Optimize layer: rewrites request bodies to reduce token waste in long sessions.
+# Enable in config or override at runtime with `aap serve --optimize`.
+[optimize]
+enabled = false               # set true to always optimise without --optimize flag
+dedup = true                  # suppress identical tool re-reads (unchanged content)
+truncate = true               # head+tail truncation for large results
+stablePrefix = true           # canonicalise tool defs for prompt-cache stability
+pruneStale = true             # replace old tool results with compact summaries
+suppressReread = true         # suppress reads of files just written
+collapseSystem = true         # collapse repeated system prompts to a hash stub
+stripToolDefs = false         # remove tool defs after N requests (aggressive — may break)
+truncateThreshold = 4096      # bytes above which truncation kicks in
+pruneAfterTurns = 6           # prune results older than N assistant turns
+suppressWithinTurns = 2       # suppress re-reads within N turns of a write
+stripToolDefsAfter = 3        # strip tools after this many requests (if stripToolDefs=true)
+
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.
 # cacheInputPerMTok is optional — if set, cached tokens are charged at this

@@ -1,27 +1,42 @@
-// The OptimizeLayer tracks per-session state and applies optimizations to
-// request/response bodies passing through the proxy. It only activates when
-// aap serve --optimize is used.
-
 export interface OptimizeConfig {
   dedup: boolean;
   truncate: boolean;
   stablePrefix: boolean;
   pruneStale: boolean;
-  truncateThreshold: number; // bytes; results larger than this get truncated
-  pruneAfterTurns: number; // prune tool results older than this many turns
+  suppressReread: boolean;
+  collapseSystem: boolean;
+  stripToolDefs: boolean;
+  truncateThreshold: number;
+  pruneAfterTurns: number;
+  suppressWithinTurns: number;
+  stripToolDefsAfter: number;
 }
 
 export const DEFAULT_CONFIG: OptimizeConfig = {
   dedup: true,
   truncate: true,
   stablePrefix: true,
-  pruneStale: false, // off by default — medium risk
-  truncateThreshold: 8192,
-  pruneAfterTurns: 10,
+  pruneStale: true,
+  suppressReread: true,
+  collapseSystem: true,
+  stripToolDefs: false,
+  truncateThreshold: 4096,
+  pruneAfterTurns: 6,
+  suppressWithinTurns: 2,
+  stripToolDefsAfter: 3,
 };
 
+export type OptimizeActionType =
+  | "dedup"
+  | "truncate"
+  | "stable_prefix"
+  | "prune_stale"
+  | "suppress_reread"
+  | "collapse_system"
+  | "strip_tool_defs";
+
 export interface OptimizeAction {
-  type: "dedup" | "truncate" | "stable_prefix" | "prune_stale";
+  type: OptimizeActionType;
   turn: number;
   tool?: string;
   tokensSaved: number;
@@ -32,6 +47,11 @@ interface SeenCall {
   turn: number;
   resultHash: string;
   resultTokens: number;
+}
+
+interface WriteRecord {
+  turn: number;
+  path: string;
 }
 
 function estimateTokens(text: string): number {
@@ -55,12 +75,37 @@ function canonicalJson(obj: unknown): string {
   return `{${sorted.join(",")}}`;
 }
 
+function extractFilePath(args: string): string | null {
+  try {
+    const parsed = JSON.parse(args) as Record<string, unknown>;
+    const fp = parsed.file_path ?? parsed.path ?? parsed.filename;
+    return typeof fp === "string" ? fp : null;
+  } catch {
+    return null;
+  }
+}
+
+function summarizeToolResult(toolName: string, args: string, content: string): string {
+  const lines = content.split("\n").length;
+  const tokens = estimateTokens(content);
+  const path = extractFilePath(args);
+  if (path) {
+    const base = path.split("/").pop() ?? path;
+    return `[${toolName}: ${base} — ${lines} lines, ~${tokens} tokens]`;
+  }
+  return `[${toolName}: ${lines} lines, ~${tokens} tokens]`;
+}
+
 export class OptimizeLayer {
   private readonly config: OptimizeConfig;
   private readonly actions: OptimizeAction[] = [];
   private readonly seenCalls = new Map<string, SeenCall>();
+  private readonly recentWrites: WriteRecord[] = [];
   private turn = 0;
   private lastToolsJson: string | null = null;
+  private lastSystemHash: string | null = null;
+  private lastSystemTokens = 0;
+  private toolsSentCount = 0;
 
   constructor(config: Partial<OptimizeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -74,7 +119,6 @@ export class OptimizeLayer {
     return this.actions.reduce((sum, a) => sum + a.tokensSaved, 0);
   }
 
-  // Called for each request body going upstream. Returns the (possibly rewritten) body.
   rewriteRequestBody(body: Buffer): Buffer {
     this.turn++;
     let parsed: Record<string, unknown>;
@@ -85,6 +129,45 @@ export class OptimizeLayer {
     }
 
     let changed = false;
+
+    // Collapse repeated system prompts to a short hash stub
+    if (this.config.collapseSystem && parsed.system != null) {
+      const systemStr = typeof parsed.system === "string"
+        ? parsed.system
+        : JSON.stringify(parsed.system);
+      const hash = hashContent(systemStr);
+      const tokens = estimateTokens(systemStr);
+      if (this.lastSystemHash === hash && tokens > 100) {
+        parsed.system = `[system unchanged — hash:${hash}]`;
+        const saved = tokens - estimateTokens(parsed.system as string);
+        this.actions.push({
+          type: "collapse_system",
+          turn: this.turn,
+          tokensSaved: saved,
+          detail: `collapsed repeated system prompt (~${tokens} → ~${estimateTokens(parsed.system as string)} tokens)`,
+        });
+        changed = true;
+      } else {
+        this.lastSystemHash = hash;
+        this.lastSystemTokens = tokens;
+      }
+    }
+
+    // Strip tool definitions after N requests (prompt cache makes them redundant)
+    if (this.config.stripToolDefs && Array.isArray(parsed.tools)) {
+      this.toolsSentCount++;
+      if (this.toolsSentCount > this.config.stripToolDefsAfter) {
+        const toolsTokens = estimateTokens(JSON.stringify(parsed.tools));
+        delete parsed.tools;
+        this.actions.push({
+          type: "strip_tool_defs",
+          turn: this.turn,
+          tokensSaved: toolsTokens,
+          detail: `stripped tool definitions on turn ${this.turn} (~${toolsTokens} tokens — already cached)`,
+        });
+        changed = true;
+      }
+    }
 
     if (this.config.stablePrefix && Array.isArray(parsed.tools)) {
       parsed.tools = this.stabiliseTools(parsed.tools as unknown[]);
@@ -102,17 +185,52 @@ export class OptimizeLayer {
     return changed ? Buffer.from(JSON.stringify(parsed)) : body;
   }
 
-  // Called for each tool result in a response. Returns the (possibly rewritten) content.
   rewriteToolResult(toolName: string, args: string, content: string): string {
-    const key = `${toolName}:${args}`;
-    const contentHash = hashContent(content);
     const tokens = estimateTokens(content);
 
-    // Dedup: if we've seen this exact call+result before, return a stub
+    // Track writes for re-read suppression
+    if (this.config.suppressReread) {
+      const isWrite = /^(write|edit|create|patch)/i.test(toolName) ||
+        toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit";
+      if (isWrite) {
+        const path = extractFilePath(args);
+        if (path) {
+          this.recentWrites.push({ turn: this.turn, path });
+        }
+      }
+    }
+
+    // Suppress re-reads: if agent reads a file it just wrote to
+    if (this.config.suppressReread) {
+      const isRead = /^(read|cat|view)/i.test(toolName) ||
+        toolName === "Read" || toolName === "View";
+      if (isRead) {
+        const path = extractFilePath(args);
+        if (path && this.wasRecentlyWritten(path)) {
+          const stub = `[file just written in turn ${this.lastWriteTurn(path)} — content already known, ~${tokens} tokens suppressed]`;
+          const saved = tokens - estimateTokens(stub);
+          if (saved > 50) {
+            this.actions.push({
+              type: "suppress_reread",
+              turn: this.turn,
+              tool: toolName,
+              tokensSaved: saved,
+              detail: `suppressed re-read of ${path.split("/").pop()} (written ${this.turn - this.lastWriteTurn(path)!} turns ago)`,
+            });
+            return stub;
+          }
+        }
+      }
+    }
+
+    // Dedup: exact same call + result
+    const key = `${toolName}:${args}`;
+    const contentHash = hashContent(content);
     if (this.config.dedup) {
       const prev = this.seenCalls.get(key);
       if (prev && prev.resultHash === contentHash) {
-        const saved = tokens - estimateTokens(`[unchanged since turn ${prev.turn}]`);
+        const stub = `[unchanged since turn ${prev.turn}]`;
+        const saved = tokens - estimateTokens(stub);
         if (saved > 0) {
           this.actions.push({
             type: "dedup",
@@ -121,28 +239,28 @@ export class OptimizeLayer {
             tokensSaved: saved,
             detail: `${toolName}(${args.slice(0, 60)}) unchanged since turn ${prev.turn}`,
           });
-          return `[unchanged since turn ${prev.turn} — ${tokens} tokens omitted]`;
+          return stub;
         }
       }
       this.seenCalls.set(key, { turn: this.turn, resultHash: contentHash, resultTokens: tokens });
     }
 
-    // Truncate: if content exceeds threshold, show head+tail
+    // Truncate: large results get head+tail
     if (this.config.truncate && content.length > this.config.truncateThreshold) {
       const lines = content.split("\n");
-      if (lines.length > 80) {
-        const head = lines.slice(0, 50).join("\n");
-        const tail = lines.slice(-20).join("\n");
-        const omitted = lines.length - 70;
-        const truncated = `${head}\n\n[... ${omitted} lines omitted — use expand() for full content ...]\n\n${tail}`;
+      if (lines.length > 60) {
+        const head = lines.slice(0, 40).join("\n");
+        const tail = lines.slice(-15).join("\n");
+        const omitted = lines.length - 55;
+        const truncated = `${head}\n\n[... ${omitted} lines omitted — ${estimateTokens(lines.slice(40, -15).join("\n"))} tokens saved ...]\n\n${tail}`;
         const saved = tokens - estimateTokens(truncated);
-        if (saved > 0) {
+        if (saved > 50) {
           this.actions.push({
             type: "truncate",
             turn: this.turn,
             tool: toolName,
             tokensSaved: saved,
-            detail: `${toolName} result truncated: ${lines.length} lines → 70 (saved ~${saved} tokens)`,
+            detail: `${toolName} result truncated: ${lines.length} lines → 55 (saved ~${saved} tokens)`,
           });
           return truncated;
         }
@@ -152,6 +270,18 @@ export class OptimizeLayer {
     return content;
   }
 
+  private wasRecentlyWritten(path: string): boolean {
+    const threshold = this.turn - this.config.suppressWithinTurns;
+    return this.recentWrites.some((w) => w.path === path && w.turn >= threshold);
+  }
+
+  private lastWriteTurn(path: string): number {
+    for (let i = this.recentWrites.length - 1; i >= 0; i--) {
+      if (this.recentWrites[i]!.path === path) return this.recentWrites[i]!.turn;
+    }
+    return 0;
+  }
+
   private stabiliseTools(tools: unknown[]): unknown[] {
     const json = canonicalJson(tools);
     const canonical = JSON.parse(json) as unknown[];
@@ -159,7 +289,7 @@ export class OptimizeLayer {
       this.actions.push({
         type: "stable_prefix",
         turn: this.turn,
-        tokensSaved: 0, // savings come from improved cache hit rate, not fewer tokens
+        tokensSaved: 0,
         detail: "tool definitions canonicalised for byte-stable prefix (improves prompt cache hit)",
       });
     }
@@ -178,21 +308,26 @@ export class OptimizeLayer {
       if (msg.role !== "user" && msg.role !== "tool") return msg;
       if (msgTurn > threshold) return msg;
 
-      // Check if this is a tool_result content block
       if (Array.isArray(msg.content)) {
         const rewritten = msg.content.map((block: ContentBlock) => {
           if (block.type !== "tool_result") return block;
           if (!block.content || typeof block.content !== "string") return block;
           const tokens = estimateTokens(block.content);
-          if (tokens < 100) return block; // don't prune small results
+          if (tokens < 50) return block;
+
+          const toolUseId = block.tool_use_id as string | undefined;
+          const toolName = this.resolveToolName(messages, toolUseId) ?? "tool";
+          const summary = summarizeToolResult(toolName, "", block.content);
+
           changed = true;
           this.actions.push({
             type: "prune_stale",
             turn: this.turn,
-            tokensSaved: tokens - 10,
-            detail: `pruned tool_result from turn ${msgTurn} (~${tokens} tokens)`,
+            tool: toolName,
+            tokensSaved: tokens - estimateTokens(summary),
+            detail: `pruned ${toolName} result from turn ${msgTurn} (~${tokens} → ~${estimateTokens(summary)} tokens)`,
           });
-          return { ...block, content: `[pruned — stale result from turn ${msgTurn}]` };
+          return { ...block, content: summary };
         });
         return { ...msg, content: rewritten };
       }
@@ -200,11 +335,27 @@ export class OptimizeLayer {
     });
     return changed ? result : null;
   }
+
+  private resolveToolName(messages: Message[], toolUseId?: string): string | null {
+    if (!toolUseId) return null;
+    for (const msg of messages) {
+      if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+      for (const block of msg.content) {
+        if (block.type === "tool_use" && block.id === toolUseId) {
+          return (block.name as string) ?? null;
+        }
+      }
+    }
+    return null;
+  }
 }
 
 interface ContentBlock {
   type: string;
   content?: string;
+  id?: string;
+  tool_use_id?: string;
+  name?: string;
   [key: string]: unknown;
 }
 

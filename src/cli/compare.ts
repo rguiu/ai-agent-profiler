@@ -8,6 +8,7 @@ export interface SessionSummary {
   meta: Record<string, string> | null;
   requests: number;
   inputTokens: number;
+  cachedInputTokens: number;
   outputTokens: number;
   cost: number;
   toolCalls: number;
@@ -43,6 +44,7 @@ export function summarize(detail: SessionDetail): SessionSummary {
     meta: detail.session.meta ?? null,
     requests: requests.length,
     inputTokens: requests.reduce((a, r) => a + (r.input_tokens ?? 0), 0),
+    cachedInputTokens: detail.analysis.context.cached_input_tokens_total,
     outputTokens: requests.reduce((a, r) => a + (r.output_tokens ?? 0), 0),
     cost: requests.reduce((a, r) => a + (r.cost ?? 0), 0),
     toolCalls: requests.reduce((a, r) => a + (r.tool_call_count ?? 0), 0),
@@ -82,9 +84,23 @@ function pad(s: string, w: number, right = false): string {
 
 type MetricRow = [string, (s: SessionSummary) => number, (s: SessionSummary) => string];
 
+function cacheRate(s: SessionSummary): string {
+  const total = s.inputTokens + s.cachedInputTokens;
+  if (total === 0) return "—";
+  const pct = (s.cachedInputTokens / total) * 100;
+  return `${pct.toFixed(0)}%`;
+}
+
+function totalInput(s: SessionSummary): number {
+  return s.inputTokens + s.cachedInputTokens;
+}
+
 const METRICS: MetricRow[] = [
   ["Requests", (s) => s.requests, (s) => num(s.requests)],
-  ["Input tokens", (s) => s.inputTokens, (s) => num(s.inputTokens)],
+  ["Total input", totalInput, (s) => num(totalInput(s))],
+  ["  ↳ cached", (s) => s.cachedInputTokens, (s) => num(s.cachedInputTokens)],
+  ["  ↳ uncached", (s) => s.inputTokens, (s) => num(s.inputTokens)],
+  ["Cache hit rate", (s) => s.cachedInputTokens / Math.max(1, totalInput(s)), cacheRate],
   ["Output tokens", (s) => s.outputTokens, (s) => num(s.outputTokens)],
   ["Cost", (s) => s.cost, (s) => (s.cost ? `$${s.cost.toFixed(4)}` : "$0")],
   ["Tool calls", (s) => s.toolCalls, (s) => num(s.toolCalls)],
@@ -180,6 +196,7 @@ function renderGroupedComparison(
     return {
       requests: group.reduce((a, s) => a + s.requests, 0),
       inputTokens: group.reduce((a, s) => a + s.inputTokens, 0),
+      cachedInputTokens: group.reduce((a, s) => a + s.cachedInputTokens, 0),
       outputTokens: group.reduce((a, s) => a + s.outputTokens, 0),
       cost: group.reduce((a, s) => a + s.cost, 0),
       toolCalls: group.reduce((a, s) => a + s.toolCalls, 0),
@@ -189,9 +206,16 @@ function renderGroupedComparison(
 
   const t0 = totals[0]!;
   const t1 = totals[1]!;
+  const totalCacheRate = (t: typeof t0) => {
+    const total = t.inputTokens + t.cachedInputTokens;
+    return total > 0 ? `${((t.cachedInputTokens / total) * 100).toFixed(0)}%` : "—";
+  };
   const totalRows = [
     { label: "Requests", cells: totals.map((t) => num(t.requests)), delta: delta(t0.requests, t1.requests) },
-    { label: "Input tokens", cells: totals.map((t) => num(t.inputTokens)), delta: delta(t0.inputTokens, t1.inputTokens) },
+    { label: "Total input", cells: totals.map((t) => num(t.inputTokens + t.cachedInputTokens)), delta: delta(t0.inputTokens + t0.cachedInputTokens, t1.inputTokens + t1.cachedInputTokens) },
+    { label: "  ↳ cached", cells: totals.map((t) => num(t.cachedInputTokens)), delta: delta(t0.cachedInputTokens, t1.cachedInputTokens) },
+    { label: "  ↳ uncached", cells: totals.map((t) => num(t.inputTokens)), delta: delta(t0.inputTokens, t1.inputTokens) },
+    { label: "Cache hit rate", cells: totals.map(totalCacheRate), delta: "" },
     { label: "Output tokens", cells: totals.map((t) => num(t.outputTokens)), delta: delta(t0.outputTokens, t1.outputTokens) },
     { label: "Cost", cells: totals.map((t) => `$${t.cost.toFixed(4)}`), delta: delta(t0.cost, t1.cost) },
     { label: "Tool calls", cells: totals.map((t) => num(t.toolCalls)), delta: delta(t0.toolCalls, t1.toolCalls) },

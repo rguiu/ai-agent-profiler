@@ -9,8 +9,9 @@ const PARSE_INTERVAL_MS = 3000;
 const SHUTDOWN_TIMEOUT_MS = 5000;
 
 export function serve(args?: string[]): void {
-  const optimize = args?.includes("--optimize") ?? false;
+  const cliOptimize = args?.includes("--optimize") ?? false;
   const config = loadConfig();
+  const optimize = cliOptimize || config.optimize.enabled;
   const registry = new SessionRegistry();
   const store = openStore(config.storage.dir);
 
@@ -39,7 +40,7 @@ export function serve(args?: string[]): void {
     capture,
     store,
     consoleRequestLogger(),
-    optimize ? { optimize: true } : undefined,
+    optimize ? { optimize: config.optimize } : undefined,
   );
 
   server.listen(config.server.port, config.server.host, () => {
@@ -48,7 +49,12 @@ export function serve(args?: string[]): void {
     );
     console.log(`providers: ${Object.keys(config.providers).join(", ")}`);
     console.log(`storage: ${config.storage.dir}`);
-    if (optimize) console.log(`optimize: ON (dedup, truncate, stable-prefix)`);
+    if (optimize) {
+      const active = Object.entries(config.optimize)
+        .filter(([k, v]) => v === true && k !== "enabled")
+        .map(([k]) => k);
+      console.log(`optimize: ON (${active.join(", ")})`);
+    }
     if (rows.length > 0) {
       console.log(`hydrated ${rows.length} session(s) from store`);
     }

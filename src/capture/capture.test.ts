@@ -52,6 +52,7 @@ async function startStack(): Promise<Stack> {
     server: { port: 0, host: "127.0.0.1" },
     sessions: { idleTimeoutMs: 300_000 },
     storage: { dir },
+    optimize: { enabled: false, dedup: true, truncate: true, stablePrefix: true, pruneStale: true, suppressReread: true, collapseSystem: true, stripToolDefs: false, truncateThreshold: 4096, pruneAfterTurns: 6, suppressWithinTurns: 2, stripToolDefsAfter: 3 },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
   };
