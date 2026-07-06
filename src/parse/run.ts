@@ -33,6 +33,7 @@ export function runParse(
         result.inputTokens,
         result.outputTokens,
         pricing,
+        result.cachedInputTokens,
       );
       store.upsertMetrics({
         requestId: target.id,

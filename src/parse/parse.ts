@@ -43,6 +43,7 @@ export interface ParsedTrace {
 interface ModelPricing {
   inputPerMTok: number;
   outputPerMTok: number;
+  cacheInputPerMTok?: number;
 }
 
 interface Extract {
@@ -600,12 +601,18 @@ export function computeCost(
   inputTokens: number | null,
   outputTokens: number | null,
   pricing: Record<string, ModelPricing>,
+  cachedInputTokens?: number | null,
 ): number | null {
   if (!model) return null;
   const rates = pricing[model];
   if (!rates) return null;
+  const totalInput = inputTokens ?? 0;
+  const cached = cachedInputTokens ?? 0;
+  const cacheRate = rates.cacheInputPerMTok ?? rates.inputPerMTok;
+  const nonCachedInput = Math.max(0, totalInput - cached);
   return (
-    ((inputTokens ?? 0) / 1_000_000) * rates.inputPerMTok +
+    (nonCachedInput / 1_000_000) * rates.inputPerMTok +
+    (cached / 1_000_000) * cacheRate +
     ((outputTokens ?? 0) / 1_000_000) * rates.outputPerMTok
   );
 }

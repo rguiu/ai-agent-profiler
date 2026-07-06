@@ -21,6 +21,7 @@ export const storageSchema = z.object({
 export const modelPricingSchema = z.object({
   inputPerMTok: z.number().nonnegative(),
   outputPerMTok: z.number().nonnegative(),
+  cacheInputPerMTok: z.number().nonnegative().optional(),
 });
 
 export const configSchema = z.object({

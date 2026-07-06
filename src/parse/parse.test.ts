@@ -380,4 +380,31 @@ describe("computeCost", () => {
   it("returns null when the model is unknown", () => {
     expect(computeCost(null, 1000, 1000, pricing)).toBeNull();
   });
+
+  it("applies cacheInputPerMTok for cached tokens", () => {
+    const withCache = {
+      "claude-sonnet-4-20250514": {
+        inputPerMTok: 3.0,
+        outputPerMTok: 15.0,
+        cacheInputPerMTok: 0.3,
+      },
+    };
+    // 1M input, 500k cached, 100k output
+    const cost = computeCost(
+      "claude-sonnet-4-20250514",
+      1_000_000,
+      100_000,
+      withCache,
+      500_000,
+    );
+    // non-cached: 500k * 3/M = 1.5, cached: 500k * 0.3/M = 0.15, output: 100k * 15/M = 1.5
+    expect(cost).toBeCloseTo(1.5 + 0.15 + 1.5);
+  });
+
+  it("falls back to inputPerMTok when cacheInputPerMTok is not set", () => {
+    // Without cacheInputPerMTok, cached tokens are charged at full rate
+    const cost = computeCost("gpt-4o", 1_000_000, 0, pricing, 500_000);
+    // All 1M tokens at 2.5/M regardless of cache
+    expect(cost).toBeCloseTo(2.5);
+  });
 });

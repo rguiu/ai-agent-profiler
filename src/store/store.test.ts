@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { openStore } from "./index.js";
+import { openStore, _isReadOnlyQuery } from "./index.js";
 
 const dirs: string[] = [];
 
@@ -31,6 +31,36 @@ interface SessionRecord {
   cwd: string | null;
   started_at: string | null;
 }
+
+describe("isReadOnlyQuery", () => {
+  it("allows plain SELECT statements", () => {
+    expect(_isReadOnlyQuery("SELECT * FROM sessions")).toBe(true);
+    expect(_isReadOnlyQuery("  SELECT id FROM requests  ")).toBe(true);
+    expect(
+      _isReadOnlyQuery("SELECT * FROM sessions WHERE id = 'x';"),
+    ).toBe(true);
+  });
+
+  it("rejects multi-statement injections", () => {
+    expect(_isReadOnlyQuery("SELECT 1; DROP TABLE sessions")).toBe(false);
+    expect(
+      _isReadOnlyQuery("SELECT 1; INSERT INTO sessions VALUES ('x')"),
+    ).toBe(false);
+  });
+
+  it("rejects write keywords embedded in the query", () => {
+    expect(_isReadOnlyQuery("SELECT * FROM x; DELETE FROM y")).toBe(false);
+    expect(_isReadOnlyQuery("SELECT 1 UNION ALTER TABLE x ADD z")).toBe(false);
+    expect(_isReadOnlyQuery("SELECT ATTACH DATABASE 'x' AS y")).toBe(false);
+  });
+
+  it("rejects non-SELECT statements", () => {
+    expect(_isReadOnlyQuery("INSERT INTO sessions VALUES ('x')")).toBe(false);
+    expect(_isReadOnlyQuery("UPDATE sessions SET id = 'x'")).toBe(false);
+    expect(_isReadOnlyQuery("DROP TABLE sessions")).toBe(false);
+    expect(_isReadOnlyQuery("PRAGMA journal_mode = DELETE")).toBe(false);
+  });
+});
 
 describe("openStore migrations", () => {
   it("upgrades a pre-tool_id database without error", () => {
@@ -210,6 +240,50 @@ describe("Store", () => {
     expect(ses.client).toBe("claude");
     expect(ses.cwd).toBe("/x");
     expect(ses.started_at).toBe("t0");
+  });
+
+  it("recentSessions returns sessions for hydration", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({
+      id: "s1",
+      client: "claude",
+      cwd: "/x",
+      startedAt: "2026-01-01T00:00:00Z",
+      meta: { task: "fix-bug" },
+    });
+    store.upsertSession({
+      id: "s2",
+      client: "opencode",
+      cwd: "/y",
+      startedAt: "2026-01-02T00:00:00Z",
+    });
+    const rows = store.recentSessions(10);
+    store.close();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.id).sort()).toEqual(["s1", "s2"]);
+    const s1 = rows.find((r) => r.id === "s1")!;
+    expect(s1.client).toBe("claude");
+    expect(s1.meta).toContain("fix-bug");
+  });
+
+  it("rawQuery rejects non-SELECT queries", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    expect(() => store.rawQuery("DROP TABLE sessions")).toThrow(/read-only/);
+    expect(() =>
+      store.rawQuery("SELECT 1; DROP TABLE sessions"),
+    ).toThrow(/read-only/);
+    expect(() => store.rawQuery("DELETE FROM sessions")).toThrow(/read-only/);
+    expect(() =>
+      store.rawQuery("SELECT * FROM sessions WHERE id IN (DELETE FROM sessions)"),
+    ).toThrow(/read-only/);
+    // Valid queries should work
+    expect(() => store.rawQuery("SELECT 1")).not.toThrow();
+    expect(() =>
+      store.rawQuery("SELECT * FROM sessions"),
+    ).not.toThrow();
+    store.close();
   });
 
   it("summarises tool usage, repeats, and context growth", () => {

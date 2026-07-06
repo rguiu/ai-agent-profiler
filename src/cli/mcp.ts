@@ -211,16 +211,8 @@ function registerTools(server: McpServer, store: Store): void {
     "Run a read-only SQL query against the profiler's SQLite database. Tables: sessions, requests, metrics, tool_calls. Use for custom analysis.",
     { sql: z.string().describe("SQL SELECT statement") },
     async ({ sql }) => {
-      const trimmed = sql.trim();
-      if (!trimmed.toUpperCase().startsWith("SELECT")) {
-        return {
-          content: [
-            { type: "text", text: "Only SELECT statements are allowed" },
-          ],
-        };
-      }
       try {
-        const result = store.rawQuery(trimmed);
+        const result = store.rawQuery(sql);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
         };
