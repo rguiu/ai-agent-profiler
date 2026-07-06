@@ -26,13 +26,13 @@
 
 ## Key Findings
 
-| Metric | Baseline | Optimized | Improvement |
-|--------|----------|-----------|-------------|
-| Cost | $2.88 | $0.99 | **-66%** |
-| Total input tokens | 1.83M | 502K | **-73%** |
-| Wall time | 18m 14s | 13m 39s | **-25%** |
-| Task success | ✓ (7 bugs fixed) | ✓ (9 bugs fixed) | Better |
-| Verify | pass | pass | Both pass |
+| Metric             | Baseline         | Optimized        | Improvement |
+| ------------------ | ---------------- | ---------------- | ----------- |
+| Cost               | $2.88            | $0.99            | **-66%**    |
+| Total input tokens | 1.83M            | 502K             | **-73%**    |
+| Wall time          | 18m 14s          | 13m 39s          | **-25%**    |
+| Task success       | ✓ (7 bugs fixed) | ✓ (9 bugs fixed) | Better      |
+| Verify             | pass             | pass             | Both pass   |
 
 ## Analysis
 
@@ -70,14 +70,14 @@ more total requests.
 
 ## Optimization Strategies Active
 
-| Strategy | Effect |
-|----------|--------|
-| `pruneStale` | Replace tool results >6 turns old with compact summaries |
-| `dedup` | Return stub for identical repeated tool calls |
-| `suppressReread` | Suppress reads of files written <2 turns ago |
-| `stablePrefix` | Canonicalise tool definitions for prompt-cache stability |
-| `collapseSystem` | Collapse repeated system prompts to hash stub |
-| `truncate` | Head+tail for results >4KB |
+| Strategy         | Effect                                                   |
+| ---------------- | -------------------------------------------------------- |
+| `pruneStale`     | Replace tool results >6 turns old with compact summaries |
+| `dedup`          | Return stub for identical repeated tool calls            |
+| `suppressReread` | Suppress reads of files written <2 turns ago             |
+| `stablePrefix`   | Canonicalise tool definitions for prompt-cache stability |
+| `collapseSystem` | Collapse repeated system prompts to hash stub            |
+| `truncate`       | Head+tail for results >4KB                               |
 
 ## Configuration Used
 

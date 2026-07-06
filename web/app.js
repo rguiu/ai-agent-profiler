@@ -176,7 +176,7 @@ function sessionsTable(sessions) {
       .map(
         (s) => `<tr>
       <td><a class="mono" href="#/sessions/${encodeURIComponent(s.id)}">${shortId(s.id)}</a></td>
-      <td>${esc(s.meta && s.meta.armada_node || s.client) || "<span class='muted'>—</span>"}</td>
+      <td>${esc((s.meta && s.meta.armada_node) || s.client) || "<span class='muted'>—</span>"}</td>
       <td class="mono muted">${esc(s.cwd) || "—"}</td>
       <td class="num">${num(s.request_count)}</td>
       <td class="num">${num(s.input_tokens)}</td>
@@ -248,7 +248,9 @@ async function sessionDetail(id) {
   }
 
   function bindPagination() {
-    const btns = document.querySelectorAll(".pagination[data-target='requests-page'] .page-btn");
+    const btns = document.querySelectorAll(
+      ".pagination[data-target='requests-page'] .page-btn",
+    );
     btns.forEach((btn) => {
       btn.addEventListener("click", () => {
         currentPage = Number(btn.dataset.page);

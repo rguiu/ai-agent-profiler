@@ -66,9 +66,7 @@ describe("parseRoute", () => {
   });
 
   it("routes Bedrock /model/ paths without active session", () => {
-    expect(
-      parseRoute("/model/some-model/converse", withBedrock),
-    ).toEqual({
+    expect(parseRoute("/model/some-model/converse", withBedrock)).toEqual({
       sessionId: null,
       provider: "bedrock",
       upstreamPath: "/model/some-model/converse",
@@ -76,13 +74,13 @@ describe("parseRoute", () => {
   });
 
   it("does not route /model/ when bedrock provider is not configured", () => {
-    expect(
-      parseRoute("/model/some-model/converse", providers),
-    ).toBeNull();
+    expect(parseRoute("/model/some-model/converse", providers)).toBeNull();
   });
 
   it("rejects path-traversal session IDs", () => {
-    expect(parseRoute("/../../etc/anthropic/v1/messages", providers)).toBeNull();
+    expect(
+      parseRoute("/../../etc/anthropic/v1/messages", providers),
+    ).toBeNull();
     expect(parseRoute("/../foo/openai/v1/chat", providers)).toBeNull();
   });
 

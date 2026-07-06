@@ -68,7 +68,10 @@ export class Scheduler {
       }
     }
     this.#bus.emit("scheduler:done", this.stats);
-    return { completed: [...this.#completed], failed: [...this.#failed.keys()] };
+    return {
+      completed: [...this.#completed],
+      failed: [...this.#failed.keys()],
+    };
   }
 
   /** Cancel a running or queued task. */
@@ -95,7 +98,10 @@ export class Scheduler {
       const task = this.#queue.peek();
       if (!task) break;
       // BUG #2: dependency check is inverted (should check all deps ARE completed)
-      if (task.deps.length > 0 && task.deps.some((d) => this.#completed.has(d))) {
+      if (
+        task.deps.length > 0 &&
+        task.deps.some((d) => this.#completed.has(d))
+      ) {
         break; // blocked
       }
       this.#queue.pop();
@@ -109,7 +115,9 @@ export class Scheduler {
     const startedAt = Date.now();
 
     const timeoutId = setTimeout(() => {
-      controller.abort(new Error(`Task ${task.id} timed out after ${task.timeout}ms`));
+      controller.abort(
+        new Error(`Task ${task.id} timed out after ${task.timeout}ms`),
+      );
     }, task.timeout);
 
     const promise = this.#runTask(task, controller.signal)
@@ -135,7 +143,10 @@ export class Scheduler {
             error: err.message,
           });
         } else {
-          this.#failed.set(task.id, { error: err.message, attempts: task.attempts });
+          this.#failed.set(task.id, {
+            error: err.message,
+            attempts: task.attempts,
+          });
           this.#bus.emit("task:failed", {
             id: task.id,
             error: err.message,

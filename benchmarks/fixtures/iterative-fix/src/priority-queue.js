@@ -81,14 +81,23 @@ export class PriorityQueue {
       let smallest = i;
       const left = 2 * i + 1;
       const right = 2 * i + 2;
-      if (left < n && this.#heap[left].priority < this.#heap[smallest].priority) {
+      if (
+        left < n &&
+        this.#heap[left].priority < this.#heap[smallest].priority
+      ) {
         smallest = left;
       }
-      if (right < n && this.#heap[right].priority < this.#heap[smallest].priority) {
+      if (
+        right < n &&
+        this.#heap[right].priority < this.#heap[smallest].priority
+      ) {
         smallest = right;
       }
       if (smallest === i) break;
-      [this.#heap[smallest], this.#heap[i]] = [this.#heap[i], this.#heap[smallest]];
+      [this.#heap[smallest], this.#heap[i]] = [
+        this.#heap[i],
+        this.#heap[smallest],
+      ];
       i = smallest;
     }
   }

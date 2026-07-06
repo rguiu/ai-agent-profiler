@@ -19,7 +19,10 @@ describe("PriorityQueue", () => {
     items.forEach((n, i) => pq.push(`item-${n}`, n));
     const result = [];
     while (!pq.isEmpty()) result.push(pq.pop());
-    assert.deepEqual(result, items.sort((a, b) => a - b).map((n) => `item-${n}`));
+    assert.deepEqual(
+      result,
+      items.sort((a, b) => a - b).map((n) => `item-${n}`),
+    );
   });
 
   it("handles duplicate priorities correctly", () => {

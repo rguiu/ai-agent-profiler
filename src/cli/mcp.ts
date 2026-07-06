@@ -109,13 +109,9 @@ function registerTools(server: McpServer, store: Store): void {
       }
       params.push(limit);
 
-      const join = tool
-        ? "JOIN tool_calls tc ON tc.request_id = r.id"
-        : "";
+      const join = tool ? "JOIN tool_calls tc ON tc.request_id = r.id" : "";
       const distinct = tool ? "DISTINCT " : "";
-      const whereClause = where.length
-        ? `WHERE ${where.join(" AND ")}`
-        : "";
+      const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
       const sql = `SELECT ${distinct}r.id, r.session_id, r.provider, r.method, r.path, r.status, r.latency_ms, r.started_at, m.model, m.input_tokens, m.output_tokens, m.cost, m.stop_reason
                FROM requests r

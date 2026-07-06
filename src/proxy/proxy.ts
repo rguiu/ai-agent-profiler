@@ -53,15 +53,26 @@ export function createProxyServer(
   }
   const state: ProxyState = { activeBedrockSession: initial };
 
-  const optimizeLayers: Map<string, OptimizeLayer> | null =
-    options?.optimize
-      ? new Map()
-      : null;
+  const optimizeLayers: Map<string, OptimizeLayer> | null = options?.optimize
+    ? new Map()
+    : null;
   const optimizeConfig: Partial<OptimizeConfig> | undefined =
     typeof options?.optimize === "object" ? options.optimize : undefined;
 
   return http.createServer((req, res) => {
-    handle(req, res, config, providers, registry, state, capture, store, logger, optimizeLayers, optimizeConfig);
+    handle(
+      req,
+      res,
+      config,
+      providers,
+      registry,
+      state,
+      capture,
+      store,
+      logger,
+      optimizeLayers,
+      optimizeConfig,
+    );
   });
 }
 
@@ -149,10 +160,14 @@ function handle(
       upstreamHost: upstreamUrl.hostname,
       path: route.upstreamPath + search,
       region,
-      extraHeaders: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
-      rewriteBody: optimizer ? (body) => optimizer!.rewriteRequestBody(body) : undefined,
+      extraHeaders:
+        Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
+      rewriteBody: optimizer
+        ? (body) => optimizer!.rewriteRequestBody(body)
+        : undefined,
       onRequestChunk: (chunk) => trace?.requestChunk(chunk),
-      onResponse: (status, headers) => trace?.response(status, undefined, headers as Record<string, string>),
+      onResponse: (status, headers) =>
+        trace?.response(status, undefined, headers as Record<string, string>),
       onResponseChunk: (chunk) => trace?.responseChunk(chunk),
       onFinish: finish,
     });

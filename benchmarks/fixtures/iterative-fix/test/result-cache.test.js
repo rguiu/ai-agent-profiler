@@ -39,7 +39,7 @@ describe("ResultCache", () => {
     cache.get("a");
     // Adding "d" should evict "b" (least recently used)
     cache.set("d", 4);
-    assert.equal(cache.has("a"), true);  // recently accessed
+    assert.equal(cache.has("a"), true); // recently accessed
     assert.equal(cache.has("b"), false); // evicted (LRU)
     assert.equal(cache.has("c"), true);
     assert.equal(cache.has("d"), true);
@@ -48,7 +48,10 @@ describe("ResultCache", () => {
   it("getOrCompute caches the computed value", async () => {
     const cache = new ResultCache();
     let computeCount = 0;
-    const fn = async () => { computeCount++; return 42; };
+    const fn = async () => {
+      computeCount++;
+      return 42;
+    };
     const r1 = await cache.getOrCompute("x", fn);
     const r2 = await cache.getOrCompute("x", fn);
     assert.equal(r1, 42);

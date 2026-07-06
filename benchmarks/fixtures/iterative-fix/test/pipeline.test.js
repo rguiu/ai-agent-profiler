@@ -8,10 +8,22 @@ describe("Pipeline", () => {
     const order = [];
     const p = new Pipeline({ limiter: new RateLimiter(1000) });
     p.addStage("first", [
-      { id: "a", fn: async () => { order.push("first:a"); return "A"; } },
+      {
+        id: "a",
+        fn: async () => {
+          order.push("first:a");
+          return "A";
+        },
+      },
     ]);
     p.addStage("second", [
-      { id: "b", fn: async (ctx) => { order.push("second:b"); return ctx; } },
+      {
+        id: "b",
+        fn: async (ctx) => {
+          order.push("second:b");
+          return ctx;
+        },
+      },
     ]);
     await p.run({ initial: true });
     assert.deepEqual(order, ["first:a", "second:b"]);
@@ -19,9 +31,7 @@ describe("Pipeline", () => {
 
   it("passes context between stages", async () => {
     const p = new Pipeline({ limiter: new RateLimiter(1000) });
-    p.addStage("compute", [
-      { id: "sum", fn: async (ctx) => ctx.x + ctx.y },
-    ]);
+    p.addStage("compute", [{ id: "sum", fn: async (ctx) => ctx.x + ctx.y }]);
     p.addStage("format", [
       { id: "str", fn: async (ctx) => `result=${ctx.sum}` },
     ]);
@@ -31,12 +41,8 @@ describe("Pipeline", () => {
 
   it("preserves earlier stage results in context", async () => {
     const p = new Pipeline({ limiter: new RateLimiter(1000) });
-    p.addStage("stage1", [
-      { id: "a", fn: async () => "from-stage1" },
-    ]);
-    p.addStage("stage2", [
-      { id: "b", fn: async (ctx) => `got:${ctx.a}` },
-    ]);
+    p.addStage("stage1", [{ id: "a", fn: async () => "from-stage1" }]);
+    p.addStage("stage2", [{ id: "b", fn: async (ctx) => `got:${ctx.a}` }]);
     p.addStage("stage3", [
       { id: "c", fn: async (ctx) => ({ a: ctx.a, b: ctx.b }) },
     ]);
@@ -69,10 +75,23 @@ describe("Pipeline", () => {
     const ran = [];
     const p = new Pipeline({ limiter: new RateLimiter(1000) });
     p.addStage("s1", [
-      { id: "x", fn: async () => { ran.push("s1"); p.abort(); return 1; } },
+      {
+        id: "x",
+        fn: async () => {
+          ran.push("s1");
+          p.abort();
+          return 1;
+        },
+      },
     ]);
     p.addStage("s2", [
-      { id: "y", fn: async () => { ran.push("s2"); return 2; } },
+      {
+        id: "y",
+        fn: async () => {
+          ran.push("s2");
+          return 2;
+        },
+      },
     ]);
     await p.run();
     assert.deepEqual(ran, ["s1"]);
@@ -80,18 +99,13 @@ describe("Pipeline", () => {
 
   it("initial context is available in first stage", async () => {
     const p = new Pipeline({ limiter: new RateLimiter(1000) });
-    p.addStage("read", [
-      { id: "val", fn: async (ctx) => ctx.input * 2 },
-    ]);
+    p.addStage("read", [{ id: "val", fn: async (ctx) => ctx.input * 2 }]);
     const result = await p.run({ input: 21 });
     assert.equal(result.val, 42);
   });
 
   it("throws on empty stage", () => {
     const p = new Pipeline();
-    assert.throws(
-      () => p.addStage("empty", []),
-      /at least one task/,
-    );
+    assert.throws(() => p.addStage("empty", []), /at least one task/);
   });
 });

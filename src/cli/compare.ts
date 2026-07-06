@@ -82,7 +82,11 @@ function pad(s: string, w: number, right = false): string {
   return s.padEnd(w);
 }
 
-type MetricRow = [string, (s: SessionSummary) => number, (s: SessionSummary) => string];
+type MetricRow = [
+  string,
+  (s: SessionSummary) => number,
+  (s: SessionSummary) => string,
+];
 
 function cacheRate(s: SessionSummary): string {
   const total = s.inputTokens + s.cachedInputTokens;
@@ -100,7 +104,11 @@ const METRICS: MetricRow[] = [
   ["Total input", totalInput, (s) => num(totalInput(s))],
   ["  ↳ cached", (s) => s.cachedInputTokens, (s) => num(s.cachedInputTokens)],
   ["  ↳ uncached", (s) => s.inputTokens, (s) => num(s.inputTokens)],
-  ["Cache hit rate", (s) => s.cachedInputTokens / Math.max(1, totalInput(s)), cacheRate],
+  [
+    "Cache hit rate",
+    (s) => s.cachedInputTokens / Math.max(1, totalInput(s)),
+    cacheRate,
+  ],
   ["Output tokens", (s) => s.outputTokens, (s) => num(s.outputTokens)],
   ["Cost", (s) => s.cost, (s) => (s.cost ? `$${s.cost.toFixed(4)}` : "$0")],
   ["Tool calls", (s) => s.toolCalls, (s) => num(s.toolCalls)],
@@ -148,8 +156,12 @@ function renderTable(
 }
 
 export function renderComparison(summaries: SessionSummary[]): string {
-  const runs = [...new Set(summaries.map((s) => s.meta?.run).filter(Boolean))] as string[];
-  const tasks = [...new Set(summaries.map((s) => s.meta?.task).filter(Boolean))] as string[];
+  const runs = [
+    ...new Set(summaries.map((s) => s.meta?.run).filter(Boolean)),
+  ] as string[];
+  const tasks = [
+    ...new Set(summaries.map((s) => s.meta?.task).filter(Boolean)),
+  ] as string[];
 
   if (runs.length === 2 && tasks.length > 1) {
     return renderGroupedComparison(summaries, runs, tasks);
@@ -159,7 +171,10 @@ export function renderComparison(summaries: SessionSummary[]): string {
   const rows = METRICS.map(([label, getNum, getFmt]) => ({
     label,
     cells: summaries.map(getFmt),
-    delta: summaries.length === 2 ? delta(getNum(summaries[0]!), getNum(summaries[1]!)) : undefined,
+    delta:
+      summaries.length === 2
+        ? delta(getNum(summaries[0]!), getNum(summaries[1]!))
+        : undefined,
   }));
 
   return "\n" + renderTable("Session comparison", colNames, rows);
@@ -208,18 +223,55 @@ function renderGroupedComparison(
   const t1 = totals[1]!;
   const totalCacheRate = (t: typeof t0) => {
     const total = t.inputTokens + t.cachedInputTokens;
-    return total > 0 ? `${((t.cachedInputTokens / total) * 100).toFixed(0)}%` : "—";
+    return total > 0
+      ? `${((t.cachedInputTokens / total) * 100).toFixed(0)}%`
+      : "—";
   };
   const totalRows = [
-    { label: "Requests", cells: totals.map((t) => num(t.requests)), delta: delta(t0.requests, t1.requests) },
-    { label: "Total input", cells: totals.map((t) => num(t.inputTokens + t.cachedInputTokens)), delta: delta(t0.inputTokens + t0.cachedInputTokens, t1.inputTokens + t1.cachedInputTokens) },
-    { label: "  ↳ cached", cells: totals.map((t) => num(t.cachedInputTokens)), delta: delta(t0.cachedInputTokens, t1.cachedInputTokens) },
-    { label: "  ↳ uncached", cells: totals.map((t) => num(t.inputTokens)), delta: delta(t0.inputTokens, t1.inputTokens) },
+    {
+      label: "Requests",
+      cells: totals.map((t) => num(t.requests)),
+      delta: delta(t0.requests, t1.requests),
+    },
+    {
+      label: "Total input",
+      cells: totals.map((t) => num(t.inputTokens + t.cachedInputTokens)),
+      delta: delta(
+        t0.inputTokens + t0.cachedInputTokens,
+        t1.inputTokens + t1.cachedInputTokens,
+      ),
+    },
+    {
+      label: "  ↳ cached",
+      cells: totals.map((t) => num(t.cachedInputTokens)),
+      delta: delta(t0.cachedInputTokens, t1.cachedInputTokens),
+    },
+    {
+      label: "  ↳ uncached",
+      cells: totals.map((t) => num(t.inputTokens)),
+      delta: delta(t0.inputTokens, t1.inputTokens),
+    },
     { label: "Cache hit rate", cells: totals.map(totalCacheRate), delta: "" },
-    { label: "Output tokens", cells: totals.map((t) => num(t.outputTokens)), delta: delta(t0.outputTokens, t1.outputTokens) },
-    { label: "Cost", cells: totals.map((t) => `$${t.cost.toFixed(4)}`), delta: delta(t0.cost, t1.cost) },
-    { label: "Tool calls", cells: totals.map((t) => num(t.toolCalls)), delta: delta(t0.toolCalls, t1.toolCalls) },
-    { label: "Wall time", cells: totals.map((t) => `${(t.wallMs / 1000).toFixed(1)}s`), delta: delta(t0.wallMs, t1.wallMs) },
+    {
+      label: "Output tokens",
+      cells: totals.map((t) => num(t.outputTokens)),
+      delta: delta(t0.outputTokens, t1.outputTokens),
+    },
+    {
+      label: "Cost",
+      cells: totals.map((t) => `$${t.cost.toFixed(4)}`),
+      delta: delta(t0.cost, t1.cost),
+    },
+    {
+      label: "Tool calls",
+      cells: totals.map((t) => num(t.toolCalls)),
+      delta: delta(t0.toolCalls, t1.toolCalls),
+    },
+    {
+      label: "Wall time",
+      cells: totals.map((t) => `${(t.wallMs / 1000).toFixed(1)}s`),
+      delta: delta(t0.wallMs, t1.wallMs),
+    },
   ];
   sections.push(renderTable("TOTAL", runs, totalRows));
 
@@ -267,7 +319,9 @@ export function compareSessions(args: string[]): void {
   try {
     if (task) ids.push(...store.sessionIdsByMeta("task", task));
     if (runs.length > 0) {
-      const runIds = new Set(runs.flatMap((r) => store.sessionIdsByMeta("run", r)));
+      const runIds = new Set(
+        runs.flatMap((r) => store.sessionIdsByMeta("run", r)),
+      );
       if (ids.length > 0) {
         ids.splice(0, ids.length, ...ids.filter((id) => runIds.has(id)));
       } else {

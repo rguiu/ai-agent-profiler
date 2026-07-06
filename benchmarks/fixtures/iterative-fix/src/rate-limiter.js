@@ -52,7 +52,9 @@ export class RateLimiter {
   async acquireMany(n) {
     if (n <= 0) throw new Error("Must acquire at least 1 token");
     if (n > this.#maxTokens) {
-      throw new Error(`Cannot acquire ${n} tokens (max burst: ${this.#maxTokens})`);
+      throw new Error(
+        `Cannot acquire ${n} tokens (max burst: ${this.#maxTokens})`,
+      );
     }
     for (let i = 0; i < n; i++) {
       await this.acquire();
@@ -76,7 +78,10 @@ export class RateLimiter {
     const now = Date.now();
     const elapsed = now - this.#lastRefill;
     if (elapsed <= 0) return;
-    this.#tokens = Math.min(this.#maxTokens, this.#tokens + elapsed * this.#refillRate);
+    this.#tokens = Math.min(
+      this.#maxTokens,
+      this.#tokens + elapsed * this.#refillRate,
+    );
     this.#lastRefill = now;
   }
 

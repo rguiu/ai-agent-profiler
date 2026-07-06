@@ -66,10 +66,7 @@ describe("EventBus", () => {
 
   it("waitFor rejects on timeout", async () => {
     const bus = new EventBus();
-    await assert.rejects(
-      () => bus.waitFor("never", 50),
-      /Timed out/,
-    );
+    await assert.rejects(() => bus.waitFor("never", 50), /Timed out/);
   });
 
   it("clear removes all listeners and history", () => {
@@ -88,8 +85,12 @@ describe("EventBus", () => {
   it("listener errors do not crash emitter", () => {
     const bus = new EventBus();
     let ok = false;
-    bus.on("x", () => { throw new Error("boom"); });
-    bus.on("x", () => { ok = true; });
+    bus.on("x", () => {
+      throw new Error("boom");
+    });
+    bus.on("x", () => {
+      ok = true;
+    });
     bus.emit("x", {});
     assert.ok(ok);
   });

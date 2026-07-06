@@ -36,9 +36,9 @@ describe("isReadOnlyQuery", () => {
   it("allows plain SELECT statements", () => {
     expect(_isReadOnlyQuery("SELECT * FROM sessions")).toBe(true);
     expect(_isReadOnlyQuery("  SELECT id FROM requests  ")).toBe(true);
-    expect(
-      _isReadOnlyQuery("SELECT * FROM sessions WHERE id = 'x';"),
-    ).toBe(true);
+    expect(_isReadOnlyQuery("SELECT * FROM sessions WHERE id = 'x';")).toBe(
+      true,
+    );
   });
 
   it("rejects multi-statement injections", () => {
@@ -283,18 +283,18 @@ describe("Store", () => {
     const dir = tmpDir();
     const store = openStore(dir);
     expect(() => store.rawQuery("DROP TABLE sessions")).toThrow(/read-only/);
-    expect(() =>
-      store.rawQuery("SELECT 1; DROP TABLE sessions"),
-    ).toThrow(/read-only/);
+    expect(() => store.rawQuery("SELECT 1; DROP TABLE sessions")).toThrow(
+      /read-only/,
+    );
     expect(() => store.rawQuery("DELETE FROM sessions")).toThrow(/read-only/);
     expect(() =>
-      store.rawQuery("SELECT * FROM sessions WHERE id IN (DELETE FROM sessions)"),
+      store.rawQuery(
+        "SELECT * FROM sessions WHERE id IN (DELETE FROM sessions)",
+      ),
     ).toThrow(/read-only/);
     // Valid queries should work
     expect(() => store.rawQuery("SELECT 1")).not.toThrow();
-    expect(() =>
-      store.rawQuery("SELECT * FROM sessions"),
-    ).not.toThrow();
+    expect(() => store.rawQuery("SELECT * FROM sessions")).not.toThrow();
     store.close();
   });
 

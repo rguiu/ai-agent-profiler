@@ -206,15 +206,15 @@ aap serve --optimize
 
 ### Strategies
 
-| Strategy | Default | What it does |
-|----------|---------|--------------|
-| `dedup` | ON | Returns a stub for identical repeated tool calls (unchanged file reads) |
-| `truncate` | ON | Head+tail truncation for results exceeding `truncateThreshold` bytes |
-| `stablePrefix` | ON | Canonicalises tool definitions for byte-stable prompt-cache hits |
-| `pruneStale` | ON | Replaces tool results older than `pruneAfterTurns` with 1-line summaries |
-| `suppressReread` | ON | Suppresses reads of files written within `suppressWithinTurns` turns |
-| `collapseSystem` | ON | Collapses repeated system prompts to a hash stub |
-| `stripToolDefs` | OFF | Removes tool definitions after `stripToolDefsAfter` requests (aggressive) |
+| Strategy         | Default | What it does                                                              |
+| ---------------- | ------- | ------------------------------------------------------------------------- |
+| `dedup`          | ON      | Returns a stub for identical repeated tool calls (unchanged file reads)   |
+| `truncate`       | ON      | Head+tail truncation for results exceeding `truncateThreshold` bytes      |
+| `stablePrefix`   | ON      | Canonicalises tool definitions for byte-stable prompt-cache hits          |
+| `pruneStale`     | ON      | Replaces tool results older than `pruneAfterTurns` with 1-line summaries  |
+| `suppressReread` | ON      | Suppresses reads of files written within `suppressWithinTurns` turns      |
+| `collapseSystem` | ON      | Collapses repeated system prompts to a hash stub                          |
+| `stripToolDefs`  | OFF     | Removes tool definitions after `stripToolDefsAfter` requests (aggressive) |
 
 ### Configuration
 
@@ -240,12 +240,12 @@ stripToolDefsAfter = 3      # strip tool defs after this many requests
 
 On the `iterative-fix` fixture (7 bugs, ~50 request session):
 
-| Metric | Baseline | Optimized | Change |
-|--------|----------|-----------|--------|
-| Total input tokens | 1.83M | 502K | **-73%** |
-| Cost | $2.88 | $0.99 | **-66%** |
-| Wall time | 18m 14s | 13m 39s | **-25%** |
-| Task success | pass | pass (found more bugs) | ✓ |
+| Metric             | Baseline | Optimized              | Change   |
+| ------------------ | -------- | ---------------------- | -------- |
+| Total input tokens | 1.83M    | 502K                   | **-73%** |
+| Cost               | $2.88    | $0.99                  | **-66%** |
+| Wall time          | 18m 14s  | 13m 39s                | **-25%** |
+| Task success       | pass     | pass (found more bugs) | ✓        |
 
 See [`benchmarks/REPORT-iterative-fix.md`](benchmarks/REPORT-iterative-fix.md) for the
 full analysis.

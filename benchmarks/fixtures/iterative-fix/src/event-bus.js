@@ -62,7 +62,9 @@ export class EventBus {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.off(event, handler);
-        reject(new Error(`Timed out waiting for "${event}" after ${timeoutMs}ms`));
+        reject(
+          new Error(`Timed out waiting for "${event}" after ${timeoutMs}ms`),
+        );
       }, timeoutMs);
       const handler = (data) => {
         clearTimeout(timer);

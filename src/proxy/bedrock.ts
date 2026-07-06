@@ -53,7 +53,9 @@ async function resolveCredentials(profile?: string): Promise<Credentials> {
     accessKeyId: parsed.AccessKeyId,
     secretAccessKey: parsed.SecretAccessKey,
     sessionToken: parsed.SessionToken,
-    expiresAt: parsed.Expiration ? new Date(parsed.Expiration).getTime() : undefined,
+    expiresAt: parsed.Expiration
+      ? new Date(parsed.Expiration).getTime()
+      : undefined,
   };
   cachedProfile = profile;
   return cached;
@@ -66,7 +68,10 @@ export interface BedrockForwardOpts {
   extraHeaders?: Record<string, string>;
   rewriteBody?: (body: Buffer) => Buffer;
   onRequestChunk?: (chunk: Buffer) => void;
-  onResponse?: (status: number, headers: Record<string, string | string[]>) => void;
+  onResponse?: (
+    status: number,
+    headers: Record<string, string | string[]>,
+  ) => void;
   onResponseChunk?: (chunk: Buffer) => void;
   onFinish?: () => void;
 }
@@ -76,7 +81,17 @@ export function forwardBedrock(
   res: ServerResponse,
   opts: BedrockForwardOpts,
 ): void {
-  const { upstreamHost, path, region, extraHeaders, rewriteBody, onRequestChunk, onResponse, onResponseChunk, onFinish } = opts;
+  const {
+    upstreamHost,
+    path,
+    region,
+    extraHeaders,
+    rewriteBody,
+    onRequestChunk,
+    onResponse,
+    onResponseChunk,
+    onFinish,
+  } = opts;
 
   let finished = false;
   const finish = (): void => {
@@ -95,73 +110,86 @@ export function forwardBedrock(
     if (rewriteBody) body = rewriteBody(body);
     const profile = process.env.AWS_PROFILE;
 
-    resolveCredentials(profile).then((creds) => {
-      const contentType = req.headers["content-type"] ?? "application/json";
-      const hdrs: Record<string, string> = {
-        "content-type": contentType,
-        host: upstreamHost,
-        ...extraHeaders,
-      };
-      const signed = aws4.sign(
-        {
-          service: "bedrock",
-          region,
+    resolveCredentials(profile)
+      .then((creds) => {
+        const contentType = req.headers["content-type"] ?? "application/json";
+        const hdrs: Record<string, string> = {
+          "content-type": contentType,
           host: upstreamHost,
-          method: req.method ?? "POST",
-          path,
-          headers: hdrs,
-          body,
-        },
-        {
-          accessKeyId: creds.accessKeyId,
-          secretAccessKey: creds.secretAccessKey,
-          sessionToken: creds.sessionToken,
-        },
-      );
+          ...extraHeaders,
+        };
+        const signed = aws4.sign(
+          {
+            service: "bedrock",
+            region,
+            host: upstreamHost,
+            method: req.method ?? "POST",
+            path,
+            headers: hdrs,
+            body,
+          },
+          {
+            accessKeyId: creds.accessKeyId,
+            secretAccessKey: creds.secretAccessKey,
+            sessionToken: creds.sessionToken,
+          },
+        );
 
-      const upstreamReq = https.request(
-        {
-          hostname: upstreamHost,
-          port: 443,
-          method: req.method,
-          path,
-          headers: signed.headers,
-          timeout: UPSTREAM_TIMEOUT_MS,
-        },
-        (upstreamRes) => {
-          const status = upstreamRes.statusCode ?? 502;
-          const respHeaders = upstreamRes.headers as Record<string, string | string[]>;
-          onResponse?.(status, respHeaders);
-          res.writeHead(status, upstreamRes.headers);
-          upstreamRes.on("data", (chunk: Buffer) => {
-            onResponseChunk?.(chunk);
-          });
-          upstreamRes.pipe(res);
-        },
-      );
+        const upstreamReq = https.request(
+          {
+            hostname: upstreamHost,
+            port: 443,
+            method: req.method,
+            path,
+            headers: signed.headers,
+            timeout: UPSTREAM_TIMEOUT_MS,
+          },
+          (upstreamRes) => {
+            const status = upstreamRes.statusCode ?? 502;
+            const respHeaders = upstreamRes.headers as Record<
+              string,
+              string | string[]
+            >;
+            onResponse?.(status, respHeaders);
+            res.writeHead(status, upstreamRes.headers);
+            upstreamRes.on("data", (chunk: Buffer) => {
+              onResponseChunk?.(chunk);
+            });
+            upstreamRes.pipe(res);
+          },
+        );
 
-      upstreamReq.on("timeout", () => upstreamReq.destroy());
-      upstreamReq.on("error", (err) => {
-        if (!res.headersSent) {
-          res.writeHead(502, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: `Bedrock upstream error: ${err.message}` }));
-        } else {
-          res.destroy();
-        }
+        upstreamReq.on("timeout", () => upstreamReq.destroy());
+        upstreamReq.on("error", (err) => {
+          if (!res.headersSent) {
+            res.writeHead(502, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: `Bedrock upstream error: ${err.message}`,
+              }),
+            );
+          } else {
+            res.destroy();
+          }
+          finish();
+        });
+
+        res.on("finish", finish);
+        res.on("close", () => {
+          if (!res.writableFinished) upstreamReq.destroy();
+          finish();
+        });
+
+        upstreamReq.end(body);
+      })
+      .catch((err: Error) => {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: `Failed to resolve AWS credentials: ${err.message}`,
+          }),
+        );
         finish();
       });
-
-      res.on("finish", finish);
-      res.on("close", () => {
-        if (!res.writableFinished) upstreamReq.destroy();
-        finish();
-      });
-
-      upstreamReq.end(body);
-    }).catch((err: Error) => {
-      res.writeHead(502, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: `Failed to resolve AWS credentials: ${err.message}` }));
-      finish();
-    });
   });
 }

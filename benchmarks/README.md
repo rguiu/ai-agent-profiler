@@ -145,6 +145,7 @@ aap compare --run baseline --run optimize
 ```
 
 Output:
+
 ```
   ╭─ baseline vs optimize ─╮
 

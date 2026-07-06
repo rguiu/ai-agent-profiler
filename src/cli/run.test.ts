@@ -49,9 +49,7 @@ describe("buildProviderEnv", () => {
       "sid1",
       { CLAUDE_CODE_USE_BEDROCK: "1" } as NodeJS.ProcessEnv,
     );
-    expect(env.ANTHROPIC_BEDROCK_BASE_URL).toBe(
-      "http://localhost:8080",
-    );
+    expect(env.ANTHROPIC_BEDROCK_BASE_URL).toBe("http://localhost:8080");
     expect(env.ANTHROPIC_BASE_URL).toBe("http://localhost:8080/sid1/anthropic");
   });
 

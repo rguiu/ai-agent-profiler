@@ -7,7 +7,9 @@ export async function optimize(args: string[]): Promise<void> {
   if (!sessionPrefix) {
     console.error("Usage: aap optimize <session-id> [--all]");
     console.error("  Simulates --optimize on an existing session (dry-run).");
-    console.error("  Shows what optimizations would have fired and how many tokens saved.");
+    console.error(
+      "  Shows what optimizations would have fired and how many tokens saved.",
+    );
     process.exitCode = 1;
     return;
   }
@@ -34,13 +36,17 @@ export async function optimize(args: string[]): Promise<void> {
     console.log(`Total input tokens: ${n(result.totalInputTokens)}`);
     console.log(`Total result tokens: ${n(result.totalResultTokens)}`);
     console.log(`${"─".repeat(60)}`);
-    console.log(`Tokens saved:      ~${n(result.tokensSaved)} (${result.savingsPercent}% of result tokens)`);
+    console.log(
+      `Tokens saved:      ~${n(result.tokensSaved)} (${result.savingsPercent}% of result tokens)`,
+    );
     console.log();
 
     if (Object.keys(result.byType).length > 0) {
       console.log("By optimization type:");
       for (const [type, data] of Object.entries(result.byType)) {
-        console.log(`  ${type.padEnd(15)} ${String(data.count).padStart(4)} actions  ~${n(data.tokensSaved)} tokens saved`);
+        console.log(
+          `  ${type.padEnd(15)} ${String(data.count).padStart(4)} actions  ~${n(data.tokensSaved)} tokens saved`,
+        );
       }
       console.log();
     }
@@ -48,7 +54,9 @@ export async function optimize(args: string[]): Promise<void> {
     if (result.actions.length > 0 && !args.includes("--quiet")) {
       console.log("Actions (chronological):");
       for (const action of result.actions.slice(0, 30)) {
-        console.log(`  [turn ${String(action.turn).padStart(2)}] ${action.type.padEnd(13)} ${action.detail}`);
+        console.log(
+          `  [turn ${String(action.turn).padStart(2)}] ${action.type.padEnd(13)} ${action.detail}`,
+        );
       }
       if (result.actions.length > 30) {
         console.log(`  ... and ${result.actions.length - 30} more`);

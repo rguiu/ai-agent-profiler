@@ -71,7 +71,10 @@ function canonicalJson(obj: unknown): string {
   if (Array.isArray(obj)) return `[${obj.map(canonicalJson).join(",")}]`;
   const sorted = Object.keys(obj)
     .sort()
-    .map((k) => `${JSON.stringify(k)}:${canonicalJson((obj as Record<string, unknown>)[k])}`);
+    .map(
+      (k) =>
+        `${JSON.stringify(k)}:${canonicalJson((obj as Record<string, unknown>)[k])}`,
+    );
   return `{${sorted.join(",")}}`;
 }
 
@@ -85,7 +88,11 @@ function extractFilePath(args: string): string | null {
   }
 }
 
-function summarizeToolResult(toolName: string, args: string, content: string): string {
+function summarizeToolResult(
+  toolName: string,
+  args: string,
+  content: string,
+): string {
   const lines = content.split("\n").length;
   const tokens = estimateTokens(content);
   const path = extractFilePath(args);
@@ -132,9 +139,10 @@ export class OptimizeLayer {
 
     // Collapse repeated system prompts to a short hash stub
     if (this.config.collapseSystem && parsed.system != null) {
-      const systemStr = typeof parsed.system === "string"
-        ? parsed.system
-        : JSON.stringify(parsed.system);
+      const systemStr =
+        typeof parsed.system === "string"
+          ? parsed.system
+          : JSON.stringify(parsed.system);
       const hash = hashContent(systemStr);
       const tokens = estimateTokens(systemStr);
       if (this.lastSystemHash === hash && tokens > 100) {
@@ -190,8 +198,11 @@ export class OptimizeLayer {
 
     // Track writes for re-read suppression
     if (this.config.suppressReread) {
-      const isWrite = /^(write|edit|create|patch)/i.test(toolName) ||
-        toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit";
+      const isWrite =
+        /^(write|edit|create|patch)/i.test(toolName) ||
+        toolName === "Write" ||
+        toolName === "Edit" ||
+        toolName === "NotebookEdit";
       if (isWrite) {
         const path = extractFilePath(args);
         if (path) {
@@ -202,8 +213,10 @@ export class OptimizeLayer {
 
     // Suppress re-reads: if agent reads a file it just wrote to
     if (this.config.suppressReread) {
-      const isRead = /^(read|cat|view)/i.test(toolName) ||
-        toolName === "Read" || toolName === "View";
+      const isRead =
+        /^(read|cat|view)/i.test(toolName) ||
+        toolName === "Read" ||
+        toolName === "View";
       if (isRead) {
         const path = extractFilePath(args);
         if (path && this.wasRecentlyWritten(path)) {
@@ -242,11 +255,18 @@ export class OptimizeLayer {
           return stub;
         }
       }
-      this.seenCalls.set(key, { turn: this.turn, resultHash: contentHash, resultTokens: tokens });
+      this.seenCalls.set(key, {
+        turn: this.turn,
+        resultHash: contentHash,
+        resultTokens: tokens,
+      });
     }
 
     // Truncate: large results get head+tail
-    if (this.config.truncate && content.length > this.config.truncateThreshold) {
+    if (
+      this.config.truncate &&
+      content.length > this.config.truncateThreshold
+    ) {
       const lines = content.split("\n");
       if (lines.length > 60) {
         const head = lines.slice(0, 40).join("\n");
@@ -272,12 +292,15 @@ export class OptimizeLayer {
 
   private wasRecentlyWritten(path: string): boolean {
     const threshold = this.turn - this.config.suppressWithinTurns;
-    return this.recentWrites.some((w) => w.path === path && w.turn >= threshold);
+    return this.recentWrites.some(
+      (w) => w.path === path && w.turn >= threshold,
+    );
   }
 
   private lastWriteTurn(path: string): number {
     for (let i = this.recentWrites.length - 1; i >= 0; i--) {
-      if (this.recentWrites[i]!.path === path) return this.recentWrites[i]!.turn;
+      if (this.recentWrites[i]!.path === path)
+        return this.recentWrites[i]!.turn;
     }
     return 0;
   }
@@ -290,7 +313,8 @@ export class OptimizeLayer {
         type: "stable_prefix",
         turn: this.turn,
         tokensSaved: 0,
-        detail: "tool definitions canonicalised for byte-stable prefix (improves prompt cache hit)",
+        detail:
+          "tool definitions canonicalised for byte-stable prefix (improves prompt cache hit)",
       });
     }
     this.lastToolsJson = json;
@@ -336,7 +360,10 @@ export class OptimizeLayer {
     return changed ? result : null;
   }
 
-  private resolveToolName(messages: Message[], toolUseId?: string): string | null {
+  private resolveToolName(
+    messages: Message[],
+    toolUseId?: string,
+  ): string | null {
     if (!toolUseId) return null;
     for (const msg of messages) {
       if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;

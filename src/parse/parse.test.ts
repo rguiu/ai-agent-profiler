@@ -496,7 +496,10 @@ describe("Bedrock format", () => {
         {
           role: "user",
           content: [
-            { toolResult: { content: [{ text: "file contents here" }] }, toolUseId: "tu_1" },
+            {
+              toolResult: { content: [{ text: "file contents here" }] },
+              toolUseId: "tu_1",
+            },
           ],
         },
       ],
@@ -570,7 +573,10 @@ describe("Bedrock format", () => {
     const metaFrame = JSON.stringify({
       bytes: Buffer.from(
         JSON.stringify({
-          metadata: { usage: { inputTokens: 50, outputTokens: 10 }, metrics: {} },
+          metadata: {
+            usage: { inputTokens: 50, outputTokens: 10 },
+            metrics: {},
+          },
         }),
       ).toString("base64"),
     });

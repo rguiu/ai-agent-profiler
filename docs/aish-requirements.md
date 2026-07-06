@@ -212,6 +212,7 @@ riskier delivery vehicles are worth considering — ordered by adoption friction
 the right position. Apply transformations to requests/responses without agent cooperation.
 
 **What fits here:** capabilities that rewrite the wire without changing tool semantics:
+
 - **Truncate/summarise large tool results** (#3) — cap at N tokens, append a handle
 - **De-duplicate repeated observations** (#4) — return "unchanged since turn 7" stub
 - **Prune stale context** (#6) — rewrite request messages to drop tool results the model
@@ -230,6 +231,7 @@ No shell replacement, no special integration. Just register additional MCP tools
 to be smarter.
 
 **What fits here:** capabilities that offer better _alternatives_ the agent can choose:
+
 - Ranged/symbol reads (#1, #2) — `aish_read(file, symbol)`, `aish_find_def(name)`
 - Locate-and-read (#10) — `aish_open(name)` that auto-resolves path
 - Structured output tools (#7) — alternatives to `ls`/`grep` returning JSON
@@ -254,6 +256,7 @@ Vehicle A (--optimize)  →  measure  →  Vehicle B (MCP tools)  →  measure  
 ```
 
 Start with `--optimize` because:
+
 1. Zero adoption friction — works with any agent today
 2. The proxy already has the data to decide when to optimise (it sees repeated reads, growing context, large results)
 3. Each optimization is independently measurable via `aap compare` (optimized vs baseline)
@@ -268,12 +271,12 @@ Start with `--optimize` because:
 The proxy already captures enough signal to detect optimizable patterns in real-time (not
 post-hoc). Each optimization is a detector + an action:
 
-| Optimization | Detector (real-time signal) | Action (response rewriting) | Expected savings |
-|---|---|---|---|
-| **Truncate large results** | `response_body` byte count exceeds threshold (e.g. >8KB) | Truncate to head+tail with `[...N lines omitted, use expand(handle) for full]` | 50-80% of result tokens for big outputs |
-| **Dedup repeated reads** | Same (tool_name, arguments) seen earlier in session with same file mtime | Replace result with `[unchanged since turn K — N tokens omitted]` | 100% of duplicate result tokens |
-| **Prune stale context** | Request body messages: tool_result older than K turns, never referenced in subsequent assistant messages | Remove content, replace with `[pruned — available via recall(id)]` | Compound: reduces input_tokens growth |
-| **Stable tool prefix** | Detect tool definitions changed order/whitespace between requests | Canonicalise tool JSON for byte-stable prefix | Improves cache hit rate (measured via cached_input_tokens) |
+| Optimization               | Detector (real-time signal)                                                                              | Action (response rewriting)                                                    | Expected savings                                           |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| **Truncate large results** | `response_body` byte count exceeds threshold (e.g. >8KB)                                                 | Truncate to head+tail with `[...N lines omitted, use expand(handle) for full]` | 50-80% of result tokens for big outputs                    |
+| **Dedup repeated reads**   | Same (tool_name, arguments) seen earlier in session with same file mtime                                 | Replace result with `[unchanged since turn K — N tokens omitted]`              | 100% of duplicate result tokens                            |
+| **Prune stale context**    | Request body messages: tool_result older than K turns, never referenced in subsequent assistant messages | Remove content, replace with `[pruned — available via recall(id)]`             | Compound: reduces input_tokens growth                      |
+| **Stable tool prefix**     | Detect tool definitions changed order/whitespace between requests                                        | Canonicalise tool JSON for byte-stable prefix                                  | Improves cache hit rate (measured via cached_input_tokens) |
 
 ### Architecture
 
@@ -283,6 +286,7 @@ response ←  [detect patterns in response]      ←  [rewrite if applicable]  �
 ```
 
 The `--optimize` flag activates an `OptimizeLayer` that wraps the normal `forward()`:
+
 - It maintains per-session state (seen tool calls, turn counter, message hashes)
 - On request: can rewrite message bodies (prune stale context)
 - On response: can rewrite tool results (truncate, dedup)
@@ -292,6 +296,7 @@ The `--optimize` flag activates an `OptimizeLayer` that wraps the normal `forwar
 ### Metrics for success
 
 Each optimization's value is measured by comparing sessions with vs without it:
+
 - `aap compare <optimized_session> <baseline_session>` → shows delta in tokens, cost, requests
 - A new `optimize_actions` table records what the optimizer did (type, tokens_saved, turn)
 - The `recommend` engine gains a new rec kind: `optimization_opportunity` — fires in

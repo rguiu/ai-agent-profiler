@@ -88,7 +88,13 @@ export async function run(args: string[]): Promise<void> {
   const origin = `http://${host}:${config.server.port}`;
   const cwd = process.cwd();
 
-  const overrides = buildProviderEnv(agent, config, origin, sessionId, process.env);
+  const overrides = buildProviderEnv(
+    agent,
+    config,
+    origin,
+    sessionId,
+    process.env,
+  );
   if (overrides.ANTHROPIC_BEDROCK_BASE_URL) {
     meta.bedrock = "1";
   }
@@ -114,7 +120,9 @@ export async function run(args: string[]): Promise<void> {
       console.error(`aap: ${key}=${value}`);
     }
   } else {
-    const hasBedrock = process.env.CLAUDE_CODE_USE_BEDROCK && process.env.CLAUDE_CODE_USE_BEDROCK !== "0";
+    const hasBedrock =
+      process.env.CLAUDE_CODE_USE_BEDROCK &&
+      process.env.CLAUDE_CODE_USE_BEDROCK !== "0";
     if (hasBedrock && !config.providers.bedrock) {
       console.error(
         `aap: warning — CLAUDE_CODE_USE_BEDROCK is set but no [providers.bedrock] in config. Add it to capture Bedrock traffic.`,

@@ -49,7 +49,9 @@ describe("Scheduler", () => {
     s.add({
       id: "doomed",
       maxRetries: 2,
-      fn: () => { throw new Error("always fails"); },
+      fn: () => {
+        throw new Error("always fails");
+      },
     });
     const result = await s.run();
     assert.ok(result.failed.includes("doomed"));
@@ -65,7 +67,10 @@ describe("Scheduler", () => {
       priority: 1,
       maxRetries: 2,
       fn: () => {
-        if (failOnce) { failOnce = false; throw new Error("once"); }
+        if (failOnce) {
+          failOnce = false;
+          throw new Error("once");
+        }
         order.push("retryable");
       },
     });
@@ -88,7 +93,13 @@ describe("Scheduler", () => {
   it("cancel removes queued task", async () => {
     const ran = [];
     const s = new Scheduler({ maxConcurrency: 1 });
-    s.add({ id: "a", fn: async () => { ran.push("a"); await new Promise((r) => setTimeout(r, 50)); } });
+    s.add({
+      id: "a",
+      fn: async () => {
+        ran.push("a");
+        await new Promise((r) => setTimeout(r, 50));
+      },
+    });
     s.add({ id: "b", fn: () => ran.push("b") });
     // Cancel b before it starts
     s.cancel("b");

@@ -780,8 +780,9 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
   );
   const contentType = headerValue(responseEvent?.headers, "content-type") ?? "";
   const text = body.toString("utf8");
-  const isBinaryEventStream =
-    contentType.includes("application/vnd.amazon.eventstream");
+  const isBinaryEventStream = contentType.includes(
+    "application/vnd.amazon.eventstream",
+  );
   const streaming =
     isBinaryEventStream ||
     contentType.includes("text/event-stream") ||
@@ -803,10 +804,9 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
     // When Anthropic events arrive via Bedrock binary event-stream, prefer the
     // full model ID from the URL path (e.g. eu.anthropic.claude-opus-4-6-v1)
     // over the shortened name in the response body.
-    const model =
-      isBinaryEventStream
-        ? extractBedrockModel(events) ?? extracted.model
-        : extracted.model;
+    const model = isBinaryEventStream
+      ? (extractBedrockModel(events) ?? extracted.model)
+      : extracted.model;
     return {
       ...extracted,
       model,

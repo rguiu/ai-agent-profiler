@@ -3,7 +3,11 @@
 
 import { readFile } from "node:fs/promises";
 import type { Store, ToolCall } from "../store/index.js";
-import { OptimizeLayer, type OptimizeConfig, type OptimizeAction } from "./layer.js";
+import {
+  OptimizeLayer,
+  type OptimizeConfig,
+  type OptimizeAction,
+} from "./layer.js";
 
 export interface SimulationResult {
   sessionId: string;
