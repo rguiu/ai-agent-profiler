@@ -27,6 +27,12 @@ upstream = "https://api.openai.com"
 [providers.deepseek]
 upstream = "https://api.deepseek.com"
 
+# AWS Bedrock. When CLAUDE_CODE_USE_BEDROCK=1, `aap run claude` overrides
+# AWS_ENDPOINT_URL_BEDROCK_RUNTIME to route Bedrock traffic through the proxy.
+# Set the upstream to your region's bedrock-runtime endpoint.
+[providers.bedrock]
+upstream = "https://bedrock-runtime.eu-west-1.amazonaws.com"
+
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.
 # cacheInputPerMTok is optional — if set, cached tokens are charged at this

@@ -9,6 +9,7 @@ const SENSITIVE_HEADERS: ReadonlySet<string> = new Set([
   "proxy-authorization",
   "cookie",
   "set-cookie",
+  "x-amz-security-token",
 ]);
 
 export function redactHeaders(

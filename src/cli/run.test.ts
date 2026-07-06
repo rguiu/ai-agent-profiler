@@ -6,6 +6,7 @@ const providers: Pick<Config, "providers"> = {
   providers: {
     deepseek: { upstream: "https://api.deepseek.com" },
     anthropic: { upstream: "https://api.anthropic.com" },
+    bedrock: { upstream: "https://bedrock-runtime.eu-west-1.amazonaws.com" },
   },
 };
 
@@ -38,6 +39,31 @@ describe("buildProviderEnv", () => {
     );
     expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
     expect(env.ANTHROPIC_BASE_URL).toBe("http://localhost:8080/sid1/anthropic");
+  });
+
+  it("sets AWS_ENDPOINT_URL_BEDROCK_RUNTIME when CLAUDE_CODE_USE_BEDROCK=1", () => {
+    const env = buildProviderEnv(
+      "claude",
+      providers,
+      "http://localhost:8080",
+      "sid1",
+      { CLAUDE_CODE_USE_BEDROCK: "1" } as NodeJS.ProcessEnv,
+    );
+    expect(env.AWS_ENDPOINT_URL_BEDROCK_RUNTIME).toBe(
+      "http://localhost:8080/sid1/bedrock",
+    );
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://localhost:8080/sid1/anthropic");
+  });
+
+  it("does not set bedrock endpoint when CLAUDE_CODE_USE_BEDROCK is unset", () => {
+    const env = buildProviderEnv(
+      "claude",
+      providers,
+      "http://localhost:8080",
+      "sid1",
+      {} as NodeJS.ProcessEnv,
+    );
+    expect(env.AWS_ENDPOINT_URL_BEDROCK_RUNTIME).toBeUndefined();
   });
 
   it("respects a custom apiPath for opencode", () => {

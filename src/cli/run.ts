@@ -13,6 +13,7 @@ export function buildProviderEnv(
   config: Pick<Config, "providers">,
   origin: string,
   sessionId: string,
+  env?: NodeJS.ProcessEnv,
 ): Record<string, string> {
   if (agent === "opencode") {
     const provider: Record<string, { options: { baseURL: string } }> = {};
@@ -25,12 +26,20 @@ export function buildProviderEnv(
     return { OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider }) };
   }
 
-  const env: Record<string, string> = {};
+  const out: Record<string, string> = {};
   for (const name of Object.keys(config.providers)) {
     const varName = PROVIDER_ENV[name];
-    if (varName) env[varName] = `${origin}/${sessionId}/${name}`;
+    if (varName) out[varName] = `${origin}/${sessionId}/${name}`;
   }
-  return env;
+
+  // Bedrock: when Claude Code uses AWS Bedrock, override the SDK endpoint
+  // so requests flow through the proxy instead of direct to AWS.
+  const useBedrock = env?.CLAUDE_CODE_USE_BEDROCK;
+  if (useBedrock && useBedrock !== "0" && config.providers.bedrock) {
+    out.AWS_ENDPOINT_URL_BEDROCK_RUNTIME = `${origin}/${sessionId}/bedrock`;
+  }
+
+  return out;
 }
 
 // A caller may pin the session id (e.g. a benchmark harness that needs to tag
@@ -89,7 +98,7 @@ export async function run(args: string[]): Promise<void> {
   };
   await registerSession(origin, session);
 
-  const overrides = buildProviderEnv(agent, config, origin, sessionId);
+  const overrides = buildProviderEnv(agent, config, origin, sessionId, process.env);
   const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
 
   console.error(`aap: session ${sessionId} (cwd ${cwd})`);
@@ -102,9 +111,16 @@ export async function run(args: string[]): Promise<void> {
       console.error(`aap: ${key}=${value}`);
     }
   } else {
-    console.error(
-      `aap: warning — no base-URL routing set for "${agent}" (no matching provider)`,
-    );
+    const hasBedrock = process.env.CLAUDE_CODE_USE_BEDROCK && process.env.CLAUDE_CODE_USE_BEDROCK !== "0";
+    if (hasBedrock && !config.providers.bedrock) {
+      console.error(
+        `aap: warning — CLAUDE_CODE_USE_BEDROCK is set but no [providers.bedrock] in config. Add it to capture Bedrock traffic.`,
+      );
+    } else {
+      console.error(
+        `aap: warning — no base-URL routing set for "${agent}" (no matching provider)`,
+      );
+    }
   }
 
   const child = spawn(agent, agentArgs, { stdio: "inherit", env });

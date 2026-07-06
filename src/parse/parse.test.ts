@@ -364,6 +364,182 @@ describe("summarizeMessages", () => {
   });
 });
 
+describe("Bedrock format", () => {
+  it("parses a non-streaming Bedrock Converse response", () => {
+    const response = {
+      output: {
+        message: {
+          role: "assistant",
+          content: [
+            { text: "Hello!" },
+            {
+              toolUse: {
+                toolUseId: "tu_1",
+                name: "Read",
+                input: { file_path: "/main.ts" },
+              },
+            },
+          ],
+        },
+      },
+      usage: {
+        inputTokens: 200,
+        outputTokens: 50,
+        cacheReadInputTokens: 80,
+      },
+      stopReason: "tool_use",
+    };
+    const events: TraceEvent[] = [
+      {
+        type: "request",
+        path: "/model/eu.anthropic.claude-opus-4-6-v1/converse",
+      },
+      {
+        type: "response",
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+      {
+        type: "response_body",
+        data: Buffer.from(JSON.stringify(response)).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    const result = parseTrace(events);
+    expect(result.format).toBe("bedrock");
+    expect(result.model).toBe("eu.anthropic.claude-opus-4-6-v1");
+    expect(result.inputTokens).toBe(200);
+    expect(result.outputTokens).toBe(50);
+    expect(result.cachedInputTokens).toBe(80);
+    expect(result.stopReason).toBe("tool_use");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]?.name).toBe("Read");
+    expect(result.toolCalls[0]?.id).toBe("tu_1");
+    expect(result.toolCalls[0]?.arguments).toContain("/main.ts");
+  });
+
+  it("parses Bedrock streaming (binary event-stream with embedded JSON)", () => {
+    // Simulate what embedded JSON looks like after binary frame stripping
+    const events: unknown[] = [
+      { messageStart: { role: "assistant" } },
+      {
+        contentBlockStart: {
+          contentBlockIndex: 0,
+          start: { toolUse: { toolUseId: "tu_2", name: "Bash" } },
+        },
+      },
+      {
+        contentBlockDelta: {
+          contentBlockIndex: 0,
+          delta: { input: '{"command":"ls"}' },
+        },
+      },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+      { messageStop: { stopReason: "tool_use" } },
+      {
+        metadata: {
+          usage: {
+            inputTokens: 300,
+            outputTokens: 25,
+            cacheReadInputTokens: 150,
+          },
+          metrics: { latencyMs: 1200 },
+        },
+      },
+    ];
+    // Embed JSON objects with some binary padding between them (simulating
+    // the event-stream framing the extractor has to handle)
+    const payload = Buffer.concat(
+      events.map((e) => {
+        const json = JSON.stringify(e);
+        const padding = Buffer.alloc(12, 0xff);
+        return Buffer.concat([padding, Buffer.from(json)]);
+      }),
+    );
+    const traceEvents: TraceEvent[] = [
+      {
+        type: "request",
+        path: "/model/eu.anthropic.claude-sonnet-4-5-20250929-v1%3A0/converse-stream",
+      },
+      {
+        type: "response",
+        status: 200,
+        headers: { "content-type": "application/vnd.amazon.eventstream" },
+      },
+      { type: "response_body", data: payload.toString("base64") },
+      { type: "end" },
+    ];
+    const result = parseTrace(traceEvents);
+    expect(result.format).toBe("bedrock");
+    expect(result.streaming).toBe(true);
+    expect(result.model).toBe("eu.anthropic.claude-sonnet-4-5-20250929-v1:0");
+    expect(result.inputTokens).toBe(300);
+    expect(result.outputTokens).toBe(25);
+    expect(result.cachedInputTokens).toBe(150);
+    expect(result.stopReason).toBe("tool_use");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]?.name).toBe("Bash");
+    expect(result.toolCalls[0]?.arguments).toBe('{"command":"ls"}');
+  });
+
+  it("extracts context from a Bedrock-format request body", () => {
+    const reqBody = {
+      system: [{ text: "You are a helpful assistant." }],
+      messages: [
+        { role: "user", content: [{ text: "hello" }] },
+        {
+          role: "assistant",
+          content: [
+            { toolUse: { toolUseId: "tu_1", name: "Read", input: {} } },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { toolResult: { content: [{ text: "file contents here" }] }, toolUseId: "tu_1" },
+          ],
+        },
+      ],
+      toolConfig: {
+        tools: [
+          { toolSpec: { name: "Read", description: "Read a file" } },
+          { toolSpec: { name: "Bash", description: "Run a command" } },
+        ],
+      },
+    };
+    const events: TraceEvent[] = [
+      { type: "request", path: "/model/m/converse", headers: {} },
+      {
+        type: "request_body",
+        data: Buffer.from(JSON.stringify(reqBody)).toString("base64"),
+      },
+      {
+        type: "response",
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+      {
+        type: "response_body",
+        data: Buffer.from(
+          JSON.stringify({
+            output: { message: { role: "assistant", content: [] } },
+            usage: { inputTokens: 100, outputTokens: 10 },
+            stopReason: "end_turn",
+          }),
+        ).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    const result = parseTrace(events);
+    expect(result.context.messageCount).toBe(3);
+    expect(result.context.systemTokens).toBeGreaterThan(0);
+    expect(result.context.toolsDefined).toBe(2);
+    expect(result.context.toolsTokens).toBeGreaterThan(0);
+    expect(result.toolResults).toHaveLength(1);
+    expect(result.toolResults[0]?.id).toBe("tu_1");
+  });
+});
+
 describe("computeCost", () => {
   const pricing = { "gpt-4o": { inputPerMTok: 2.5, outputPerMTok: 10 } };
 
