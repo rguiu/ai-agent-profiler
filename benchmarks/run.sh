@@ -36,7 +36,7 @@ set -eu
 usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
 
 AGENT=""; FIXTURE="csv-parser"; REPO=""; DIR=""; TASKS_FILE=""; DRY=0
-DEFAULT_VERIFY=""; NOVERIFY=0
+DEFAULT_VERIFY=""; NOVERIFY=0; TAG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,6 +46,7 @@ while [ $# -gt 0 ]; do
     --tasks) TASKS_FILE="${2:?--tasks needs a file}"; shift 2 ;;
     --verify) DEFAULT_VERIFY="${2:?--verify needs a command}"; shift 2 ;;
     --no-verify) NOVERIFY=1; shift ;;
+    --tag) TAG="${2:?--tag needs a value (e.g. baseline, optimize)}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 1 ;;
@@ -81,8 +82,17 @@ if [ -z "$TASKS_FILE" ] && [ -f "$SRC/TASKS" ]; then TASKS_FILE="$SRC/TASKS"; fi
 RUN_STAMP="$(date +%Y%m%d%H%M%S)"
 RESULTS="$SCRATCH/results.tsv"
 TASK_N=0
+TASK_TOTAL=0
 VERIFIED=0
+RUN_START=$(date +%s)
 [ "$DRY" = "1" ] || { mkdir -p "$SCRATCH"; : > "$RESULTS"; }
+
+# Count total tasks for progress display
+if [ -n "$TASKS_FILE" ]; then
+  TASK_TOTAL=$(grep -cv '^\(#\|$\)' "$TASKS_FILE" 2>/dev/null || echo 0)
+else
+  TASK_TOTAL=2
+fi
 
 # Preflight: verification pins the session id (AAP_SESSION_ID) and tags the result
 # via `aap tag` — both need a current build. Warn early rather than after LLM calls.
@@ -104,16 +114,20 @@ run_task() {
   scratch="$SCRATCH/$id"
   TASK_N=$((TASK_N + 1))
   sid="bench-${AGENT}-${id}-${RUN_STAMP}-${TASK_N}"
+  META_ARGS="--meta task=$id --meta agent=$AGENT"
+  [ -n "$TAG" ] && META_ARGS="$META_ARGS --meta run=$TAG"
+
   if [ "$DRY" = "1" ]; then
-    echo "[$id] (cd $scratch && AAP_SESSION_ID=$sid aap run --meta task=$id --meta agent=$AGENT $AGENT $INVOKE \"$prompt\")"
+    echo "[$TASK_N/$TASK_TOTAL] $id  (cd $scratch && AAP_SESSION_ID=$sid aap run $META_ARGS $AGENT $INVOKE \"$prompt\")"
     [ -n "$verify" ] && echo "      verify: (cd $scratch && $verify) && aap tag $sid verify=pass"
     return 0
   fi
   rm -rf "$scratch"; mkdir -p "$scratch"; cp -R "$SRC"/. "$scratch"; rm -rf "$scratch/.git" "$scratch/TASKS"
-  echo ">>> task=$id agent=$AGENT scratch=$scratch"
-  # stdin from /dev/null so the agent can't consume the task-loop's stdin (the TASKS file).
-  # AAP_SESSION_ID pins the session so we can tag it with the verify result afterwards.
-  ( cd "$scratch" && AAP_SESSION_ID="$sid" aap run --meta "task=$id" --meta "agent=$AGENT" "$AGENT" $INVOKE "$prompt" </dev/null ) || true
+  elapsed=$(( $(date +%s) - RUN_START ))
+  printf '\n\033[1m[%d/%d] %s\033[0m  agent=%s%s  elapsed=%dm%02ds\n' \
+    "$TASK_N" "$TASK_TOTAL" "$id" "$AGENT" "${TAG:+ tag=$TAG}" $((elapsed/60)) $((elapsed%60))
+  echo "    scratch=$scratch"
+  ( cd "$scratch" && AAP_SESSION_ID="$sid" aap run $META_ARGS "$AGENT" $INVOKE "$prompt" </dev/null ) || true
 
   [ -n "$verify" ] || return 0
   echo ">>> verify [$id]: $verify"
@@ -145,14 +159,16 @@ else
 fi
 
 echo
+total_elapsed=$(( $(date +%s) - RUN_START ))
+printf '\n\033[1m✓ Benchmark complete\033[0m  %d task(s) in %dm%02ds\n' \
+  "$TASK_N" $((total_elapsed/60)) $((total_elapsed%60))
 if [ "$DRY" != "1" ] && [ "$VERIFIED" -gt 0 ]; then
   passed=$(awk -F'\t' '$3=="pass"' "$RESULTS" | wc -l | tr -d ' ')
-  echo "Verify results ($passed/$VERIFIED passed):"
-  awk -F'\t' '{printf "  %-12s %-9s %s\n", $1, $2, $3}' "$RESULTS"
-  echo "  (full table: $RESULTS)"
+  echo "  Verify: $passed/$VERIFIED passed"
+  awk -F'\t' '{printf "    %-12s %-9s %s\n", $1, $2, $3}' "$RESULTS"
   echo
 fi
-echo "Done. Next:"
+echo "Next:"
 echo "  aap parse"
 echo "  aap sessions                # sessions are tagged task=<id> agent=<name> verify=pass|fail"
 echo "  aap compare --task <id>     # side-by-side once another agent has run the same tasks"

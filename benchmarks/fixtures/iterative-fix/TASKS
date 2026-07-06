@@ -1,0 +1,3 @@
+# iterative-fix fixture — 8 bugs across 6 modules.
+# The single task forces a long read-fix-verify loop (~40 requests).
+fix-all-bugs|There are multiple bugs across the src/ modules causing test failures. Run `node --test test/*.test.js` to see which tests fail, then find and fix each bug one by one. After each fix, re-run the tests to confirm progress. Keep going until all tests pass. Do not modify any test files.|node --test test/*.test.js

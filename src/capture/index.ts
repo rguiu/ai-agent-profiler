@@ -4,4 +4,4 @@ export {
   type RequestContext,
   type RequestTrace,
 } from "./capture.js";
-export { redactHeaders, REDACTED } from "./redact.js";
+export { redactHeaders, redactUrl, REDACTED } from "./redact.js";

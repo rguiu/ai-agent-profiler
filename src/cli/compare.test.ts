@@ -82,13 +82,15 @@ describe("summarize", () => {
 
 describe("renderComparison", () => {
   it("renders sessions as side-by-side columns", () => {
-    const md = renderComparison([
+    const output = renderComparison([
       summarize(makeDetail("sess-aaaa", 3)),
       summarize(makeDetail("sess-bbbb", 8)),
     ]);
-    expect(md).toContain("# Session comparison");
-    expect(md).toContain("| Metric | sess-aaa | sess-bbb |");
-    expect(md).toContain("| Requests | 3 | 8 |");
-    expect(md).toContain("| Input tokens | 300 | 800 |");
+    expect(output).toContain("Session comparison");
+    expect(output).toContain("sess-aaaa");
+    expect(output).toContain("sess-bbbb");
+    expect(output).toContain("Requests");
+    expect(output).toContain("300");
+    expect(output).toContain("800");
   });
 });

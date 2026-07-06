@@ -92,45 +92,33 @@ function registerTools(server: McpServer, store: Store): void {
     },
     async ({ provider, model, tool, limit: limitStr }) => {
       const limit = limitStr ? Number(limitStr) : 50;
+      const where: string[] = [];
       const params: Array<string | number> = [];
-      const clauses: string[] = [];
-      let sql: string;
 
       if (tool) {
-        clauses.push("tc.name = ?");
+        where.push("tc.name = ?");
         params.push(tool);
-        if (provider) {
-          clauses.push("r.provider = ?");
-          params.push(provider);
-        }
-        if (model) {
-          clauses.push("m.model LIKE '%' || ? || '%'");
-          params.push(model);
-        }
-        clauses.push("LIMIT ?");
-        params.push(limit);
-        sql = `SELECT DISTINCT r.id, r.session_id, r.provider, r.method, r.path, r.status, r.latency_ms, r.started_at, m.model, m.input_tokens, m.output_tokens, m.cost, m.stop_reason
-               FROM requests r
-               JOIN tool_calls tc ON tc.request_id = r.id
-               LEFT JOIN metrics m ON m.request_id = r.id
-               WHERE ${clauses.slice(0, -1).join(" AND ")}
-               ORDER BY r.started_at DESC ${clauses[clauses.length - 1] ?? ""}`;
-      } else {
-        if (provider) {
-          clauses.push("r.provider = ?");
-          params.push(provider);
-        }
-        if (model) {
-          clauses.push("m.model LIKE '%' || ? || '%'");
-          params.push(model);
-        }
-        sql = `SELECT r.id, r.session_id, r.provider, r.method, r.path, r.status, r.latency_ms, r.started_at, m.model, m.input_tokens, m.output_tokens, m.cost, m.stop_reason
-               FROM requests r
-               LEFT JOIN metrics m ON m.request_id = r.id
-               WHERE 1=1${clauses.map((c) => " AND " + c).join("")}
-               ORDER BY r.started_at DESC LIMIT ?`;
-        params.push(limit);
       }
+      if (provider) {
+        where.push("r.provider = ?");
+        params.push(provider);
+      }
+      if (model) {
+        where.push("m.model LIKE '%' || ? || '%'");
+        params.push(model);
+      }
+      params.push(limit);
+
+      const join = tool ? "JOIN tool_calls tc ON tc.request_id = r.id" : "";
+      const distinct = tool ? "DISTINCT " : "";
+      const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const sql = `SELECT ${distinct}r.id, r.session_id, r.provider, r.method, r.path, r.status, r.latency_ms, r.started_at, m.model, m.input_tokens, m.output_tokens, m.cost, m.stop_reason
+               FROM requests r
+               ${join}
+               LEFT JOIN metrics m ON m.request_id = r.id
+               ${whereClause}
+               ORDER BY r.started_at DESC LIMIT ?`;
 
       const rows = store.rawQuery(sql, ...params);
       return {
@@ -211,16 +199,8 @@ function registerTools(server: McpServer, store: Store): void {
     "Run a read-only SQL query against the profiler's SQLite database. Tables: sessions, requests, metrics, tool_calls. Use for custom analysis.",
     { sql: z.string().describe("SQL SELECT statement") },
     async ({ sql }) => {
-      const trimmed = sql.trim();
-      if (!trimmed.toUpperCase().startsWith("SELECT")) {
-        return {
-          content: [
-            { type: "text", text: "Only SELECT statements are allowed" },
-          ],
-        };
-      }
       try {
-        const result = store.rawQuery(trimmed);
+        const result = store.rawQuery(sql);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
         };
@@ -242,11 +222,17 @@ export async function mcp(): Promise<void> {
   const server = new McpServer({ name: "aap", version: "1" });
   registerTools(server, store);
 
-  process.on("SIGINT", () => {
+  let closed = false;
+  const closeStore = (): void => {
+    if (closed) return;
+    closed = true;
     store.close();
+  };
+  process.on("SIGINT", () => {
+    closeStore();
     process.exit(0);
   });
-  process.on("exit", () => store.close());
+  process.on("exit", closeStore);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

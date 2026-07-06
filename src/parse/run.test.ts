@@ -62,7 +62,7 @@ interface MetricRecord {
 }
 
 describe("runParse", () => {
-  it("derives metrics and tool calls from a captured trace", () => {
+  it("derives metrics and tool calls from a captured trace", async () => {
     const dir = tmpDir();
     const store = openStore(dir);
     const traceFile = writeTrace(dir);
@@ -85,7 +85,7 @@ describe("runParse", () => {
       error: null,
     });
 
-    const summary = runParse(
+    const summary = await runParse(
       store,
       { "claude-3-5-sonnet-20241022": { inputPerMTok: 3, outputPerMTok: 15 } },
       { all: false },
@@ -117,7 +117,7 @@ describe("runParse", () => {
     expect(tools[0]?.arguments).toBe('{"city":"Paris"}');
   });
 
-  it("is idempotent and skips already-parsed requests", () => {
+  it("is idempotent and skips already-parsed requests", async () => {
     const dir = tmpDir();
     const store = openStore(dir);
     const traceFile = writeTrace(dir);
@@ -139,13 +139,13 @@ describe("runParse", () => {
       error: null,
     });
 
-    expect(runParse(store, {}, { all: false }).parsed).toBe(1);
-    expect(runParse(store, {}, { all: false }).parsed).toBe(0);
-    expect(runParse(store, {}, { all: true }).parsed).toBe(1);
+    expect((await runParse(store, {}, { all: false })).parsed).toBe(1);
+    expect((await runParse(store, {}, { all: false })).parsed).toBe(0);
+    expect((await runParse(store, {}, { all: true })).parsed).toBe(1);
     store.close();
   });
 
-  it("correlates a tool result in a later request back to its tool call", () => {
+  it("correlates a tool result in a later request back to its tool call", async () => {
     const dir = tmpDir();
     const store = openStore(dir);
 
@@ -231,7 +231,7 @@ describe("runParse", () => {
       });
     }
 
-    runParse(store, {}, { all: false });
+    await runParse(store, {}, { all: false });
 
     const db = new Database(join(dir, "aap.sqlite"));
     const row = db

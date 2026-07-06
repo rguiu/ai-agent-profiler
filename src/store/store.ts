@@ -637,8 +637,33 @@ export class Store {
   }
 
   rawQuery(sql: string, ...params: Array<string | number | null>): unknown[] {
+    if (!isReadOnlyQuery(sql)) {
+      throw new Error("Only read-only SELECT statements are allowed");
+    }
     const stmt = this.db.prepare(sql);
     return stmt.all(...params);
+  }
+
+  recentSessions(limit = 100): Array<{
+    id: string;
+    client: string | null;
+    cwd: string | null;
+    repo: string | null;
+    started_at: string | null;
+    meta: string | null;
+  }> {
+    return this.db
+      .prepare(
+        "SELECT id, client, cwd, repo, started_at, meta FROM sessions ORDER BY last_seen_at DESC LIMIT ?",
+      )
+      .all(limit) as Array<{
+      id: string;
+      client: string | null;
+      cwd: string | null;
+      repo: string | null;
+      started_at: string | null;
+      meta: string | null;
+    }>;
   }
 
   close(): void {
@@ -682,6 +707,35 @@ function parseMeta(value: string | null): Record<string, string> | null {
     return null;
   }
 }
+
+// Reject anything that isn't a plain SELECT — protects the raw_sql tool from
+// injection via multi-statement strings, ATTACH, or write statements disguised
+// with a SELECT prefix (e.g. "SELECT 1; DROP TABLE ...").
+// String literals are stripped before keyword matching to avoid false positives
+// (e.g. WHERE path LIKE '%DELETE%' is legitimate).
+function isReadOnlyQuery(sql: string): boolean {
+  const normalized = sql.trim().replace(/\s+/g, " ");
+  if (!normalized.toUpperCase().startsWith("SELECT ")) return false;
+  if (/;\s*\S/.test(normalized)) return false;
+  // Remove string literals so keywords inside quotes don't trigger
+  const withoutStrings = normalized.replace(/'[^']*'/g, "''");
+  const upper = withoutStrings.toUpperCase();
+  const forbidden = [
+    "INSERT ",
+    "UPDATE ",
+    "DELETE ",
+    "DROP ",
+    "ALTER ",
+    "CREATE ",
+    "ATTACH ",
+    "DETACH ",
+    "PRAGMA ",
+    "REPLACE ",
+  ];
+  return !forbidden.some((kw) => upper.includes(kw));
+}
+
+export { isReadOnlyQuery as _isReadOnlyQuery };
 
 function ensureColumn(
   db: Database.Database,

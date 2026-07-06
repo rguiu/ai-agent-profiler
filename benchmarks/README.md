@@ -116,23 +116,65 @@ Use `--dry-run` to print the exact commands (including the verify step) without 
 
 1. Start the proxy in one terminal:
    ```
-   aap serve
+   AWS_PROFILE=claude aap serve
    ```
 2. Make sure the agent is installed and its key is configured (opencode auth.json /
-   `DEEPSEEK_API_KEY`, or Claude Code's `ANTHROPIC_API_KEY`). `aap run` handles routing
-   through the proxy automatically.
-3. Run a fixture for an agent:
+   `DEEPSEEK_API_KEY`, or Claude Code with `CLAUDE_CODE_USE_BEDROCK=1`). `aap run` handles
+   routing through the proxy automatically.
+3. Run a fixture for an agent with a tag:
    ```
-   ./benchmarks/run.sh opencode --fixture task-queue
+   ./benchmarks/run.sh claude --fixture task-queue --tag baseline
    ```
-   Every task is launched tagged with `--meta task=<id> --meta agent=<name>`.
+   Every task is launched tagged with `--meta task=<id> --meta agent=<name> --meta run=<tag>`.
+
+## Example: A/B comparison (baseline vs optimize)
+
+```bash
+# Terminal 1 — baseline run
+AWS_PROFILE=claude aap serve
+# Terminal 2
+./benchmarks/run.sh claude --fixture task-queue --tag baseline
+
+# Terminal 1 — restart with optimize
+AWS_PROFILE=claude aap serve --optimize
+# Terminal 2
+./benchmarks/run.sh claude --fixture task-queue --tag optimize
+
+# Compare
+aap compare --run baseline --run optimize
+```
+
+Output:
+
+```
+  ╭─ baseline vs optimize ─╮
+
+  [explain]
+                   baseline  optimize      Δ
+  ──────────────────────────────────────────
+  Requests                4         4      =
+  Input tokens          558       558      =
+  Output tokens          64       425  +564%
+  Cost              $0.0757   $0.1411   +87%
+  Tool calls              1         5  +400%
+  ...
+
+  TOTAL
+                  baseline  optimize      Δ
+  ─────────────────────────────────────────
+  Requests              24        25    +4%
+  Input tokens       1,792     1,790      =
+  Cost             $0.7083   $0.8597   +21%
+  Tool calls            12        19   +58%
+  Wall time          90.7s    107.4s   +18%
+```
 
 ## Comparing
 
 ```
-aap parse                      # derive metrics for the new sessions
-aap compare --task fix-bug     # side-by-side across every agent that ran fix-bug
-aap compare --task explain
+aap compare --run baseline --run optimize    # full A/B across all tasks
+aap compare --task fix-bug                   # all fix-bug sessions
+aap compare --task fix-bug --run baseline    # just fix-bug from baseline
 ```
 
 To roll every task up into a baseline report (mean per metric per agent, counting only

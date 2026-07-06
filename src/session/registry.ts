@@ -21,4 +21,12 @@ export class SessionRegistry {
   list(): SessionInfo[] {
     return [...this.sessions.values()];
   }
+
+  hydrate(rows: SessionInfo[]): void {
+    for (const row of rows) {
+      if (!this.sessions.has(row.id)) {
+        this.sessions.set(row.id, row);
+      }
+    }
+  }
 }

@@ -13,6 +13,7 @@ export function buildProviderEnv(
   config: Pick<Config, "providers">,
   origin: string,
   sessionId: string,
+  env?: NodeJS.ProcessEnv,
 ): Record<string, string> {
   if (agent === "opencode") {
     const provider: Record<string, { options: { baseURL: string } }> = {};
@@ -25,12 +26,20 @@ export function buildProviderEnv(
     return { OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider }) };
   }
 
-  const env: Record<string, string> = {};
+  const out: Record<string, string> = {};
   for (const name of Object.keys(config.providers)) {
     const varName = PROVIDER_ENV[name];
-    if (varName) env[varName] = `${origin}/${sessionId}/${name}`;
+    if (varName) out[varName] = `${origin}/${sessionId}/${name}`;
   }
-  return env;
+
+  // Bedrock: Claude Code uses ANTHROPIC_BEDROCK_BASE_URL (not the AWS SDK env var).
+  // The SDK sends requests to /model/{id}/converse-stream on this host.
+  const useBedrock = env?.CLAUDE_CODE_USE_BEDROCK;
+  if (useBedrock && useBedrock !== "0" && config.providers.bedrock) {
+    out.ANTHROPIC_BEDROCK_BASE_URL = origin;
+  }
+
+  return out;
 }
 
 // A caller may pin the session id (e.g. a benchmark harness that needs to tag
@@ -79,6 +88,17 @@ export async function run(args: string[]): Promise<void> {
   const origin = `http://${host}:${config.server.port}`;
   const cwd = process.cwd();
 
+  const overrides = buildProviderEnv(
+    agent,
+    config,
+    origin,
+    sessionId,
+    process.env,
+  );
+  if (overrides.ANTHROPIC_BEDROCK_BASE_URL) {
+    meta.bedrock = "1";
+  }
+
   const session: SessionInfo = {
     id: sessionId,
     client: agent,
@@ -88,8 +108,6 @@ export async function run(args: string[]): Promise<void> {
     meta: Object.keys(meta).length > 0 ? meta : null,
   };
   await registerSession(origin, session);
-
-  const overrides = buildProviderEnv(agent, config, origin, sessionId);
   const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
 
   console.error(`aap: session ${sessionId} (cwd ${cwd})`);
@@ -102,9 +120,18 @@ export async function run(args: string[]): Promise<void> {
       console.error(`aap: ${key}=${value}`);
     }
   } else {
-    console.error(
-      `aap: warning — no base-URL routing set for "${agent}" (no matching provider)`,
-    );
+    const hasBedrock =
+      process.env.CLAUDE_CODE_USE_BEDROCK &&
+      process.env.CLAUDE_CODE_USE_BEDROCK !== "0";
+    if (hasBedrock && !config.providers.bedrock) {
+      console.error(
+        `aap: warning — CLAUDE_CODE_USE_BEDROCK is set but no [providers.bedrock] in config. Add it to capture Bedrock traffic.`,
+      );
+    } else {
+      console.error(
+        `aap: warning — no base-URL routing set for "${agent}" (no matching provider)`,
+      );
+    }
   }
 
   const child = spawn(agent, agentArgs, { stdio: "inherit", env });

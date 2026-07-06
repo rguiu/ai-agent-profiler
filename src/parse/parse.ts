@@ -28,7 +28,7 @@ export interface ParsedContext {
 }
 
 export interface ParsedTrace {
-  format: "anthropic" | "openai" | "unknown";
+  format: "anthropic" | "openai" | "bedrock" | "unknown";
   model: string | null;
   inputTokens: number | null;
   cachedInputTokens: number | null;
@@ -43,6 +43,7 @@ export interface ParsedTrace {
 interface ModelPricing {
   inputPerMTok: number;
   outputPerMTok: number;
+  cacheInputPerMTok?: number;
 }
 
 interface Extract {
@@ -122,6 +123,64 @@ function extractSSE(text: string): unknown[] {
   return objects;
 }
 
+// AWS Bedrock uses a binary event-stream format. Each frame contains a JSON
+// payload that we can extract by scanning for JSON objects in the raw bytes.
+// The scanner is string-aware: braces inside JSON string literals don't affect
+// depth tracking.
+function extractBedrockEvents(buf: Buffer): unknown[] {
+  const objects: unknown[] = [];
+  const text = buf.toString("utf8");
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"' && depth > 0) {
+      inString = true;
+    } else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try {
+          const obj = JSON.parse(text.slice(start, i + 1)) as Record<
+            string,
+            unknown
+          >;
+          // Bedrock wraps Anthropic Messages API responses in {"bytes":"<base64>"}
+          if (typeof obj.bytes === "string") {
+            try {
+              objects.push(
+                JSON.parse(Buffer.from(obj.bytes, "base64").toString("utf8")),
+              );
+            } catch {
+              objects.push(obj);
+            }
+          } else {
+            objects.push(obj);
+          }
+        } catch {
+          // not valid JSON — skip
+        }
+        start = -1;
+      }
+    }
+  }
+  return objects;
+}
+
 function parseWholeJson(text: string): unknown[] {
   const trimmed = text.trim();
   if (!trimmed) return [];
@@ -153,6 +212,21 @@ function looksOpenAI(objects: unknown[]): boolean {
     if (object?.startsWith("chat.completion")) return true;
     const usage = asRecord(r.usage);
     return usage?.["prompt_tokens"] !== undefined;
+  });
+}
+
+function looksBedrock(objects: unknown[]): boolean {
+  return objects.some((o) => {
+    const r = asRecord(o);
+    if (!r) return false;
+    return (
+      r.messageStart !== undefined ||
+      r.messageStop !== undefined ||
+      r.contentBlockStart !== undefined ||
+      r.contentBlockDelta !== undefined ||
+      r.metadata !== undefined ||
+      (r.output !== undefined && r.stopReason !== undefined)
+    );
   });
 }
 
@@ -249,6 +323,108 @@ function parseAnthropic(objects: unknown[]): Extract {
       arguments: entry.args,
     });
   }
+  return acc;
+}
+
+function parseBedrock(objects: unknown[]): Extract {
+  const acc = emptyExtract();
+  const byIndex = new Map<number, { id: string; name: string; args: string }>();
+
+  for (const object of objects) {
+    const record = asRecord(object);
+    if (!record) continue;
+
+    // Non-streaming Converse response
+    if (record.output !== undefined) {
+      const output = asRecord(record.output);
+      const message = output ? asRecord(output.message) : null;
+      if (message) {
+        for (const block of asArray(message.content)) {
+          const b = asRecord(block);
+          if (!b) continue;
+          const toolUse = asRecord(b.toolUse);
+          if (toolUse) {
+            const name = asString(toolUse.name);
+            if (name) {
+              acc.toolCalls.push({
+                id: asString(toolUse.toolUseId) ?? "",
+                name,
+                arguments: toolUse.input ? JSON.stringify(toolUse.input) : "",
+              });
+            }
+          }
+        }
+      }
+      acc.stopReason = asString(record.stopReason) ?? acc.stopReason;
+      const usage = asRecord(record.usage);
+      if (usage) {
+        acc.inputTokens = asNumber(usage.inputTokens);
+        acc.outputTokens = asNumber(usage.outputTokens);
+        acc.cachedInputTokens = asNumber(usage.cacheReadInputTokens);
+      }
+      continue;
+    }
+
+    // Streaming: contentBlockStart
+    const blockStart = asRecord(record.contentBlockStart);
+    if (blockStart) {
+      const index = asNumber(blockStart.contentBlockIndex);
+      const start = asRecord(blockStart.start);
+      const toolUse = start ? asRecord(start.toolUse) : null;
+      if (toolUse && index !== null) {
+        byIndex.set(index, {
+          id: asString(toolUse.toolUseId) ?? "",
+          name: asString(toolUse.name) ?? "",
+          args: "",
+        });
+      }
+      continue;
+    }
+
+    // Streaming: contentBlockDelta
+    const blockDelta = asRecord(record.contentBlockDelta);
+    if (blockDelta) {
+      const index = asNumber(blockDelta.contentBlockIndex);
+      const delta = asRecord(blockDelta.delta);
+      if (index !== null && delta) {
+        const entry = byIndex.get(index);
+        if (entry) {
+          const fragment = asString(delta.input);
+          if (fragment) entry.args += fragment;
+        }
+      }
+      continue;
+    }
+
+    // Streaming: messageStop
+    const messageStop = asRecord(record.messageStop);
+    if (messageStop) {
+      acc.stopReason = asString(messageStop.stopReason) ?? acc.stopReason;
+      continue;
+    }
+
+    // Streaming: metadata (comes last, contains usage)
+    const metadata = asRecord(record.metadata);
+    if (metadata) {
+      const usage = asRecord(metadata.usage);
+      if (usage) {
+        acc.inputTokens = asNumber(usage.inputTokens);
+        acc.outputTokens = asNumber(usage.outputTokens);
+        acc.cachedInputTokens = asNumber(usage.cacheReadInputTokens);
+      }
+      continue;
+    }
+  }
+
+  for (const [, entry] of [...byIndex.entries()].sort((a, b) => a[0] - b[0])) {
+    acc.toolCalls.push({
+      id: entry.id,
+      name: entry.name,
+      arguments: entry.args,
+    });
+  }
+
+  // Extract model from the request path (Bedrock embeds it in the URL)
   return acc;
 }
 
@@ -389,7 +565,23 @@ function parseRequestBody(events: TraceEvent[]): {
     });
   };
 
-  let systemText = extractResultText(record.system ?? "");
+  // Handle system prompt: Anthropic uses string/array, Bedrock uses [{text:"..."}]
+  let systemText = "";
+  const systemField = record.system;
+  if (typeof systemField === "string") {
+    systemText = systemField;
+  } else if (Array.isArray(systemField)) {
+    for (const item of systemField) {
+      const rec = asRecord(item);
+      if (rec) {
+        const text = asString(rec.text);
+        systemText += text ?? extractResultText(rec.content ?? "");
+      } else if (typeof item === "string") {
+        systemText += item;
+      }
+    }
+  }
+
   for (const message of messages) {
     const msg = asRecord(message);
     if (!msg) continue;
@@ -403,13 +595,24 @@ function parseRequestBody(events: TraceEvent[]): {
     }
     for (const block of asArray(msg.content)) {
       const blockRecord = asRecord(block);
-      if (blockRecord?.type === "tool_result") {
+      if (!blockRecord) continue;
+      if (blockRecord.type === "tool_result") {
         add(asString(blockRecord.tool_use_id), blockRecord.content);
+      }
+      // Bedrock format: toolResult instead of tool_result
+      const toolResult = asRecord(blockRecord.toolResult);
+      if (toolResult) {
+        add(asString(blockRecord.toolUseId), toolResult.content);
       }
     }
   }
 
-  const tools = asArray(record.tools);
+  // Tools: Anthropic uses record.tools, Bedrock uses record.toolConfig.tools
+  let tools = asArray(record.tools);
+  if (tools.length === 0) {
+    const toolConfig = asRecord(record.toolConfig);
+    if (toolConfig) tools = asArray(toolConfig.tools);
+  }
   const context: ParsedContext = {
     messageCount: messages.length,
     systemTokens: estimateTokens(systemText),
@@ -540,6 +743,16 @@ export function summarizeMessages(events: TraceEvent[]): MessageStack {
   };
 }
 
+// Extract the model ID from a Bedrock request path like /model/{id}/converse-stream
+function extractBedrockModel(events: TraceEvent[]): string | null {
+  const req = events.find((e) => e.type === "request");
+  if (!req) return null;
+  const path = asString((req as Record<string, unknown>).path);
+  if (!path) return null;
+  const match = path.match(/\/model\/([^/]+)\//);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
 export function parseTrace(events: TraceEvent[]): ParsedTrace {
   const { toolResults, context } = parseRequestBody(events);
   const base: ParsedTrace = {
@@ -567,16 +780,36 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
   );
   const contentType = headerValue(responseEvent?.headers, "content-type") ?? "";
   const text = body.toString("utf8");
+  const isBinaryEventStream = contentType.includes(
+    "application/vnd.amazon.eventstream",
+  );
   const streaming =
+    isBinaryEventStream ||
     contentType.includes("text/event-stream") ||
     text.startsWith("data:") ||
     text.startsWith("event:");
-  const objects = streaming ? extractSSE(text) : parseWholeJson(text);
+
+  let objects: unknown[];
+  if (isBinaryEventStream) {
+    objects = extractBedrockEvents(body);
+  } else if (streaming) {
+    objects = extractSSE(text);
+  } else {
+    objects = parseWholeJson(text);
+  }
   if (objects.length === 0) return { ...base, streaming };
 
   if (looksAnthropic(objects)) {
+    const extracted = parseAnthropic(objects);
+    // When Anthropic events arrive via Bedrock binary event-stream, prefer the
+    // full model ID from the URL path (e.g. eu.anthropic.claude-opus-4-6-v1)
+    // over the shortened name in the response body.
+    const model = isBinaryEventStream
+      ? (extractBedrockModel(events) ?? extracted.model)
+      : extracted.model;
     return {
-      ...parseAnthropic(objects),
+      ...extracted,
+      model,
       format: "anthropic",
       toolResults,
       context,
@@ -592,6 +825,17 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
       streaming,
     };
   }
+  if (looksBedrock(objects)) {
+    const extracted = parseBedrock(objects);
+    return {
+      ...extracted,
+      model: extracted.model ?? extractBedrockModel(events),
+      format: "bedrock",
+      toolResults,
+      context,
+      streaming,
+    };
+  }
   return { ...base, streaming };
 }
 
@@ -600,12 +844,18 @@ export function computeCost(
   inputTokens: number | null,
   outputTokens: number | null,
   pricing: Record<string, ModelPricing>,
+  cachedInputTokens?: number | null,
 ): number | null {
   if (!model) return null;
   const rates = pricing[model];
   if (!rates) return null;
+  const totalInput = inputTokens ?? 0;
+  const cached = cachedInputTokens ?? 0;
+  const cacheRate = rates.cacheInputPerMTok ?? rates.inputPerMTok;
+  const nonCachedInput = Math.max(0, totalInput - cached);
   return (
-    ((inputTokens ?? 0) / 1_000_000) * rates.inputPerMTok +
+    (nonCachedInput / 1_000_000) * rates.inputPerMTok +
+    (cached / 1_000_000) * cacheRate +
     ((outputTokens ?? 0) / 1_000_000) * rates.outputPerMTok
   );
 }

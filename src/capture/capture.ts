@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import type { SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
-import { redactHeaders } from "./redact.js";
+import { redactHeaders, redactUrl } from "./redact.js";
 
 export interface RequestContext {
   sessionId: string;
@@ -54,7 +54,7 @@ class FileRequestTrace implements RequestTrace {
       requestId: ctx.requestId,
       provider: ctx.provider,
       method: ctx.method,
-      path: ctx.path,
+      path: redactUrl(ctx.path),
       httpVersion: ctx.httpVersion,
       headers: redactHeaders(ctx.headers),
     });
@@ -116,7 +116,7 @@ class FileRequestTrace implements RequestTrace {
       responseBytes: this.responseBytes,
       error: this.errorMessage,
     });
-    this.stream.end();
+    if (!this.stream.destroyed) this.stream.end();
     this.store.finishRequest(this.ctx.requestId, {
       status: this.status,
       latencyMs,
@@ -130,6 +130,7 @@ class FileRequestTrace implements RequestTrace {
 
 export class FileCapture implements Capture {
   private readonly tracesDir: string;
+  private readonly createdDirs = new Set<string>();
   private unattributedId: string | null = null;
   private unattributedLastSeen = 0;
 
@@ -163,7 +164,10 @@ export class FileCapture implements Capture {
     });
 
     const sessionDir = join(this.tracesDir, ctx.sessionId);
-    mkdirSync(sessionDir, { recursive: true });
+    if (!this.createdDirs.has(sessionDir)) {
+      mkdirSync(sessionDir, { recursive: true });
+      this.createdDirs.add(sessionDir);
+    }
     const traceFile = join(sessionDir, `${ctx.requestId}.ndjson`);
     const stream = createWriteStream(traceFile, { flags: "a" });
 

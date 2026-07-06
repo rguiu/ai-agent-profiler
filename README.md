@@ -31,7 +31,7 @@ Planned:
 - Benchmark task-runner harness (headless invocation, workspace reset, verify command).
 - UI search bar + full-text search over prompts/filenames; latency/cost-over-time charts; live auto-refresh.
 - MCP-server analysis (call frequency, payload sizes, token impact of an agent's own MCP servers).
-- Optional, off-by-default `--optimize` experiments (measured against a baseline) — see [`docs/aish-requirements.md`](docs/aish-requirements.md).
+- ~~Optional, off-by-default `--optimize` experiments~~ — **shipped** (7 strategies, configurable, -66% cost on benchmark). See [Optimize Layer](#optimize-layer).
 
 ## Dashboard preview
 
@@ -194,6 +194,61 @@ aap commands           # which shell commands cost the most
 ```
 
 See [`benchmarks/README.md`](benchmarks/README.md).
+
+## Optimize Layer
+
+The proxy includes an optional optimize layer that rewrites request bodies in-flight to
+reduce token waste in long sessions. Enable it with `--optimize` or in config:
+
+```
+aap serve --optimize
+```
+
+### Strategies
+
+| Strategy         | Default | What it does                                                              |
+| ---------------- | ------- | ------------------------------------------------------------------------- |
+| `dedup`          | ON      | Returns a stub for identical repeated tool calls (unchanged file reads)   |
+| `truncate`       | ON      | Head+tail truncation for results exceeding `truncateThreshold` bytes      |
+| `stablePrefix`   | ON      | Canonicalises tool definitions for byte-stable prompt-cache hits          |
+| `pruneStale`     | ON      | Replaces tool results older than `pruneAfterTurns` with 1-line summaries  |
+| `suppressReread` | ON      | Suppresses reads of files written within `suppressWithinTurns` turns      |
+| `collapseSystem` | ON      | Collapses repeated system prompts to a hash stub                          |
+| `stripToolDefs`  | OFF     | Removes tool definitions after `stripToolDefsAfter` requests (aggressive) |
+
+### Configuration
+
+All settings live under `[optimize]` in `config.toml`:
+
+```toml
+[optimize]
+enabled = true              # always optimize (or use --optimize flag)
+dedup = true
+truncate = true
+stablePrefix = true
+pruneStale = true
+suppressReread = true
+collapseSystem = true
+stripToolDefs = false       # experimental — may break if prompt cache evicts
+truncateThreshold = 4096    # bytes above which truncation kicks in
+pruneAfterTurns = 6         # prune results older than N assistant turns
+suppressWithinTurns = 2     # suppress re-reads within N turns of a write
+stripToolDefsAfter = 3      # strip tool defs after this many requests
+```
+
+### Benchmark results
+
+On the `iterative-fix` fixture (7 bugs, ~50 request session):
+
+| Metric             | Baseline | Optimized              | Change   |
+| ------------------ | -------- | ---------------------- | -------- |
+| Total input tokens | 1.83M    | 502K                   | **-73%** |
+| Cost               | $2.88    | $0.99                  | **-66%** |
+| Wall time          | 18m 14s  | 13m 39s                | **-25%** |
+| Task success       | pass     | pass (found more bugs) | ✓        |
+
+See [`benchmarks/REPORT-iterative-fix.md`](benchmarks/REPORT-iterative-fix.md) for the
+full analysis.
 
 ## Development
 

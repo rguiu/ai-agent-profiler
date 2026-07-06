@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { Config } from "../config/index.js";
 import type { Store } from "../store/index.js";
 import {
@@ -14,11 +14,11 @@ export interface ParseSummary {
   failed: number;
 }
 
-export function runParse(
+export async function runParse(
   store: Store,
   pricing: Config["pricing"],
   opts: { all: boolean },
-): ParseSummary {
+): Promise<ParseSummary> {
   const targets = store.requestsToParse(opts.all);
   const toolResults: ParsedToolResult[] = [];
   let parsed = 0;
@@ -26,13 +26,14 @@ export function runParse(
 
   for (const target of targets) {
     try {
-      const events = readTraceEvents(target.trace_file);
+      const events = await readTraceEvents(target.trace_file);
       const result = parseTrace(events);
       const cost = computeCost(
         result.model,
         result.inputTokens,
         result.outputTokens,
         pricing,
+        result.cachedInputTokens,
       );
       store.upsertMetrics({
         requestId: target.id,
@@ -70,8 +71,8 @@ export function runParse(
   return { total: targets.length, parsed, failed };
 }
 
-function readTraceEvents(file: string): TraceEvent[] {
-  const content = readFileSync(file, "utf8");
+async function readTraceEvents(file: string): Promise<TraceEvent[]> {
+  const content = await readFile(file, "utf8");
   const events: TraceEvent[] = [];
   for (const line of content.split("\n")) {
     const trimmed = line.trim();

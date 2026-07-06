@@ -1,6 +1,7 @@
 export {
   Store,
   openStore,
+  _isReadOnlyQuery,
   type RequestRow,
   type RequestFinish,
   type ParseTarget,
