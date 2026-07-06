@@ -7,6 +7,8 @@ export interface Route {
 // Bedrock SDK sends requests like /model/{id}/converse-stream — no prefix.
 const BEDROCK_PATH_RE = /^\/model\//;
 
+const SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
+
 export function parseRoute(
   pathname: string,
   providers: ReadonlySet<string>,
@@ -43,6 +45,7 @@ export function parseRoute(
   const second = secondSlash === -1 ? rest : rest.slice(0, secondSlash);
   const afterSecond = secondSlash === -1 ? "" : rest.slice(secondSlash);
   if (!providers.has(second)) return null;
+  if (!SAFE_SESSION_ID_RE.test(first)) return null;
 
   return {
     sessionId: first,

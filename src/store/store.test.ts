@@ -60,6 +60,18 @@ describe("isReadOnlyQuery", () => {
     expect(_isReadOnlyQuery("DROP TABLE sessions")).toBe(false);
     expect(_isReadOnlyQuery("PRAGMA journal_mode = DELETE")).toBe(false);
   });
+
+  it("allows keywords inside string literals (no false positives)", () => {
+    expect(
+      _isReadOnlyQuery("SELECT * FROM requests WHERE path LIKE '%DELETE%'"),
+    ).toBe(true);
+    expect(
+      _isReadOnlyQuery("SELECT * FROM requests WHERE method = 'UPDATE'"),
+    ).toBe(true);
+    expect(
+      _isReadOnlyQuery("SELECT * FROM sessions WHERE cwd = '/tmp/DROP TABLE'"),
+    ).toBe(true);
+  });
 });
 
 describe("openStore migrations", () => {

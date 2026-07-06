@@ -125,17 +125,33 @@ function extractSSE(text: string): unknown[] {
 
 // AWS Bedrock uses a binary event-stream format. Each frame contains a JSON
 // payload that we can extract by scanning for JSON objects in the raw bytes.
+// The scanner is string-aware: braces inside JSON string literals don't affect
+// depth tracking.
 function extractBedrockEvents(buf: Buffer): unknown[] {
   const objects: unknown[] = [];
   const text = buf.toString("utf8");
-  // Scan for JSON objects embedded in the binary event-stream
   let depth = 0;
   let start = -1;
+  let inString = false;
+  let escaped = false;
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === "{") {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"' && depth > 0) {
+      inString = true;
+    } else if (ch === "{") {
       if (depth === 0) start = i;
       depth++;
-    } else if (text[i] === "}") {
+    } else if (ch === "}") {
       depth--;
       if (depth === 0 && start >= 0) {
         try {

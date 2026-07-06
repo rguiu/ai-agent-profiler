@@ -201,25 +201,180 @@ At a glance — each capability and the already-implemented metric that justifie
 
 ---
 
-## Where does an optimisation run? AISH vs proxy `--optimize`
+## Where does an optimisation run? Three delivery vehicles
 
-Some capabilities here are **tool design** (belong in AISH) and some are **request/response
-rewriting** (could be enforced by the profiler proxy). This boundary is deliberately left
-open until measured; each capability above carries a hint, but the rule of thumb:
+The original vision framed AISH as a shell replacement. After reflection, three progressively
+riskier delivery vehicles are worth considering — ordered by adoption friction:
 
-- **AISH** — anything that requires new tool _semantics_ the agent invokes deliberately:
-  ranged/symbol reads (#1, #2), typed output (#7), batched verbs (#8), the shell itself (#9),
-  locate-and-read (#10).
-- **Proxy `--optimize` (candidate, not built)** — anything that rewrites the wire without the
-  agent's cooperation: summarising/truncating tool results (#3), de-duplicating repeated
-  observations (#4), pruning stale context with a stub notice (#6). These can be applied to an
-  _existing_ agent (no AISH required), which makes them attractive to prototype in the proxy.
+### Vehicle A: `aap serve --optimize` (proxy-level rewriting)
 
-**Hard constraint:** the profiler's default mode is transparent and **read-only** (VISION.md —
-"never changes requests"). Any wire-rewriting therefore may only exist as an **explicit,
-off-by-default `--optimize` mode**, and — like every AISH capability — must be justified by a
-baseline metric and must not regress task success. It is **not** built today; it is recorded
-here so the AISH-vs-proxy decision is made on evidence rather than by default.
+**Friction:** zero — the agent doesn't know it's being optimized. The proxy already sits in
+the right position. Apply transformations to requests/responses without agent cooperation.
+
+**What fits here:** capabilities that rewrite the wire without changing tool semantics:
+- **Truncate/summarise large tool results** (#3) — cap at N tokens, append a handle
+- **De-duplicate repeated observations** (#4) — return "unchanged since turn 7" stub
+- **Prune stale context** (#6) — rewrite request messages to drop tool results the model
+  hasn't referenced in K turns
+- **Stabilise prefix for prompt caching** (#5) — reorder/canonicalise tool definitions so
+  the byte prefix stays stable across requests
+
+**Hard constraint:** this mode is **explicit, off-by-default**. The profiler's default is
+transparent read-only. Optimizations must not regress task success. Each must be toggled
+individually (e.g. `--optimize=truncate,dedup`) so we can measure contribution.
+
+### Vehicle B: AISH-as-MCP-server
+
+**Friction:** low — the agent gains new tools alongside its existing ones (bash, read, etc).
+No shell replacement, no special integration. Just register additional MCP tools that happen
+to be smarter.
+
+**What fits here:** capabilities that offer better _alternatives_ the agent can choose:
+- Ranged/symbol reads (#1, #2) — `aish_read(file, symbol)`, `aish_find_def(name)`
+- Locate-and-read (#10) — `aish_open(name)` that auto-resolves path
+- Structured output tools (#7) — alternatives to `ls`/`grep` returning JSON
+
+The profiler data tells you which tools to build: the `top_tools` and `aap commands`
+breakdown shows which bash verbs are most called and most expensive. Build MCP replacements
+for the top 3-5 and measure adoption + token savings.
+
+### Vehicle C: AISH-as-shell (full replacement)
+
+**Friction:** high — requires forking agent config, replacing the bash tool, likely
+fine-tuning or heavy system-prompt engineering for adoption.
+
+**What fits here:** the full vision from capabilities #8 and #9. Only worth pursuing if
+Vehicle A + B have proven the individual optimizations work and the remaining gap is "the
+agent still reaches for bash out of habit."
+
+### Recommended path
+
+```
+Vehicle A (--optimize)  →  measure  →  Vehicle B (MCP tools)  →  measure  →  Vehicle C (if needed)
+```
+
+Start with `--optimize` because:
+1. Zero adoption friction — works with any agent today
+2. The proxy already has the data to decide when to optimise (it sees repeated reads, growing context, large results)
+3. Each optimization is independently measurable via `aap compare` (optimized vs baseline)
+4. If the proxy-level optimizations get 60%+ of the theoretical savings, the case for a full shell replacement weakens — which is useful information
+
+---
+
+## `aap serve --optimize` — Design
+
+### Detection → Action model
+
+The proxy already captures enough signal to detect optimizable patterns in real-time (not
+post-hoc). Each optimization is a detector + an action:
+
+| Optimization | Detector (real-time signal) | Action (response rewriting) | Expected savings |
+|---|---|---|---|
+| **Truncate large results** | `response_body` byte count exceeds threshold (e.g. >8KB) | Truncate to head+tail with `[...N lines omitted, use expand(handle) for full]` | 50-80% of result tokens for big outputs |
+| **Dedup repeated reads** | Same (tool_name, arguments) seen earlier in session with same file mtime | Replace result with `[unchanged since turn K — N tokens omitted]` | 100% of duplicate result tokens |
+| **Prune stale context** | Request body messages: tool_result older than K turns, never referenced in subsequent assistant messages | Remove content, replace with `[pruned — available via recall(id)]` | Compound: reduces input_tokens growth |
+| **Stable tool prefix** | Detect tool definitions changed order/whitespace between requests | Canonicalise tool JSON for byte-stable prefix | Improves cache hit rate (measured via cached_input_tokens) |
+
+### Architecture
+
+```
+request  →  [detect patterns in request body]  →  [rewrite if applicable]  →  upstream
+response ←  [detect patterns in response]      ←  [rewrite if applicable]  ←  upstream
+```
+
+The `--optimize` flag activates an `OptimizeLayer` that wraps the normal `forward()`:
+- It maintains per-session state (seen tool calls, turn counter, message hashes)
+- On request: can rewrite message bodies (prune stale context)
+- On response: can rewrite tool results (truncate, dedup)
+- Every rewriting is logged as a trace event (`type: "optimize"`) so the profiler itself can
+  measure what it did and correlate with outcomes
+
+### Metrics for success
+
+Each optimization's value is measured by comparing sessions with vs without it:
+- `aap compare <optimized_session> <baseline_session>` → shows delta in tokens, cost, requests
+- A new `optimize_actions` table records what the optimizer did (type, tokens_saved, turn)
+- The `recommend` engine gains a new rec kind: `optimization_opportunity` — fires in
+  non-optimized sessions to show "this session would have saved X tokens with --optimize"
+
+---
+
+## Detecting optimizable patterns — Easy targets with big benefits
+
+Based on the profiler's existing data model, these are the highest-value patterns to detect,
+ordered by expected ROI:
+
+### 1. Repeated file reads (BIGGEST WIN)
+
+**Signal:** Same `(tool_name, arguments)` where tool is read-like, appearing 3+ times.
+**Already detected:** `repeated_file_read` recommendation.
+**Why it's big:** In real sessions, agents re-read the same file 5-10x as context grows and
+the model "forgets" it already has the content. Each re-read pays full token cost.
+**Optimization:** On the Nth read of the same file (N≥2), if mtime unchanged, return a
+compact stub: `[file unchanged — content identical to turn K, ~N tokens]`.
+**Estimated savings:** 30-50% of total read-tool result tokens (the single largest category
+in most sessions).
+
+### 2. Large tool results (EASY WIN)
+
+**Signal:** `tool_calls.result_tokens > threshold` (e.g. >2000 tokens for a single call).
+**Already detected:** `high_amplification` recommendation.
+**Why it's big:** One `cat` of a large file or `ls -R` of a deep tree can inject 10K+ tokens.
+The agent usually only needs a fraction.
+**Optimization:** Truncate to first 50 + last 20 lines with a summary line:
+`[showing 70 of 847 lines — use expand(handle) for specific ranges]`.
+**Estimated savings:** 50-80% of individual large results. Conservative 20-30% of total
+session result tokens (large results are few but dominate by volume).
+
+### 3. Context growth from stale tool results (COMPOUND WIN)
+
+**Signal:** `analysis.growth` shows input_tokens growing >3x over a session. The growth
+is driven by the message history accumulating old tool results that are never referenced
+again.
+**Already detected:** `context_growth` recommendation.
+**Why it's big:** In a 30-request session, if input tokens grow from 5K to 80K, the agent
+is paying for 75K tokens of accumulated history on every turn. Most of that is stale tool
+results from turns 1-10.
+**Optimization:** On request rewrite: identify tool_result messages older than K turns that
+were not referenced (substring match) in any subsequent assistant message. Replace content
+with a stub. This is the riskiest optimization (could prune something needed) but also the
+highest-value for long sessions.
+**Estimated savings:** 40-60% of input token growth in sessions >20 requests.
+
+### 4. Unstable tool definition prefix (FREE WIN)
+
+**Signal:** `metrics.cached_input_tokens` is low relative to `metrics.input_tokens` AND
+tool definitions are present. The system prompt + tools form a prefix that should be
+byte-stable for provider caching — but agents sometimes vary whitespace, key order, or
+tool ordering between requests.
+**Already detected:** Partially via `context_duplication` rec + cache hit ratio.
+**Why it's big:** Anthropic charges 90% less for cached input tokens. If the first 20K
+tokens (system + tools) cache-hit on every request, a 30-request session saves ~540K tokens
+worth of cost. But if the prefix varies by even one byte, the cache misses.
+**Optimization:** Canonicalise tool definitions (sort keys, stable JSON serialization) on
+request rewrite. Zero risk — semantically identical.
+**Estimated savings:** Depends on current cache hit rate. If going from 30% → 90% hit on a
+20K-token prefix across 30 requests: saves ~$0.30-1.00 per session at Anthropic rates.
+
+### 5. Search→read round-trip chains (MODERATE WIN)
+
+**Signal:** A search-category shell command (`find`, `grep`, `rg`, `ls`) followed within
+2 turns by a read of a file that appeared in the search output.
+**Already detected:** `inefficient_search` recommendation.
+**Why it's big:** Each round-trip costs a full request (re-sending system + tools + history).
+3 search→read chains = 3 extra requests × full context.
+**Optimization:** This one is better served by Vehicle B (an MCP tool that combines search +
+read). At the proxy level, the best we can do is surface the pattern aggressively in
+recommendations so users know to add better tools to their agent.
+**Estimated savings:** 2-3 fewer requests per task × per-request overhead.
+
+### Priority order for implementation
+
+1. **Repeated reads** — highest confidence, already detected, simple to implement
+2. **Truncate large results** — simple heuristic, big per-occurrence savings
+3. **Stable prefix** — zero risk, pure cost optimization, no semantic changes
+4. **Stale context pruning** — highest total savings but riskiest, needs careful measurement
+5. **Search→read** — better addressed via MCP tools (Vehicle B)
 
 ---
 
@@ -249,6 +404,7 @@ profiler first if the corresponding capability becomes a priority:
 
 ## Non-goals (inherited from the vision)
 
-- AISH is not an assistant; the profiler is not an optimiser.
-- No AISH capability without a profiler metric justifying it and a target to beat.
-- No capability that improves a metric while regressing task success.
+- AISH is not an assistant; the profiler in **default mode** is not an optimiser (read-only).
+- `--optimize` mode is the explicit opt-in for wire rewriting — never implicit.
+- No optimisation ships without a profiler metric justifying it and a target to beat.
+- No optimisation that improves a metric while regressing task success.

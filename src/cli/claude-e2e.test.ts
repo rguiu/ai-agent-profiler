@@ -224,7 +224,7 @@ describe("Claude Code end-to-end", () => {
     await new Promise((r) => setTimeout(r, 100));
 
     // Run parse (as `aap parse` would)
-    const summary = runParse(store, config.pricing, { all: false });
+    const summary = await runParse(store, config.pricing, { all: false });
     expect(summary.parsed).toBe(1);
     expect(summary.failed).toBe(0);
 
@@ -333,7 +333,7 @@ describe("Claude Code end-to-end", () => {
 
     await new Promise((r) => setTimeout(r, 100));
 
-    const summary = runParse(store, config.pricing, { all: false });
+    const summary = await runParse(store, config.pricing, { all: false });
     expect(summary.parsed).toBe(1);
 
     const db = new Database(join(dir, "aap.sqlite"));

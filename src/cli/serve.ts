@@ -8,7 +8,8 @@ import { openStore } from "../store/index.js";
 const PARSE_INTERVAL_MS = 3000;
 const SHUTDOWN_TIMEOUT_MS = 5000;
 
-export function serve(): void {
+export function serve(args?: string[]): void {
+  const optimize = args?.includes("--optimize") ?? false;
   const config = loadConfig();
   const registry = new SessionRegistry();
   const store = openStore(config.storage.dir);
@@ -38,6 +39,7 @@ export function serve(): void {
     capture,
     store,
     consoleRequestLogger(),
+    optimize ? { optimize: true } : undefined,
   );
 
   server.listen(config.server.port, config.server.host, () => {
@@ -46,6 +48,7 @@ export function serve(): void {
     );
     console.log(`providers: ${Object.keys(config.providers).join(", ")}`);
     console.log(`storage: ${config.storage.dir}`);
+    if (optimize) console.log(`optimize: ON (dedup, truncate, stable-prefix)`);
     if (rows.length > 0) {
       console.log(`hydrated ${rows.length} session(s) from store`);
     }
@@ -57,16 +60,18 @@ export function serve(): void {
   const parseTimer = setInterval(() => {
     if (parsing) return;
     parsing = true;
-    try {
-      const summary = runParse(store, config.pricing, { all: false });
-      if (summary.parsed > 0) {
-        console.log(`parsed ${summary.parsed} request(s)`);
-      }
-    } catch (err) {
-      console.error(`background parse failed: ${(err as Error).message}`);
-    } finally {
-      parsing = false;
-    }
+    runParse(store, config.pricing, { all: false })
+      .then((summary) => {
+        if (summary.parsed > 0) {
+          console.log(`parsed ${summary.parsed} request(s)`);
+        }
+      })
+      .catch((err: Error) => {
+        console.error(`background parse failed: ${err.message}`);
+      })
+      .finally(() => {
+        parsing = false;
+      });
   }, PARSE_INTERVAL_MS);
   parseTimer.unref();
 

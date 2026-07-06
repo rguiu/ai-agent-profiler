@@ -538,6 +538,61 @@ describe("Bedrock format", () => {
     expect(result.toolResults).toHaveLength(1);
     expect(result.toolResults[0]?.id).toBe("tu_1");
   });
+
+  it("handles braces inside string values without corrupting depth", () => {
+    // Bedrock event wrapping: the inner payload has braces in a string literal
+    const innerEvent = {
+      contentBlockDelta: {
+        delta: { text: 'code: if (x) { return "{}" }' },
+        contentBlockIndex: 0,
+      },
+    };
+    const bedrockFrame = JSON.stringify({
+      bytes: Buffer.from(JSON.stringify(innerEvent)).toString("base64"),
+    });
+    // Simulate multiple frames including one with confusing braces in text
+    const metadataFrame = JSON.stringify({
+      bytes: Buffer.from(
+        JSON.stringify({
+          messageStop: { stopReason: "end_turn" },
+        }),
+      ).toString("base64"),
+    });
+    const startFrame = JSON.stringify({
+      bytes: Buffer.from(
+        JSON.stringify({
+          messageStart: {
+            role: "assistant",
+          },
+        }),
+      ).toString("base64"),
+    });
+    const metaFrame = JSON.stringify({
+      bytes: Buffer.from(
+        JSON.stringify({
+          metadata: { usage: { inputTokens: 50, outputTokens: 10 }, metrics: {} },
+        }),
+      ).toString("base64"),
+    });
+    // Binary padding between frames
+    const payload = Buffer.from(
+      `\x00\x00${startFrame}\x00\x00${bedrockFrame}\x00\x00${metadataFrame}\x00\x00${metaFrame}\x00`,
+    );
+    const events: TraceEvent[] = [
+      { type: "request", path: "/model/m/converse-stream", headers: {} },
+      {
+        type: "response",
+        status: 200,
+        headers: { "content-type": "application/vnd.amazon.eventstream" },
+      },
+      { type: "response_body", data: payload.toString("base64") },
+      { type: "end" },
+    ];
+    const result = parseTrace(events);
+    expect(result.format).toBe("bedrock");
+    expect(result.inputTokens).toBe(50);
+    expect(result.outputTokens).toBe(10);
+  });
 });
 
 describe("computeCost", () => {

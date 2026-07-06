@@ -386,3 +386,27 @@ svg.chart circle {
 .pill.cat-other {
   color: var(--muted);
 }
+
+.pagination {
+  display: flex;
+  gap: 4px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.page-btn {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.page-btn:hover {
+  border-color: var(--accent);
+}
+.page-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}

@@ -36,7 +36,7 @@ set -eu
 usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
 
 AGENT=""; FIXTURE="csv-parser"; REPO=""; DIR=""; TASKS_FILE=""; DRY=0
-DEFAULT_VERIFY=""; NOVERIFY=0
+DEFAULT_VERIFY=""; NOVERIFY=0; TAG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,6 +46,7 @@ while [ $# -gt 0 ]; do
     --tasks) TASKS_FILE="${2:?--tasks needs a file}"; shift 2 ;;
     --verify) DEFAULT_VERIFY="${2:?--verify needs a command}"; shift 2 ;;
     --no-verify) NOVERIFY=1; shift ;;
+    --tag) TAG="${2:?--tag needs a value (e.g. baseline, optimize)}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 1 ;;
@@ -104,16 +105,17 @@ run_task() {
   scratch="$SCRATCH/$id"
   TASK_N=$((TASK_N + 1))
   sid="bench-${AGENT}-${id}-${RUN_STAMP}-${TASK_N}"
+  META_ARGS="--meta task=$id --meta agent=$AGENT"
+  [ -n "$TAG" ] && META_ARGS="$META_ARGS --meta run=$TAG"
+
   if [ "$DRY" = "1" ]; then
-    echo "[$id] (cd $scratch && AAP_SESSION_ID=$sid aap run --meta task=$id --meta agent=$AGENT $AGENT $INVOKE \"$prompt\")"
+    echo "[$id] (cd $scratch && AAP_SESSION_ID=$sid aap run $META_ARGS $AGENT $INVOKE \"$prompt\")"
     [ -n "$verify" ] && echo "      verify: (cd $scratch && $verify) && aap tag $sid verify=pass"
     return 0
   fi
   rm -rf "$scratch"; mkdir -p "$scratch"; cp -R "$SRC"/. "$scratch"; rm -rf "$scratch/.git" "$scratch/TASKS"
-  echo ">>> task=$id agent=$AGENT scratch=$scratch"
-  # stdin from /dev/null so the agent can't consume the task-loop's stdin (the TASKS file).
-  # AAP_SESSION_ID pins the session so we can tag it with the verify result afterwards.
-  ( cd "$scratch" && AAP_SESSION_ID="$sid" aap run --meta "task=$id" --meta "agent=$AGENT" "$AGENT" $INVOKE "$prompt" </dev/null ) || true
+  echo ">>> task=$id agent=$AGENT${TAG:+ run=$TAG} scratch=$scratch"
+  ( cd "$scratch" && AAP_SESSION_ID="$sid" aap run $META_ARGS "$AGENT" $INVOKE "$prompt" </dev/null ) || true
 
   [ -n "$verify" ] || return 0
   echo ">>> verify [$id]: $verify"

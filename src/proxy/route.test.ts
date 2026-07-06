@@ -80,4 +80,14 @@ describe("parseRoute", () => {
       parseRoute("/model/some-model/converse", providers),
     ).toBeNull();
   });
+
+  it("rejects path-traversal session IDs", () => {
+    expect(parseRoute("/../../etc/anthropic/v1/messages", providers)).toBeNull();
+    expect(parseRoute("/../foo/openai/v1/chat", providers)).toBeNull();
+  });
+
+  it("rejects session IDs with special characters", () => {
+    expect(parseRoute("/foo bar/anthropic/v1/messages", providers)).toBeNull();
+    expect(parseRoute("/foo%2F../anthropic/v1/messages", providers)).toBeNull();
+  });
 });

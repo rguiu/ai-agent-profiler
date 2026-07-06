@@ -195,13 +195,14 @@ async function sessions() {
   app.innerHTML = `<h2>Sessions</h2>${sessionsTable(list)}`;
 }
 
-async function sessionDetail(id) {
-  const [{ session, requests, analysis, recommendations }, commands] =
-    await Promise.all([
-      api(`/sessions/${encodeURIComponent(id)}`),
-      api(`/commands?session=${encodeURIComponent(id)}`),
-    ]);
-  const rows = requests
+const PAGE_SIZE = 100;
+
+function paginatedRequestsTable(requests, page) {
+  if (!requests.length) return `<p class="empty">No requests.</p>`;
+  const totalPages = Math.ceil(requests.length / PAGE_SIZE);
+  const start = page * PAGE_SIZE;
+  const pageItems = requests.slice(start, start + PAGE_SIZE);
+  const rows = pageItems
     .map(
       (r) => `<tr>
       <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a></td>
@@ -220,6 +221,42 @@ async function sessionDetail(id) {
     </tr>`,
     )
     .join("");
+  const pagination =
+    totalPages > 1
+      ? `<div class="pagination" data-target="requests-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === page ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
+      : "";
+  return `<table><thead><tr>
+      <th>Request</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
+      <th class="num">Latency</th><th>Model</th><th class="num">In</th><th class="num">Out</th>
+      <th>Stop</th><th class="num">Tools</th><th class="num">Cost</th>
+    </tr></thead><tbody>${rows}</tbody></table>${pagination}`;
+}
+
+async function sessionDetail(id) {
+  const [{ session, requests, analysis, recommendations }, commands] =
+    await Promise.all([
+      api(`/sessions/${encodeURIComponent(id)}`),
+      api(`/commands?session=${encodeURIComponent(id)}`),
+    ]);
+
+  let currentPage = 0;
+
+  function renderPage() {
+    const el = document.getElementById("requests-container");
+    if (el) el.innerHTML = paginatedRequestsTable(requests, currentPage);
+    bindPagination();
+  }
+
+  function bindPagination() {
+    const btns = document.querySelectorAll(".pagination[data-target='requests-page'] .page-btn");
+    btns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        currentPage = Number(btn.dataset.page);
+        renderPage();
+      });
+    });
+  }
+
   app.innerHTML = `
     <div class="crumb"><a href="#/sessions">Sessions</a> / ${shortId(session.id)}</div>
     <h2>Session ${shortId(session.id)}</h2>
@@ -243,15 +280,7 @@ async function sessionDetail(id) {
     <h2>Recommendations</h2>
     ${recommendationsHtml(recommendations)}
     <h2>Requests (${requests.length})</h2>
-    ${
-      requests.length
-        ? `<table><thead><tr>
-      <th>Request</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
-      <th class="num">Latency</th><th>Model</th><th class="num">In</th><th class="num">Out</th>
-      <th>Stop</th><th class="num">Tools</th><th class="num">Cost</th>
-    </tr></thead><tbody>${rows}</tbody></table>`
-        : `<p class="empty">No requests.</p>`
-    }
+    <div id="requests-container">${paginatedRequestsTable(requests, currentPage)}</div>
     <h2>Context growth</h2>
     ${growthChart(analysis.growth)}
     <h2>Context cost</h2>
@@ -262,6 +291,7 @@ async function sessionDetail(id) {
     ${commandsTable(commands)}
     <h2>Repeated tool calls</h2>
     ${repeatedTable(analysis.repeated)}`;
+  bindPagination();
 }
 
 function recommendationsHtml(recs) {
