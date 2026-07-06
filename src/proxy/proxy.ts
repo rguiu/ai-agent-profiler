@@ -86,9 +86,18 @@ function handle(
     });
   }
 
+  const extraHeaders: Record<string, string> = {};
+  if (route.sessionId) {
+    const session = registry.get(route.sessionId);
+    if (session?.meta?.armada_node) {
+      extraHeaders["x-armada-node"] = session.meta.armada_node;
+    }
+  }
+
   forward(req, res, provider.upstream, route.upstreamPath + search, {
     trace,
     logger,
+    extraHeaders,
     meta: {
       sessionId: route.sessionId,
       provider: route.provider,
@@ -165,6 +174,7 @@ function registerSession(
 interface ForwardObs {
   trace?: RequestTrace;
   logger?: RequestLogger;
+  extraHeaders?: Record<string, string>;
   meta: Omit<
     RequestLogEntry,
     "status" | "latencyMs" | "responseBytes" | "error"
@@ -178,7 +188,7 @@ function forward(
   pathWithQuery: string,
   obs: ForwardObs,
 ): void {
-  const { trace, logger, meta } = obs;
+  const { trace, logger, extraHeaders, meta } = obs;
   const startedAt = Date.now();
   let status: number | null = null;
   let responseBytes = 0;
@@ -216,6 +226,9 @@ function forward(
   const headers: OutgoingHttpHeaders = { ...req.headers };
   for (const name of HOP_BY_HOP) delete headers[name];
   headers["host"] = base.host;
+  if (extraHeaders) {
+    for (const [k, v] of Object.entries(extraHeaders)) headers[k] = v;
+  }
 
   if (trace) {
     req.on("data", (chunk: Buffer) => trace.requestChunk(chunk));
