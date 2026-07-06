@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseRoute } from "./route.js";
 
 const providers = new Set(["anthropic", "openai"]);
+const withBedrock = new Set(["anthropic", "openai", "bedrock"]);
 
 describe("parseRoute", () => {
   it("parses session + provider + path", () => {
@@ -48,5 +49,35 @@ describe("parseRoute", () => {
     expect(parseRoute("/sid/openai/v1//foo", providers)?.upstreamPath).toBe(
       "/v1//foo",
     );
+  });
+
+  it("routes Bedrock /model/ paths with active session", () => {
+    expect(
+      parseRoute(
+        "/model/eu.anthropic.claude-opus-4-6-v1/converse-stream",
+        withBedrock,
+        "session-abc",
+      ),
+    ).toEqual({
+      sessionId: "session-abc",
+      provider: "bedrock",
+      upstreamPath: "/model/eu.anthropic.claude-opus-4-6-v1/converse-stream",
+    });
+  });
+
+  it("routes Bedrock /model/ paths without active session", () => {
+    expect(
+      parseRoute("/model/some-model/converse", withBedrock),
+    ).toEqual({
+      sessionId: null,
+      provider: "bedrock",
+      upstreamPath: "/model/some-model/converse",
+    });
+  });
+
+  it("does not route /model/ when bedrock provider is not configured", () => {
+    expect(
+      parseRoute("/model/some-model/converse", providers),
+    ).toBeNull();
   });
 });

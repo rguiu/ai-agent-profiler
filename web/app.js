@@ -167,7 +167,7 @@ function sessionsTable(sessions) {
   if (!sessions.length) return `<p class="empty">No sessions captured yet.</p>`;
   return `<table>
     <thead><tr>
-      <th>Session</th><th>Client</th><th>cwd</th>
+      <th>Session</th><th>Node</th><th>cwd</th>
       <th class="num">Reqs</th><th class="num">In</th><th class="num">Out</th>
       <th class="num">Tools</th><th class="num">Cost</th><th>Last seen</th>
     </tr></thead>
@@ -176,7 +176,7 @@ function sessionsTable(sessions) {
       .map(
         (s) => `<tr>
       <td><a class="mono" href="#/sessions/${encodeURIComponent(s.id)}">${shortId(s.id)}</a></td>
-      <td>${esc(s.client) || "<span class='muted'>—</span>"}</td>
+      <td>${esc(s.meta && s.meta.armada_node || s.client) || "<span class='muted'>—</span>"}</td>
       <td class="mono muted">${esc(s.cwd) || "—"}</td>
       <td class="num">${num(s.request_count)}</td>
       <td class="num">${num(s.input_tokens)}</td>

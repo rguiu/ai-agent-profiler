@@ -55,14 +55,13 @@ export function sessions(args: string[]): void {
       return;
     }
     console.log(
-      `${pad("SESSION", 10)}${pad("TASK", 14)}${pad("AGENT", 10)}${pad("REQS", 6)}${pad("IN", 10)}${pad("OUT", 8)}${pad("COST", 10)}CWD`,
+      `${pad("SESSION", 10)}${pad("NODE", 22)}${pad("REQS", 6)}${pad("IN", 10)}${pad("OUT", 8)}${pad("COST", 10)}CWD`,
     );
     for (const s of rows) {
-      const task = s.meta?.task ?? "";
-      const agent = s.meta?.agent ?? s.client ?? "";
+      const node = s.meta?.armada_node ?? s.meta?.task ?? s.client ?? "";
       const cost = s.cost ? `$${s.cost.toFixed(4)}` : "$0";
       console.log(
-        `${pad(s.id.slice(0, 8), 10)}${pad(task || "-", 14)}${pad(agent || "-", 10)}${pad(String(s.request_count), 6)}${pad(num(s.input_tokens), 10)}${pad(num(s.output_tokens), 8)}${pad(cost, 10)}${s.cwd ?? ""}`,
+        `${pad(s.id.slice(0, 8), 10)}${pad(node || "-", 22)}${pad(String(s.request_count), 6)}${pad(num(s.input_tokens), 10)}${pad(num(s.output_tokens), 8)}${pad(cost, 10)}${s.cwd ?? ""}`,
       );
     }
   } finally {

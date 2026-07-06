@@ -4,10 +4,24 @@ export interface Route {
   upstreamPath: string;
 }
 
+// Bedrock SDK sends requests like /model/{id}/converse-stream — no prefix.
+const BEDROCK_PATH_RE = /^\/model\//;
+
 export function parseRoute(
   pathname: string,
   providers: ReadonlySet<string>,
+  bedrockSessionId?: string | null,
 ): Route | null {
+  // Bedrock paths: AWS SDK uses the endpoint as host-only and sets an absolute
+  // path (/model/{modelId}/converse-stream). Match these before normal routing.
+  if (providers.has("bedrock") && BEDROCK_PATH_RE.test(pathname)) {
+    return {
+      sessionId: bedrockSessionId ?? null,
+      provider: "bedrock",
+      upstreamPath: pathname,
+    };
+  }
+
   const trimmed = pathname.startsWith("/") ? pathname.slice(1) : pathname;
   if (trimmed.length === 0) return null;
 

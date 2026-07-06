@@ -32,11 +32,11 @@ export function buildProviderEnv(
     if (varName) out[varName] = `${origin}/${sessionId}/${name}`;
   }
 
-  // Bedrock: when Claude Code uses AWS Bedrock, override the SDK endpoint
-  // so requests flow through the proxy instead of direct to AWS.
+  // Bedrock: Claude Code uses ANTHROPIC_BEDROCK_BASE_URL (not the AWS SDK env var).
+  // The SDK sends requests to /model/{id}/converse-stream on this host.
   const useBedrock = env?.CLAUDE_CODE_USE_BEDROCK;
   if (useBedrock && useBedrock !== "0" && config.providers.bedrock) {
-    out.AWS_ENDPOINT_URL_BEDROCK_RUNTIME = `${origin}/${sessionId}/bedrock`;
+    out.ANTHROPIC_BEDROCK_BASE_URL = origin;
   }
 
   return out;
@@ -88,6 +88,11 @@ export async function run(args: string[]): Promise<void> {
   const origin = `http://${host}:${config.server.port}`;
   const cwd = process.cwd();
 
+  const overrides = buildProviderEnv(agent, config, origin, sessionId, process.env);
+  if (overrides.ANTHROPIC_BEDROCK_BASE_URL) {
+    meta.bedrock = "1";
+  }
+
   const session: SessionInfo = {
     id: sessionId,
     client: agent,
@@ -97,8 +102,6 @@ export async function run(args: string[]): Promise<void> {
     meta: Object.keys(meta).length > 0 ? meta : null,
   };
   await registerSession(origin, session);
-
-  const overrides = buildProviderEnv(agent, config, origin, sessionId, process.env);
   const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
 
   console.error(`aap: session ${sessionId} (cwd ${cwd})`);

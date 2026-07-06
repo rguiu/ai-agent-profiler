@@ -12,6 +12,7 @@ import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
+import { forwardBedrock } from "./bedrock.js";
 import { parseRoute } from "./route.js";
 
 const HOP_BY_HOP: ReadonlySet<string> = new Set([
@@ -25,6 +26,10 @@ const HOP_BY_HOP: ReadonlySet<string> = new Set([
   "upgrade",
 ]);
 
+export interface ProxyState {
+  activeBedrockSession: string | null;
+}
+
 export function createProxyServer(
   config: Config,
   registry: SessionRegistry,
@@ -33,8 +38,16 @@ export function createProxyServer(
   logger?: RequestLogger,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
+  // Initialize activeBedrockSession from hydrated registry (survives proxy restart)
+  let initial: string | null = null;
+  if (providers.has("bedrock")) {
+    for (const s of registry.list()) {
+      if (s.meta?.bedrock === "1") initial = s.id;
+    }
+  }
+  const state: ProxyState = { activeBedrockSession: initial };
   return http.createServer((req, res) => {
-    handle(req, res, config, providers, registry, capture, store, logger);
+    handle(req, res, config, providers, registry, state, capture, store, logger);
   });
 }
 
@@ -44,6 +57,7 @@ function handle(
   config: Config,
   providers: ReadonlySet<string>,
   registry: SessionRegistry,
+  state: ProxyState,
   capture?: Capture,
   store?: Store,
   logger?: RequestLogger,
@@ -53,11 +67,11 @@ function handle(
   const pathname = queryStart === -1 ? rawUrl : rawUrl.slice(0, queryStart);
   const search = queryStart === -1 ? "" : rawUrl.slice(queryStart);
 
-  if (handleControl(req, res, pathname, registry, capture)) return;
+  if (handleControl(req, res, pathname, registry, state, capture)) return;
   if (handleUi(req, res, pathname)) return;
   if (store && handleApi(req, res, pathname, store)) return;
 
-  const route = parseRoute(pathname, providers);
+  const route = parseRoute(pathname, providers, state.activeBedrockSession);
   if (!route) {
     sendError(res, 404, `No provider route for "${pathname}"`);
     return;
@@ -94,6 +108,29 @@ function handle(
     }
   }
 
+  // Bedrock requires SigV4 re-signing — the original signature is for the proxy host.
+  if (route.provider === "bedrock") {
+    const upstreamUrl = new URL(provider.upstream);
+    const region = upstreamUrl.hostname.split(".")[1] ?? "us-east-1";
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      trace?.finish();
+    };
+    forwardBedrock(req, res, {
+      upstreamHost: upstreamUrl.hostname,
+      path: route.upstreamPath + search,
+      region,
+      extraHeaders: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
+      onRequestChunk: (chunk) => trace?.requestChunk(chunk),
+      onResponse: (status, headers) => trace?.response(status, undefined, headers as Record<string, string>),
+      onResponseChunk: (chunk) => trace?.responseChunk(chunk),
+      onFinish: finish,
+    });
+    return;
+  }
+
   forward(req, res, provider.upstream, route.upstreamPath + search, {
     trace,
     logger,
@@ -112,6 +149,7 @@ function handleControl(
   res: ServerResponse,
   pathname: string,
   registry: SessionRegistry,
+  state: ProxyState,
   capture?: Capture,
 ): boolean {
   if (pathname === "/health") {
@@ -124,7 +162,7 @@ function handleControl(
       return true;
     }
     if (req.method === "POST") {
-      registerSession(req, res, registry, capture);
+      registerSession(req, res, registry, state, capture);
       return true;
     }
   }
@@ -135,6 +173,7 @@ function registerSession(
   req: IncomingMessage,
   res: ServerResponse,
   registry: SessionRegistry,
+  state: ProxyState,
   capture?: Capture,
 ): void {
   let body = "";
@@ -167,6 +206,9 @@ function registerSession(
     };
     registry.register(session);
     capture?.upsertSession(session);
+    if (session.meta?.bedrock === "1") {
+      state.activeBedrockSession = session.id;
+    }
     sendJson(res, 200, { ok: true });
   });
 }

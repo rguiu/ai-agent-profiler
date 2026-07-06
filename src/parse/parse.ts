@@ -128,7 +128,7 @@ function extractSSE(text: string): unknown[] {
 function extractBedrockEvents(buf: Buffer): unknown[] {
   const objects: unknown[] = [];
   const text = buf.toString("utf8");
-  // Scan for JSON objects embedded in the binary stream
+  // Scan for JSON objects embedded in the binary event-stream
   let depth = 0;
   let start = -1;
   for (let i = 0; i < text.length; i++) {
@@ -139,7 +139,22 @@ function extractBedrockEvents(buf: Buffer): unknown[] {
       depth--;
       if (depth === 0 && start >= 0) {
         try {
-          objects.push(JSON.parse(text.slice(start, i + 1)));
+          const obj = JSON.parse(text.slice(start, i + 1)) as Record<
+            string,
+            unknown
+          >;
+          // Bedrock wraps Anthropic Messages API responses in {"bytes":"<base64>"}
+          if (typeof obj.bytes === "string") {
+            try {
+              objects.push(
+                JSON.parse(Buffer.from(obj.bytes, "base64").toString("utf8")),
+              );
+            } catch {
+              objects.push(obj);
+            }
+          } else {
+            objects.push(obj);
+          }
         } catch {
           // not valid JSON — skip
         }
@@ -768,8 +783,17 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
   if (objects.length === 0) return { ...base, streaming };
 
   if (looksAnthropic(objects)) {
+    const extracted = parseAnthropic(objects);
+    // When Anthropic events arrive via Bedrock binary event-stream, prefer the
+    // full model ID from the URL path (e.g. eu.anthropic.claude-opus-4-6-v1)
+    // over the shortened name in the response body.
+    const model =
+      isBinaryEventStream
+        ? extractBedrockModel(events) ?? extracted.model
+        : extracted.model;
     return {
-      ...parseAnthropic(objects),
+      ...extracted,
+      model,
       format: "anthropic",
       toolResults,
       context,
