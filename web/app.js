@@ -310,14 +310,18 @@ function recommendationsHtml(recs) {
 function contextSummary(ctx) {
   if (!ctx || !ctx.requests)
     return `<p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+  const totalInput = ctx.input_tokens_total + ctx.cached_input_tokens_total;
+  const cacheRate =
+    totalInput > 0
+      ? Math.round((ctx.cached_input_tokens_total / totalInput) * 100)
+      : 0;
   const cacheRow =
-    ctx.input_tokens_total > 0
-      ? `<div class="k">prompt-cache hit</div><div class="v">${Math.round(
-          (ctx.cached_input_tokens_total / ctx.input_tokens_total) * 100,
-        )}% of input (~${num(ctx.cached_input_tokens_total)} tok)</div>`
+    totalInput > 0
+      ? `<div class="k">prompt-cache hit</div><div class="v">${cacheRate}% of input (~${num(ctx.cached_input_tokens_total)} cached / ~${num(totalInput)} total)</div>`
       : "";
   return `<div class="kv">
       <div class="k">parsed requests</div><div class="v">${num(ctx.requests)}</div>
+      <div class="k">total input tokens</div><div class="v">~${num(totalInput)} (${num(ctx.input_tokens_total)} new + ${num(ctx.cached_input_tokens_total)} cached)</div>
       <div class="k">system-prompt tokens (resent)</div><div class="v">~${num(ctx.system_tokens_total)}</div>
       <div class="k">tool-definition tokens (resent)</div><div class="v">~${num(ctx.tools_tokens_total)}</div>
       ${cacheRow}
