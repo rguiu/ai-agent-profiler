@@ -6,10 +6,12 @@ export interface OptimizeConfig {
   suppressReread: boolean;
   collapseSystem: boolean;
   stripToolDefs: boolean;
+  pruneUnusedTools: boolean;
   truncateThreshold: number;
   pruneAfterTurns: number;
   suppressWithinTurns: number;
   stripToolDefsAfter: number;
+  pruneUnusedToolsAfter: number;
 }
 
 export const DEFAULT_CONFIG: OptimizeConfig = {
@@ -20,10 +22,12 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   suppressReread: true,
   collapseSystem: true,
   stripToolDefs: false,
+  pruneUnusedTools: true,
   truncateThreshold: 4096,
   pruneAfterTurns: 6,
   suppressWithinTurns: 2,
   stripToolDefsAfter: 3,
+  pruneUnusedToolsAfter: 10,
 };
 
 export type OptimizeActionType =
@@ -33,7 +37,8 @@ export type OptimizeActionType =
   | "prune_stale"
   | "suppress_reread"
   | "collapse_system"
-  | "strip_tool_defs";
+  | "strip_tool_defs"
+  | "prune_unused_tools";
 
 export interface OptimizeAction {
   type: OptimizeActionType;
@@ -108,6 +113,7 @@ export class OptimizeLayer {
   private readonly actions: OptimizeAction[] = [];
   private readonly seenCalls = new Map<string, SeenCall>();
   private readonly recentWrites: WriteRecord[] = [];
+  private readonly toolsUsed = new Map<string, number>();
   private turn = 0;
   private lastToolsJson: string | null = null;
   private lastSystemHash: string | null = null;
@@ -173,6 +179,22 @@ export class OptimizeLayer {
           tokensSaved: toolsTokens,
           detail: `stripped tool definitions on turn ${this.turn} (~${toolsTokens} tokens — already cached)`,
         });
+        changed = true;
+      }
+    }
+
+    // Track tool usage from assistant messages and prune unused tool definitions
+    if (
+      (this.config.pruneUnusedTools || this.config.stablePrefix) &&
+      Array.isArray(parsed.messages)
+    ) {
+      this.trackToolUsage(parsed.messages as Message[]);
+    }
+
+    if (this.config.pruneUnusedTools && Array.isArray(parsed.tools)) {
+      const pruned = this.pruneUnusedToolDefs(parsed.tools as ToolDef[]);
+      if (pruned) {
+        parsed.tools = pruned;
         changed = true;
       }
     }
@@ -321,6 +343,53 @@ export class OptimizeLayer {
     return canonical;
   }
 
+  private trackToolUsage(messages: Message[]): void {
+    for (const msg of messages) {
+      if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+      for (const block of msg.content) {
+        if (block.type === "tool_use" && block.name) {
+          this.toolsUsed.set(block.name as string, this.turn);
+        }
+      }
+    }
+  }
+
+  private pruneUnusedToolDefs(tools: ToolDef[]): ToolDef[] | null {
+    if (this.turn <= this.config.pruneUnusedToolsAfter) return null;
+    if (this.toolsUsed.size === 0) return null;
+
+    const kept: ToolDef[] = [];
+    const pruned: string[] = [];
+
+    for (const tool of tools) {
+      const name = tool.name;
+      if (!name) {
+        kept.push(tool);
+        continue;
+      }
+      if (this.toolsUsed.has(name)) {
+        kept.push(tool);
+      } else {
+        pruned.push(name);
+      }
+    }
+
+    if (pruned.length === 0) return null;
+
+    const savedTokens =
+      estimateTokens(JSON.stringify(tools)) -
+      estimateTokens(JSON.stringify(kept));
+
+    this.actions.push({
+      type: "prune_unused_tools",
+      turn: this.turn,
+      tokensSaved: savedTokens,
+      detail: `pruned ${pruned.length} unused tool definition(s): ${pruned.slice(0, 5).join(", ")}${pruned.length > 5 ? ` (+${pruned.length - 5} more)` : ""} (~${savedTokens} tokens)`,
+    });
+
+    return kept;
+  }
+
   private pruneStaleResults(messages: Message[]): Message[] | null {
     const threshold = this.turn - this.config.pruneAfterTurns;
     if (threshold <= 0) return null;
@@ -389,5 +458,10 @@ interface ContentBlock {
 interface Message {
   role: string;
   content?: string | ContentBlock[];
+  [key: string]: unknown;
+}
+
+interface ToolDef {
+  name?: string;
   [key: string]: unknown;
 }

@@ -15,6 +15,7 @@ import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
 import { forwardBedrock } from "./bedrock.js";
 import { parseRoute } from "./route.js";
+import { Throttle } from "./throttle.js";
 
 const HOP_BY_HOP: ReadonlySet<string> = new Set([
   "connection",
@@ -59,6 +60,8 @@ export function createProxyServer(
   const optimizeConfig: Partial<OptimizeConfig> | undefined =
     typeof options?.optimize === "object" ? options.optimize : undefined;
 
+  const throttle = new Throttle(config.throttle);
+
   return http.createServer((req, res) => {
     handle(
       req,
@@ -72,6 +75,7 @@ export function createProxyServer(
       logger,
       optimizeLayers,
       optimizeConfig,
+      throttle,
     );
   });
 }
@@ -88,6 +92,7 @@ function handle(
   logger?: RequestLogger,
   optimizeLayers?: Map<string, OptimizeLayer> | null,
   optimizeConfig?: Partial<OptimizeConfig>,
+  throttle?: Throttle,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
@@ -146,46 +151,60 @@ function handle(
     optimizer = layer;
   }
 
-  // Bedrock requires SigV4 re-signing — the original signature is for the proxy host.
-  if (route.provider === "bedrock") {
-    const upstreamUrl = new URL(provider.upstream);
-    const region = upstreamUrl.hostname.split(".")[1] ?? "us-east-1";
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      trace?.finish();
-    };
-    forwardBedrock(req, res, {
-      upstreamHost: upstreamUrl.hostname,
-      path: route.upstreamPath + search,
-      region,
-      extraHeaders:
-        Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
-      rewriteBody: optimizer
-        ? (body) => optimizer!.rewriteRequestBody(body)
-        : undefined,
-      onRequestChunk: (chunk) => trace?.requestChunk(chunk),
-      onResponse: (status, headers) =>
-        trace?.response(status, undefined, headers as Record<string, string>),
-      onResponseChunk: (chunk) => trace?.responseChunk(chunk),
-      onFinish: finish,
-    });
-    return;
-  }
+  const doForward = (): void => {
+    // Bedrock requires SigV4 re-signing — the original signature is for the proxy host.
+    if (route.provider === "bedrock") {
+      const upstreamUrl = new URL(provider.upstream);
+      const region = upstreamUrl.hostname.split(".")[1] ?? "us-east-1";
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        throttle?.release();
+        trace?.finish();
+      };
+      forwardBedrock(req, res, {
+        upstreamHost: upstreamUrl.hostname,
+        path: route.upstreamPath + search,
+        region,
+        extraHeaders:
+          Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
+        rewriteBody: optimizer
+          ? (body) => optimizer!.rewriteRequestBody(body)
+          : undefined,
+        onRequestChunk: (chunk) => trace?.requestChunk(chunk),
+        onResponse: (status, headers) =>
+          trace?.response(status, undefined, headers as Record<string, string>),
+        onResponseChunk: (chunk) => trace?.responseChunk(chunk),
+        onFinish: finish,
+      });
+      return;
+    }
 
-  forward(req, res, provider.upstream, route.upstreamPath + search, {
-    trace,
-    logger,
-    extraHeaders,
-    optimizer,
-    meta: {
-      sessionId: route.sessionId,
-      provider: route.provider,
-      method,
-      path: route.upstreamPath,
-    },
-  });
+    forward(req, res, provider.upstream, route.upstreamPath + search, {
+      trace,
+      logger,
+      extraHeaders,
+      optimizer,
+      throttle,
+      meta: {
+        sessionId: route.sessionId,
+        provider: route.provider,
+        method,
+        path: route.upstreamPath,
+      },
+    });
+  };
+
+  if (throttle) {
+    throttle.acquire().then(doForward, (err: Error) => {
+      sendError(res, 503, err.message);
+      trace?.error("throttle", err.message);
+      trace?.finish();
+    });
+  } else {
+    doForward();
+  }
 }
 
 function handleControl(
@@ -268,6 +287,7 @@ interface ForwardObs {
   logger?: RequestLogger;
   extraHeaders?: Record<string, string>;
   optimizer?: OptimizeLayer;
+  throttle?: Throttle;
   meta: Omit<
     RequestLogEntry,
     "status" | "latencyMs" | "responseBytes" | "error"
@@ -281,23 +301,26 @@ function forward(
   pathWithQuery: string,
   obs: ForwardObs,
 ): void {
-  const { trace, logger, extraHeaders, optimizer, meta } = obs;
+  const { trace, logger, extraHeaders, optimizer, throttle, meta } = obs;
   const startedAt = Date.now();
   let status: number | null = null;
   let responseBytes = 0;
   let errorMessage: string | undefined;
-  let logged = false;
+  let finished = false;
 
-  const emitLog = (): void => {
-    if (!logger || logged) return;
-    logged = true;
-    logger({
-      ...meta,
-      status,
-      latencyMs: Date.now() - startedAt,
-      responseBytes,
-      error: errorMessage,
-    });
+  const emitFinish = (): void => {
+    if (finished) return;
+    finished = true;
+    throttle?.release();
+    if (logger) {
+      logger({
+        ...meta,
+        status,
+        latencyMs: Date.now() - startedAt,
+        responseBytes,
+        error: errorMessage,
+      });
+    }
   };
 
   let base: URL;
@@ -308,7 +331,7 @@ function forward(
     sendError(res, 500, errorMessage);
     trace?.error("resolve", errorMessage);
     trace?.finish();
-    emitLog();
+    emitFinish();
     return;
   }
 
@@ -370,12 +393,12 @@ function forward(
 
     res.on("finish", () => {
       trace?.finish();
-      emitLog();
+      emitFinish();
     });
     res.on("close", () => {
       if (!res.writableFinished) upstreamReq.destroy();
       trace?.finish();
-      emitLog();
+      emitFinish();
     });
 
     if (body) {
