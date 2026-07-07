@@ -64,10 +64,13 @@ async function startStack(): Promise<Stack> {
       truncateThreshold: 4096,
       pruneAfterTurns: 6,
       suppressWithinTurns: 2,
-      stripToolDefsAfter: 3, pruneUnusedTools: true, pruneUnusedToolsAfter: 10,
+      stripToolDefsAfter: 3,
+      pruneUnusedTools: true,
+      pruneUnusedToolsAfter: 10,
     },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
-    pricing: {}, throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
+    pricing: {},
+    throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
   };
   const store = openStore(dir);
   const capture = new FileCapture(store, dir, config.sessions.idleTimeoutMs);

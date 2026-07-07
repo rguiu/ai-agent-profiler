@@ -12,7 +12,11 @@ describe("Throttle", () => {
   });
 
   it("queues requests beyond maxConcurrent and releases them", async () => {
-    const t = new Throttle({ maxConcurrent: 1, maxQueued: 10, timeoutMs: 1000 });
+    const t = new Throttle({
+      maxConcurrent: 1,
+      maxQueued: 10,
+      timeoutMs: 1000,
+    });
     await t.acquire();
 
     let resolved = false;
@@ -50,7 +54,11 @@ describe("Throttle", () => {
   });
 
   it("drains queue in FIFO order", async () => {
-    const t = new Throttle({ maxConcurrent: 1, maxQueued: 10, timeoutMs: 1000 });
+    const t = new Throttle({
+      maxConcurrent: 1,
+      maxQueued: 10,
+      timeoutMs: 1000,
+    });
     await t.acquire();
 
     const order: number[] = [];
