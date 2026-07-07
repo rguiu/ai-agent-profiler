@@ -98,7 +98,7 @@ describe("recommend", () => {
           requests: 10,
           system_tokens_total: 500,
           tools_tokens_total: 8000,
-          input_tokens_total: 100000,
+          input_tokens_total: 10000,
           cached_input_tokens_total: 90000,
         },
       }),
@@ -112,8 +112,20 @@ describe("recommend", () => {
     const recs = recommend(
       detail({
         growth: [
-          { id: "r1", started_at: null, input_tokens: 2000, output_tokens: 1 },
-          { id: "r2", started_at: null, input_tokens: 30000, output_tokens: 1 },
+          {
+            id: "r1",
+            started_at: null,
+            input_tokens: 2000,
+            cached_input_tokens: null,
+            output_tokens: 1,
+          },
+          {
+            id: "r2",
+            started_at: null,
+            input_tokens: 30000,
+            cached_input_tokens: null,
+            output_tokens: 1,
+          },
         ],
       }),
     );

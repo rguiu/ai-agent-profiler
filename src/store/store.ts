@@ -119,6 +119,7 @@ export interface SessionSummary {
   last_seen_at: string | null;
   request_count: number;
   input_tokens: number;
+  cached_input_tokens: number;
   output_tokens: number;
   cost: number;
   tool_calls: number;
@@ -151,6 +152,7 @@ export interface SessionRequest {
   format: string | null;
   model: string | null;
   input_tokens: number | null;
+  cached_input_tokens: number | null;
   output_tokens: number | null;
   stop_reason: string | null;
   cost: number | null;
@@ -195,6 +197,7 @@ export interface RequestDetail {
   format: string | null;
   model: string | null;
   input_tokens: number | null;
+  cached_input_tokens: number | null;
   output_tokens: number | null;
   stop_reason: string | null;
   streaming: number | null;
@@ -213,6 +216,7 @@ export interface Stats {
   sessions: number;
   requests: number;
   input_tokens: number;
+  cached_input_tokens: number;
   output_tokens: number;
   cost: number;
 }
@@ -233,6 +237,7 @@ export interface GrowthPoint {
   id: string;
   started_at: string | null;
   input_tokens: number | null;
+  cached_input_tokens: number | null;
   output_tokens: number | null;
 }
 
@@ -367,7 +372,8 @@ export class Store {
     this.listSessionsStmt = db.prepare(`
       SELECT s.id, s.client, s.cwd, s.repo, s.started_at, s.first_seen_at, s.last_seen_at, s.meta,
              COUNT(r.id) AS request_count,
-             COALESCE(SUM(m.input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(m.input_tokens), 0) + COALESCE(SUM(m.cached_input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(m.cached_input_tokens), 0) AS cached_input_tokens,
              COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
              COALESCE(SUM(m.cost), 0) AS cost,
              COALESCE(SUM(m.tool_call_count), 0) AS tool_calls
@@ -382,7 +388,7 @@ export class Store {
       SELECT r.id, r.provider, r.method, r.path, r.status, r.latency_ms,
              r.started_at, r.ended_at, r.request_bytes, r.response_bytes, r.error,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
-             m.cost, m.tool_call_count
+             m.cost, m.tool_call_count, m.cached_input_tokens
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
@@ -394,7 +400,8 @@ export class Store {
              r.request_bytes, r.response_bytes, r.error,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.streaming, m.tool_call_count, m.cost, m.parsed_at,
-             m.message_count, m.system_tokens, m.tools_defined, m.tools_tokens
+             m.message_count, m.system_tokens, m.tools_defined, m.tools_tokens,
+             m.cached_input_tokens
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.id = ?
@@ -406,7 +413,8 @@ export class Store {
       SELECT
         (SELECT COUNT(*) FROM sessions) AS sessions,
         (SELECT COUNT(*) FROM requests) AS requests,
-        COALESCE((SELECT SUM(input_tokens) FROM metrics), 0) AS input_tokens,
+        COALESCE((SELECT SUM(input_tokens) FROM metrics), 0) + COALESCE((SELECT SUM(cached_input_tokens) FROM metrics), 0) AS input_tokens,
+        COALESCE((SELECT SUM(cached_input_tokens) FROM metrics), 0) AS cached_input_tokens,
         COALESCE((SELECT SUM(output_tokens) FROM metrics), 0) AS output_tokens,
         COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost
     `);
@@ -433,7 +441,7 @@ export class Store {
       LIMIT 50
     `);
     this.contextGrowthStmt = db.prepare(`
-      SELECT r.id, r.started_at, m.input_tokens, m.output_tokens
+      SELECT r.id, r.started_at, m.input_tokens, m.output_tokens, m.cached_input_tokens
       FROM requests r LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
       ORDER BY r.started_at

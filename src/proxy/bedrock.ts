@@ -6,7 +6,7 @@ import aws4 from "aws4";
 
 const execFileAsync = promisify(execFile);
 
-const UPSTREAM_TIMEOUT_MS = 30_000;
+const UPSTREAM_TIMEOUT_MS = 120_000;
 
 interface Credentials {
   accessKeyId: string;
@@ -145,6 +145,7 @@ export function forwardBedrock(
             timeout: UPSTREAM_TIMEOUT_MS,
           },
           (upstreamRes) => {
+            clearTimeout(deadlineTimer);
             const status = upstreamRes.statusCode ?? 502;
             const respHeaders = upstreamRes.headers as Record<
               string,
@@ -159,8 +160,17 @@ export function forwardBedrock(
           },
         );
 
+        const deadlineTimer = setTimeout(() => {
+          upstreamReq.destroy(
+            new Error(
+              `Bedrock response timeout after ${UPSTREAM_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, UPSTREAM_TIMEOUT_MS);
+
         upstreamReq.on("timeout", () => upstreamReq.destroy());
         upstreamReq.on("error", (err) => {
+          clearTimeout(deadlineTimer);
           if (!res.headersSent) {
             res.writeHead(502, { "content-type": "application/json" });
             res.end(

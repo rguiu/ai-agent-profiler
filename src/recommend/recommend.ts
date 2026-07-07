@@ -81,10 +81,9 @@ export function recommend(detail: SessionDetail): Recommendation[] {
   const ctx = analysis.context;
   if (ctx.requests >= 3 && ctx.tools_tokens_total >= TOOLS_OVERHEAD_MIN) {
     const perRequest = Math.round(ctx.tools_tokens_total / ctx.requests);
+    const totalInput = ctx.input_tokens_total + ctx.cached_input_tokens_total;
     const cacheRatio =
-      ctx.input_tokens_total > 0
-        ? ctx.cached_input_tokens_total / ctx.input_tokens_total
-        : 0;
+      totalInput > 0 ? ctx.cached_input_tokens_total / totalInput : 0;
     const big = ctx.tools_tokens_total >= TOOLS_OVERHEAD_MIN * 3;
     if (cacheRatio >= CACHE_HIT_MIN) {
       recs.push({
@@ -98,13 +97,13 @@ export function recommend(detail: SessionDetail): Recommendation[] {
         kind: "context_duplication",
         severity: big ? "high" : "warn",
         title: `Tool definitions re-sent on every request (~${n(ctx.tools_tokens_total)} tokens total)`,
-        detail: `~${n(perRequest)} tokens of tool definitions were sent on each of ${ctx.requests} requests — a static payload duplicated across the whole session${ctx.input_tokens_total > 0 ? `, with only ~${Math.round(cacheRatio * 100)}% of input served from cache` : ""}. Ensure the tool/system prefix is byte-stable (so prompt caching can apply) and trim unused tools.`,
+        detail: `~${n(perRequest)} tokens of tool definitions were sent on each of ${ctx.requests} requests — a static payload duplicated across the whole session${totalInput > 0 ? `, with only ~${Math.round(cacheRatio * 100)}% of input served from cache` : ""}. Ensure the tool/system prefix is byte-stable (so prompt caching can apply) and trim unused tools.`,
       });
     }
   }
 
   const inputs = analysis.growth
-    .map((g) => g.input_tokens ?? 0)
+    .map((g) => (g.input_tokens ?? 0) + (g.cached_input_tokens ?? 0))
     .filter((value) => value > 0);
   const first = inputs[0];
   const last = inputs.at(-1);

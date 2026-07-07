@@ -65,10 +65,17 @@ async function dashboard() {
     api("/tools"),
     api("/commands"),
   ]);
+  const cacheRate =
+    stats.input_tokens > 0
+      ? Math.round((stats.cached_input_tokens / stats.input_tokens) * 100)
+      : 0;
   const cards = [
     ["Sessions", num(stats.sessions)],
     ["Requests", num(stats.requests)],
-    ["Input tokens", num(stats.input_tokens)],
+    [
+      "Input tokens",
+      `${num(stats.input_tokens)}${cacheRate > 0 ? ` <span class="muted">(${cacheRate}% cached)</span>` : ""}`,
+    ],
     ["Output tokens", num(stats.output_tokens)],
     ["Est. cost", cost(stats.cost)],
   ];
@@ -135,7 +142,9 @@ function repeatedTable(items) {
 }
 
 function growthChart(points) {
-  const vals = (points || []).map((p) => p.input_tokens ?? 0);
+  const vals = (points || []).map(
+    (p) => (p.input_tokens ?? 0) + (p.cached_input_tokens ?? 0),
+  );
   if (vals.length < 2 || vals.every((v) => v === 0))
     return `<p class="empty">Not enough parsed data yet — run <code>aap parse</code>.</p>`;
   const w = 640;
@@ -168,24 +177,28 @@ function sessionsTable(sessions) {
   return `<table>
     <thead><tr>
       <th>Session</th><th>Node</th><th>cwd</th>
-      <th class="num">Reqs</th><th class="num">In</th><th class="num">Out</th>
+      <th class="num">Reqs</th><th class="num">In (total)</th><th class="num">Out</th>
       <th class="num">Tools</th><th class="num">Cost</th><th>Last seen</th>
     </tr></thead>
     <tbody>
     ${sessions
-      .map(
-        (s) => `<tr>
+      .map((s) => {
+        const cacheHint =
+          s.cached_input_tokens > 0 && s.input_tokens > 0
+            ? ` <span class="muted">(${Math.round((s.cached_input_tokens / s.input_tokens) * 100)}% cached)</span>`
+            : "";
+        return `<tr>
       <td><a class="mono" href="#/sessions/${encodeURIComponent(s.id)}">${shortId(s.id)}</a></td>
       <td>${esc((s.meta && s.meta.armada_node) || s.client) || "<span class='muted'>—</span>"}</td>
       <td class="mono muted">${esc(s.cwd) || "—"}</td>
       <td class="num">${num(s.request_count)}</td>
-      <td class="num">${num(s.input_tokens)}</td>
+      <td class="num">${num(s.input_tokens)}${cacheHint}</td>
       <td class="num">${num(s.output_tokens)}</td>
       <td class="num">${num(s.tool_calls)}</td>
       <td class="num">${cost(s.cost)}</td>
       <td class="mono muted">${esc((s.last_seen_at || "").replace("T", " ").slice(0, 19))}</td>
-    </tr>`,
-      )
+    </tr>`;
+      })
       .join("")}
     </tbody></table>`;
 }
@@ -203,8 +216,13 @@ function paginatedRequestsTable(requests, page) {
   const start = page * PAGE_SIZE;
   const pageItems = requests.slice(start, start + PAGE_SIZE);
   const rows = pageItems
-    .map(
-      (r) => `<tr>
+    .map((r) => {
+      const totalIn = (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
+      const inDisplay =
+        totalIn > 0
+          ? `${num(totalIn)}${r.cached_input_tokens ? ` <span class="muted">(${num(r.cached_input_tokens)} cached)</span>` : ""}`
+          : "—";
+      return `<tr>
       <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a></td>
       <td class="mono muted">${dt(r.started_at)}</td>
       <td>${esc(r.provider)}</td>
@@ -213,13 +231,13 @@ function paginatedRequestsTable(requests, page) {
       <td>${statusCell(r.status)}</td>
       <td class="num">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</td>
       <td class="mono">${esc(r.model) || "—"}</td>
-      <td class="num">${r.input_tokens == null ? "—" : num(r.input_tokens)}</td>
+      <td class="num">${inDisplay}</td>
       <td class="num">${r.output_tokens == null ? "—" : num(r.output_tokens)}</td>
       <td>${esc(r.stop_reason) || "—"}</td>
       <td class="num">${num(r.tool_call_count)}</td>
       <td class="num">${cost(r.cost)}</td>
-    </tr>`,
-    )
+    </tr>`;
+    })
     .join("");
   const pagination =
     totalPages > 1
@@ -310,14 +328,18 @@ function recommendationsHtml(recs) {
 function contextSummary(ctx) {
   if (!ctx || !ctx.requests)
     return `<p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+  const totalInput = ctx.input_tokens_total + ctx.cached_input_tokens_total;
+  const cacheRate =
+    totalInput > 0
+      ? Math.round((ctx.cached_input_tokens_total / totalInput) * 100)
+      : 0;
   const cacheRow =
-    ctx.input_tokens_total > 0
-      ? `<div class="k">prompt-cache hit</div><div class="v">${Math.round(
-          (ctx.cached_input_tokens_total / ctx.input_tokens_total) * 100,
-        )}% of input (~${num(ctx.cached_input_tokens_total)} tok)</div>`
+    totalInput > 0
+      ? `<div class="k">prompt-cache hit</div><div class="v">${cacheRate}% of input (~${num(ctx.cached_input_tokens_total)} cached / ~${num(totalInput)} total)</div>`
       : "";
   return `<div class="kv">
       <div class="k">parsed requests</div><div class="v">${num(ctx.requests)}</div>
+      <div class="k">total input tokens</div><div class="v">~${num(totalInput)} (${num(ctx.input_tokens_total)} new + ${num(ctx.cached_input_tokens_total)} cached)</div>
       <div class="k">system-prompt tokens (resent)</div><div class="v">~${num(ctx.system_tokens_total)}</div>
       <div class="k">tool-definition tokens (resent)</div><div class="v">~${num(ctx.tools_tokens_total)}</div>
       ${cacheRow}
@@ -354,7 +376,7 @@ async function requestDetail(id) {
       <div class="k">status</div><div class="v">${statusCell(r.status)}</div>
       <div class="k">latency</div><div class="v">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</div>
       <div class="k">model</div><div class="v">${esc(r.model) || "—"}</div>
-      <div class="k">tokens</div><div class="v">in ${r.input_tokens ?? "—"} / out ${r.output_tokens ?? "—"}</div>
+      <div class="k">tokens</div><div class="v">in ${num((r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0))} (${num(r.input_tokens ?? 0)} new + ${num(r.cached_input_tokens ?? 0)} cached) / out ${r.output_tokens ?? "—"}</div>
       <div class="k">messages</div><div class="v">${r.message_count ?? "—"}</div>
       <div class="k">system prompt</div><div class="v">~${num(r.system_tokens ?? 0)} tok</div>
       <div class="k">tools defined</div><div class="v">${r.tools_defined ?? "—"} (~${num(r.tools_tokens ?? 0)} tok)</div>
