@@ -5,3 +5,4 @@ export {
   type RequestLogger,
   type RequestLogEntry,
 } from "./log.js";
+export { Throttle, type ThrottleConfig, DEFAULT_THROTTLE } from "./throttle.js";

@@ -26,45 +26,45 @@
 
 ## Key Findings
 
-| Metric             | Baseline         | Optimized        | Improvement |
-| ------------------ | ---------------- | ---------------- | ----------- |
-| Cost               | $1.27            | $0.36            | **-72%**    |
-| Total input tokens | 2.88M            | 821K             | **-71%**    |
-| Requests           | 38               | 19               | **-50%**    |
-| Wall time          | 6m 32s           | 4m 40s           | **-29%**    |
-| Bugs found         | 7                | 8                | +1          |
-| Task success       | ✓                | ✓                | Both pass   |
-| Verify             | pass             | pass             | Both pass   |
+| Metric             | Baseline | Optimized | Improvement |
+| ------------------ | -------- | --------- | ----------- |
+| Cost               | $1.27    | $0.36     | **-72%**    |
+| Total input tokens | 2.88M    | 821K      | **-71%**    |
+| Requests           | 38       | 19        | **-50%**    |
+| Wall time          | 6m 32s   | 4m 40s    | **-29%**    |
+| Bugs found         | 7        | 8         | +1          |
+| Task success       | ✓        | ✓         | Both pass   |
+| Verify             | pass     | pass      | Both pass   |
 
 ## Cross-Agent Comparison
 
-| Metric            | Claude (baseline) | Claude (optimized) | OpenCode (baseline) | OpenCode (optimized) |
-| ----------------- | ----------------- | ------------------ | ------------------- | -------------------- |
-| Requests          | 48                | 52                 | 38                  | 19                   |
-| Total input       | 1.83M             | 502K               | 2.88M               | 821K                 |
-| Output tokens     | 1,748             | 3,204              | 20,134              | 4,776                |
-| Cost              | $2.88             | $0.99              | $1.27               | $0.36                |
-| Wall time         | 18m 14s           | 13m 39s            | 6m 32s              | 4m 40s               |
-| Tool calls        | 32                | 41                 | 48                  | 27                   |
-| Bugs found        | 7                 | 9                  | 7                   | 8                    |
+| Metric        | Claude (baseline) | Claude (optimized) | OpenCode (baseline) | OpenCode (optimized) |
+| ------------- | ----------------- | ------------------ | ------------------- | -------------------- |
+| Requests      | 48                | 52                 | 38                  | 19                   |
+| Total input   | 1.83M             | 502K               | 2.88M               | 821K                 |
+| Output tokens | 1,748             | 3,204              | 20,134              | 4,776                |
+| Cost          | $2.88             | $0.99              | $1.27               | $0.36                |
+| Wall time     | 18m 14s           | 13m 39s            | 6m 32s              | 4m 40s               |
+| Tool calls    | 32                | 41                 | 48                  | 27                   |
+| Bugs found    | 7                 | 9                  | 7                   | 8                    |
 
 ## Bugs Found
 
 The fixture contains 7 planted bugs. The optimized runs also surfaced additional edge cases
 that were not explicitly planted but affected correctness under certain conditions.
 
-| # | Bug (file:line)                                             | Claude baseline | Claude optimized | OpenCode baseline | OpenCode optimized |
-| - | ----------------------------------------------------------- | :-------------: | :--------------: | :---------------: | :----------------: |
-| 1 | PriorityQueue `#bubbleUp` parent calc (`priority-queue.js`) | ✓               | ✓                | ✓                 | ✓                  |
-| 2 | Scheduler dependency check inversion (`scheduler.js`)       | ✓               | ✓                | ✓                 | ✓                  |
-| 3 | Scheduler retry uses wrong priority (`scheduler.js`)        | ✓               | ✓                | ✓                 | ✓                  |
-| 4 | EventBus history trims oldest instead of newest (`event-bus.js`) | ✓          | ✓                | ✓                 | ✓                  |
-| 5 | ResultCache `get()` returns entry wrapper (`result-cache.js`) | ✓              | ✓                | ✓                 | ✓                  |
-| 6 | ResultCache `evictLRU` evicts MRU (`result-cache.js`)       | ✓               | ✓                | ✓                 | ✓                  |
-| 7 | Pipeline stage overwrites context instead of merging (`pipeline.js`) | ✓       | ✓                | ✓                 | ✓                  |
-| 8 | `Date.now()` monotonic counter for LRU tie-breaking         | —               | ✓                | —                 | —                  |
-| 9 | Scheduler starvation / `#scheduleReady` deadlock            | —               | ✓                | —                 | ✓                  |
-|   | **Total**                                                   | **7**           | **9**            | **7**             | **8**              |
+| #   | Bug (file:line)                                                      | Claude baseline | Claude optimized | OpenCode baseline | OpenCode optimized |
+| --- | -------------------------------------------------------------------- | :-------------: | :--------------: | :---------------: | :----------------: |
+| 1   | PriorityQueue `#bubbleUp` parent calc (`priority-queue.js`)          |        ✓        |        ✓         |         ✓         |         ✓          |
+| 2   | Scheduler dependency check inversion (`scheduler.js`)                |        ✓        |        ✓         |         ✓         |         ✓          |
+| 3   | Scheduler retry uses wrong priority (`scheduler.js`)                 |        ✓        |        ✓         |         ✓         |         ✓          |
+| 4   | EventBus history trims oldest instead of newest (`event-bus.js`)     |        ✓        |        ✓         |         ✓         |         ✓          |
+| 5   | ResultCache `get()` returns entry wrapper (`result-cache.js`)        |        ✓        |        ✓         |         ✓         |         ✓          |
+| 6   | ResultCache `evictLRU` evicts MRU (`result-cache.js`)                |        ✓        |        ✓         |         ✓         |         ✓          |
+| 7   | Pipeline stage overwrites context instead of merging (`pipeline.js`) |        ✓        |        ✓         |         ✓         |         ✓          |
+| 8   | `Date.now()` monotonic counter for LRU tie-breaking                  |        —        |        ✓         |         —         |         —          |
+| 9   | Scheduler starvation / `#scheduleReady` deadlock                     |        —        |        ✓         |         —         |         ✓          |
+|     | **Total**                                                            |      **7**      |      **9**       |       **7**       |       **8**        |
 
 Both agents found all 7 planted bugs regardless of optimization. The optimized runs
 uncovered additional issues:
@@ -95,6 +95,7 @@ This is the key behavioral difference from Claude. Claude's optimized run made _
 ### Why wall time improved 29%
 
 Two drivers:
+
 1. **Fewer requests (-50%)** — each request incurs a network round-trip + LLM inference time. Cutting requests in half directly reduces total wait time.
 2. **Smaller payload (-71% input)** — less data to transmit and process per request. However, optimized requests averaged 14.7s vs 10.3s for the baseline, suggesting the model spent more time reasoning per turn with a cleaner, more focused context.
 

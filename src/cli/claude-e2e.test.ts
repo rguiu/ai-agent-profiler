@@ -110,11 +110,14 @@ async function startStack(): Promise<Stack> {
       pruneAfterTurns: 6,
       suppressWithinTurns: 2,
       stripToolDefsAfter: 3,
+      pruneUnusedTools: true,
+      pruneUnusedToolsAfter: 10,
     },
     providers: { anthropic: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {
       "claude-sonnet-4-20250514": { inputPerMTok: 3, outputPerMTok: 15 },
     },
+    throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
   };
   const store = openStore(dir);
   const registry = new SessionRegistry();

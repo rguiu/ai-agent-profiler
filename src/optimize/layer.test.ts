@@ -468,6 +468,138 @@ describe("OptimizeLayer", () => {
     });
   });
 
+  describe("pruneUnusedTools", () => {
+    it("prunes tool definitions not seen in assistant messages after N turns", () => {
+      const layer = new OptimizeLayer({
+        dedup: false,
+        truncate: false,
+        stablePrefix: false,
+        pruneStale: false,
+        suppressReread: false,
+        collapseSystem: false,
+        stripToolDefs: false,
+        pruneUnusedTools: true,
+        pruneUnusedToolsAfter: 3,
+      });
+
+      const tools = [
+        { name: "Read", description: "read files", input_schema: {} },
+        { name: "Bash", description: "run shell", input_schema: {} },
+        { name: "Write", description: "write files", input_schema: {} },
+      ];
+
+      const messagesWithToolUse = [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }],
+        },
+        { role: "user", content: "continue" },
+      ];
+
+      // Turns 1-3: within threshold, tools pass through
+      for (let i = 0; i < 3; i++) {
+        layer.rewriteRequestBody(
+          Buffer.from(JSON.stringify({ tools, messages: messagesWithToolUse })),
+        );
+      }
+
+      // Turn 4: beyond threshold, unused tools should be pruned
+      const result = layer.rewriteRequestBody(
+        Buffer.from(JSON.stringify({ tools, messages: messagesWithToolUse })),
+      );
+      const parsed = JSON.parse(result.toString()) as { tools: unknown[] };
+
+      // Only "Read" was used — Bash and Write should be pruned
+      expect(parsed.tools).toHaveLength(1);
+      expect((parsed.tools[0] as { name: string }).name).toBe("Read");
+      expect(
+        layer.getActions().some((a) => a.type === "prune_unused_tools"),
+      ).toBe(true);
+    });
+
+    it("does not prune when no tools have been observed yet", () => {
+      const layer = new OptimizeLayer({
+        dedup: false,
+        truncate: false,
+        stablePrefix: false,
+        pruneStale: false,
+        suppressReread: false,
+        collapseSystem: false,
+        stripToolDefs: false,
+        pruneUnusedTools: true,
+        pruneUnusedToolsAfter: 2,
+      });
+
+      const tools = [
+        { name: "Read", description: "read files", input_schema: {} },
+      ];
+
+      // Advance past the threshold but with no tool_use in messages
+      for (let i = 0; i < 4; i++) {
+        layer.rewriteRequestBody(
+          Buffer.from(
+            JSON.stringify({
+              tools,
+              messages: [{ role: "user", content: "hi" }],
+            }),
+          ),
+        );
+      }
+
+      // No tool_use blocks seen → toolsUsed is empty → no pruning
+      expect(
+        layer.getActions().some((a) => a.type === "prune_unused_tools"),
+      ).toBe(false);
+    });
+
+    it("keeps tools without a name field", () => {
+      const layer = new OptimizeLayer({
+        dedup: false,
+        truncate: false,
+        stablePrefix: false,
+        pruneStale: false,
+        suppressReread: false,
+        collapseSystem: false,
+        stripToolDefs: false,
+        pruneUnusedTools: true,
+        pruneUnusedToolsAfter: 1,
+      });
+
+      const tools = [
+        { name: "Read", description: "read files", input_schema: {} },
+        { description: "nameless tool", input_schema: {} },
+        { name: "Bash", description: "run shell", input_schema: {} },
+      ];
+
+      const messages = [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }],
+        },
+        { role: "user", content: "ok" },
+      ];
+
+      // Turn 1: establishes usage
+      layer.rewriteRequestBody(
+        Buffer.from(JSON.stringify({ tools, messages })),
+      );
+
+      // Turn 2: prune kicks in
+      const result = layer.rewriteRequestBody(
+        Buffer.from(JSON.stringify({ tools, messages })),
+      );
+      const parsed = JSON.parse(result.toString()) as {
+        tools: Array<{ name?: string }>;
+      };
+
+      // Read (used) + nameless (kept) = 2; Bash (unused) pruned
+      expect(parsed.tools).toHaveLength(2);
+      expect(parsed.tools.some((t) => t.name === "Read")).toBe(true);
+      expect(parsed.tools.some((t) => !t.name)).toBe(true);
+      expect(parsed.tools.some((t) => t.name === "Bash")).toBe(false);
+    });
+  });
+
   describe("combined", () => {
     it("applies multiple optimizations and reports total savings", () => {
       const layer = new OptimizeLayer({

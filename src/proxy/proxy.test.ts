@@ -65,9 +65,12 @@ async function startStack(
       pruneAfterTurns: 6,
       suppressWithinTurns: 2,
       stripToolDefsAfter: 3,
+      pruneUnusedTools: true,
+      pruneUnusedToolsAfter: 10,
     },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
+    throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
   };
   const proxy = createProxyServer(
     config,
