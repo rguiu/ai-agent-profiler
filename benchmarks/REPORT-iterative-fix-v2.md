@@ -41,6 +41,7 @@
 | Total input tokens | 1.83M    | 502K        | 329K        | **-82%**       | **-34%**  |
 | Per-request input  | 38.2K    | 9.7K        | 4.8K        | **-87%**       | **-50%**  |
 | Wall time          | 18m 14s  | 13m 39s     | 17m 43s     | -3%            | +30%      |
+| Bugs identified    | 7        | 9           | 9           | +2             | =         |
 | Task success       | ✓ pass   | ✓ pass      | ✓ pass      | =              | =         |
 
 ## Analysis
@@ -80,10 +81,16 @@ All three runs show ~100% cache hit rate. The `stablePrefix` canonicalization en
 tool definitions are byte-stable, and `pruneUnusedTools` removes tools deterministically
 (always the same set after turn 10), so the cache prefix remains valid after pruning.
 
-### Reliability
+### Reliability and bug discovery
 
-All three runs found and fixed all bugs, passing all 48 tests. The optimizer does not
-degrade task quality.
+All three runs pass verification (48/48 tests). However, both optimized runs identified
+**9 bugs** vs the baseline's **7** — catching two additional edge cases:
+- `Date.now()` replaced with a monotonic counter in ResultCache (timing sensitivity)
+- Scheduling starvation fix in Scheduler (blocked tasks stopping unblocked ones)
+
+This is consistent with the hypothesis from v1: with less stale context competing for
+attention, the model reasons more effectively about edge cases. The effect held in v2
+despite an even smaller context window (4.8K vs 9.7K per request).
 
 ## Optimization Strategies
 
