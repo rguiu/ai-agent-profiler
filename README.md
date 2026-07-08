@@ -1,80 +1,65 @@
 # AI Agent Profiler
 
-A **local-first, read-only profiler for AI coding agents**.
+A **local-first profiler and optimizer for AI coding agents** — read-only by default,
+with an optional in-flight optimize layer that cuts token waste.
 
-It sits as a transparent proxy between a coding agent (Claude Code, Opencode) and an LLM provider (Anthropic, OpenAI-compatible), and records high-fidelity traces of every interaction so you can measure how the agent uses tools, files, context, and models.
+It sits as a transparent proxy between a coding agent (Claude Code, opencode) and an
+LLM provider (Anthropic, OpenAI-compatible) and records high-fidelity traces of every
+interaction — so you can measure how the agent uses tools, files, context, and models.
 
-It is a **performance profiler for autonomous coding agents** — not an observability dashboard, not an enterprise proxy, not an LLM profiler. See [`VISION.md`](VISION.md).
+It is a **performance profiler for autonomous coding agents** — not an observability
+dashboard, not an enterprise proxy. See [`VISION.md`](VISION.md).
 
-> Status: **capture core complete + first analysis layer shipped** — transparent proxy, raw trace capture, derived metrics, a read API, a dark-mode web dashboard, recommendations, command-usage and message-stack analysis, export, compare, and an MCP server all work. Research capabilities and (optional, opt-in) optimisation experiments are next. See [`ROADMAP.md`](ROADMAP.md).
-
-## Features
-
-Working now (capture core):
-
-- Transparent, byte-faithful HTTP(S) proxy — never modifies requests.
-- Per-session raw trace capture (requests, responses, streaming events, timing) with secret redaction.
-- Token, latency, cost, and tool metrics derived from raw traces (`aap parse`).
-- Read API + a minimal dark-mode web dashboard at `/ui`.
-- First insights: tool usage, repeated tool calls (by argument), per-session context growth, tool-result **token amplification**, and **context composition** (message count, system-prompt size, tool-definition tokens per request + duplicated totals per session).
-- **Prompt-cache awareness** — captures provider cache-hit tokens (`metrics.cached_input_tokens`) so the context-duplication finding reflects real cost, not just raw re-sent tokens.
-- **Message-stack breakdown** — per request, the sent context split by element type (system / user / assistant / tool) with size + token estimate, via `GET /requests/:id/messages` and a split view on the `/ui` request page.
-- **Command-usage analysis** — which shell programs run through `bash`, how often, and by category (search / read / vcs / build / nav / edit), via `aap commands`, `GET /commands`, and a `/ui` panel.
-- **Recommendations** — actionable findings per session (repeated file reads, redundant tool calls, high amplification, context duplication, context growth, inefficient search→read).
-- **Export** — a session report as Markdown (or JSON) via `aap export`.
-- **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data to an AI agent for self-introspection (list_sessions, get_session, get_request, search_requests, recommend, compare, stats, top_tools, command_breakdown, raw_sql).
-- Per-request logging in the `aap serve` terminal.
-
-Planned:
-
-- Claude Code path validation (built, not yet formally confirmed).
-- Benchmark task-runner harness (headless invocation, workspace reset, verify command).
-- UI search bar + full-text search over prompts/filenames; latency/cost-over-time charts; live auto-refresh.
-- MCP-server analysis (call frequency, payload sizes, token impact of an agent's own MCP servers).
-- ~~Optional, off-by-default `--optimize` experiments~~ — **shipped** (7 strategies, configurable, -66% cost on benchmark). See [Optimize Layer](#optimize-layer).
-
-## Dashboard preview
-
-The dark-mode dashboard at `/ui`:
-
-![AI Agent Profiler dashboard](docs/dashboard.png)
-
-A session page surfaces the analysis and recommendations:
-
-![AI Agent Profiler session detail](docs/dashboard_session.png)
+On top of profiling, an optional [optimize layer](#optimize-layer) can rewrite requests
+in-flight to cut token waste on long sessions. It's off by default; when enabled it
+produced strong results on our benchmark — roughly **-66% cost** and **-25% wall time**
+on a ~50-request session. See [Optimize layer](#optimize-layer) for the full numbers.
 
 ## How it works
 
-You launch your agent through a small wrapper that points its provider base URL at the profiler and tags the session:
+Launch your agent through a small wrapper that points its provider base URL at the
+profiler:
 
 ```
-aap run claude       # or: aap run opencode
+aap serve            # terminal 1: proxy + read API
+aap run claude       # terminal 2: launch an agent (or: aap run opencode)
 ```
 
-The profiler streams traffic through untouched, tees a copy to append-only trace files, and indexes metadata in SQLite. Metrics are computed off the hot path so token streaming stays unbuffered. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
+The profiler streams traffic through untouched, tees a copy to append-only trace files,
+and indexes metadata in SQLite. Metrics are computed off the hot path so token streaming
+stays unbuffered. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-### Why `aap run`?
+`aap run` is **not required** — the proxy is transparent, so any client pointed at it is
+captured. What `aap run` adds is **attribution**: a stable session id, the working
+directory + git repo, and per-session grouping for concurrent agents. Without it,
+requests still land in an "unattributed" session. None of this metadata is ever sent to
+the LLM.
 
-`aap run` is **not required** — the proxy is transparent, so any client that points its
-provider base URL at it will be captured. What `aap run` adds is **attribution**, because
-that context only exists in the shell where the agent starts, not in the HTTP traffic:
+## Features
 
-- It generates a stable **session id** and injects it into the base URL path
-  (`/<session_id>/<provider>/...`), so concurrent agents (e.g. several terminal tabs) are
-  grouped correctly instead of being merged.
-- It captures the **working directory and git repo** and registers them with the proxy.
-- It points the agent at the proxy for this session — via base-URL env vars for Claude Code,
-  or an injected `OPENCODE_CONFIG_CONTENT` for opencode — and execs the agent, inheriting your terminal.
+- Transparent, byte-faithful HTTP(S) proxy — never modifies requests.
+- Per-session raw trace capture (requests, responses, streaming, timing) with secret redaction.
+- Token, latency, cost, and tool metrics derived from raw traces (`aap parse`).
+- Read API + a dark-mode web dashboard at `/ui`.
+- Insights: tool usage, repeated tool calls, context growth, tool-result **token
+  amplification**, and **context composition** (system-prompt size, tool-definition
+  tokens, duplicated totals).
+- **Prompt-cache awareness** — captures provider cache-hit tokens so findings reflect real cost.
+- **Message-stack breakdown** — per-request context split by role (system/user/assistant/tool).
+- **Command-usage analysis** — which shell programs run through `bash`, how often, by category.
+- **Recommendations** — actionable findings per session (repeated reads, redundant calls,
+  high amplification, context duplication, inefficient search→read).
+- **Export & compare** — session reports as Markdown/JSON; sessions side by side.
+- **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data for agent self-introspection.
+- **Optimize layer** — 7 request-rewriting strategies (see below).
 
-Without it, requests still get captured but land in an **"unattributed"** session grouped
-only by an idle-timeout window, with no cwd/repo. None of this metadata is ever sent to the
-LLM — it is a side channel to the proxy.
+See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
-## Stack
+## Dashboard
 
-- Node + TypeScript
-- Native `node:http`/`https` proxy, `better-sqlite3` index
-- Config via TOML/YAML + env overrides
+![AI Agent Profiler dashboard](docs/dashboard.png)
+
+![AI Agent Profiler session detail](docs/dashboard_session.png)
 
 ## Installation
 
@@ -87,8 +72,7 @@ npm run build        # compile to dist/
 npm link             # put the `aap` command on your PATH (or: npm install -g .)
 ```
 
-`npm link` is a per-machine step (each user runs it once after cloning); it symlinks the
-`aap` CLI to this checkout. After pulling changes, re-run `npm run build`.
+`npm link` is a per-machine step. After pulling changes, re-run `npm run build`.
 
 Then create your config where `aap` looks by default:
 
@@ -98,29 +82,26 @@ cp config.example.toml ~/.config/aap/config.toml   # edit providers / pricing
 ```
 
 `aap` resolves config in this order: `$AAP_CONFIG` → `~/.config/aap/config.toml` →
-`./config.toml`, so it works from any project directory once the global config exists.
+`./config.toml`.
 
-> Tip: set `storage.dir` to an absolute path (e.g. `~/.local/share/aap`) so captured data
-> lives in one place regardless of where you start `aap serve`.
+> Tip: set `storage.dir` to an absolute path (e.g. `~/.local/share/aap`) so captured
+> data lives in one place regardless of where you start `aap serve`.
 
 ## Usage
 
 ```
-aap serve            # start the proxy + read API (also prints a line per request)
+aap serve            # start the proxy + read API (prints a line per request)
 aap run <agent>      # launch an agent through the profiler, e.g. aap run claude
                      #   tag a run: aap run --meta task=explain --meta iter=1 opencode
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
 aap sessions         # list captured sessions (aap sessions rm <id> to delete)
-aap commands         # break shell commands down by token cost (which to optimise)
+aap commands         # break shell commands down by token cost
 aap tag <id> k=v     # tag a session with metadata (e.g. verify=pass)
 aap export <id>      # export a session report (Markdown; add --json for JSON)
 aap compare <ids>    # compare sessions side by side (add --json for JSON)
 aap mcp              # start an MCP server (stdio) for agent self-introspection
 aap config           # print the resolved configuration
 ```
-
-Run `aap serve` in one terminal, then `aap run <agent>` from your project in another.
-For development without linking, use `npm run dev -- <command>`.
 
 Inspect captured data over HTTP (same port as the proxy):
 
@@ -136,8 +117,7 @@ GET /commands                  # shell-command breakdown (?session=<id> to scope
 GET /health
 ```
 
-Open **`http://localhost:8080/ui`** in a browser for the dashboard (sessions,
-per-session requests, and per-request detail with the reconstructed response).
+Open **`http://localhost:8080/ui`** for the dashboard.
 
 ### opencode + DeepSeek
 
@@ -148,7 +128,7 @@ DeepSeek is OpenAI-compatible. Add it to your `aap` config:
 upstream = "https://api.deepseek.com"
 ```
 
-Then just launch opencode through the wrapper — no `opencode.json` edits needed:
+Then launch opencode through the wrapper — no `opencode.json` edits needed:
 
 ```
 aap serve                       # terminal 1
@@ -156,21 +136,15 @@ aap run opencode                # terminal 2, from your project
 ```
 
 `aap run opencode` injects an `OPENCODE_CONFIG_CONTENT` that routes each configured
-provider through the proxy (e.g. `http://127.0.0.1:8080/<session>/deepseek/v1`), which is
-forwarded to `https://api.deepseek.com/v1/...`. opencode still supplies the API key itself
-(from `~/.local/share/opencode/auth.json` or `DEEPSEEK_API_KEY`); the proxy only forwards
-it and redacts it from stored traces. If a provider's base path isn't `/v1`, set
-`apiPath` on its `[providers.<name>]` entry.
+provider through the proxy. opencode still supplies the API key itself; the proxy only
+forwards it and redacts it from stored traces. If a provider's base path isn't `/v1`,
+set `apiPath` on its `[providers.<name>]` entry.
 
 ### Self-introspection via MCP
 
 `aap mcp` starts a stdio MCP server so an agent can query its own captured behaviour —
-"which requests cost the most?", "which file did I read most often?", "why so many `bash`
-calls?". Tools: `list_sessions`, `get_session`, `get_request`, `search_requests`,
-`recommend`, `compare`, `stats`, `top_tools`, `command_breakdown`, and `raw_sql` (read-only
-SELECT over the SQLite index).
-
-Add it to `opencode.json`:
+"which requests cost the most?", "which file did I read most often?". Add it to
+`opencode.json`:
 
 ```json
 {
@@ -180,25 +154,10 @@ Add it to `opencode.json`:
 }
 ```
 
-## Benchmarks
-
-`benchmarks/` contains a corpus of small, self-contained fixtures (each with a planted,
-verifiable bug) and a runner that executes the same tasks through an agent, tagged for
-profiling. Use it to measure — with real data — where an agent wastes tokens and tools.
-
-```
-aap serve
-./benchmarks/run.sh opencode --fixture task-queue
-aap sessions           # find the runs
-aap commands           # which shell commands cost the most
-```
-
-See [`benchmarks/README.md`](benchmarks/README.md).
-
 ## Optimize Layer
 
-The proxy includes an optional optimize layer that rewrites request bodies in-flight to
-reduce token waste in long sessions. Enable it with `--optimize` or in config:
+An optional layer that rewrites request bodies in-flight to reduce token waste in long
+sessions. Enable it with `--optimize` or in config:
 
 ```
 aap serve --optimize
@@ -223,32 +182,48 @@ All settings live under `[optimize]` in `config.toml`:
 ```toml
 [optimize]
 enabled = true              # always optimize (or use --optimize flag)
-dedup = true
-truncate = true
-stablePrefix = true
-pruneStale = true
-suppressReread = true
-collapseSystem = true
-stripToolDefs = false       # experimental — may break if prompt cache evicts
 truncateThreshold = 4096    # bytes above which truncation kicks in
 pruneAfterTurns = 6         # prune results older than N assistant turns
 suppressWithinTurns = 2     # suppress re-reads within N turns of a write
 stripToolDefsAfter = 3      # strip tool defs after this many requests
+stripToolDefs = false       # experimental — may break if prompt cache evicts
 ```
+
+The sweet spot is sessions with 20+ requests involving repeated file reads and iterative
+fix/verify cycles. For short sessions (<10 requests) the optimizer has minimal effect.
 
 ### Benchmark results
 
-On the `iterative-fix` fixture (7 bugs, ~50 request session):
+On the `iterative-fix` fixture (7 planted bugs, ~50-request Claude Code session), a single
+run showed:
 
-| Metric             | Baseline | Optimized              | Change   |
-| ------------------ | -------- | ---------------------- | -------- |
-| Total input tokens | 1.83M    | 502K                   | **-73%** |
-| Cost               | $2.88    | $0.99                  | **-66%** |
-| Wall time          | 18m 14s  | 13m 39s                | **-25%** |
-| Task success       | pass     | pass (found more bugs) | ✓        |
+| Metric             | Baseline | Optimized | Change |
+| ------------------ | -------- | --------- | ------ |
+| Cost               | $2.88    | $0.99     | -66%   |
+| Total input tokens | 1.83M    | 502K      | -73%   |
+| Wall time          | 18m 14s  | 13m 39s   | -25%   |
+| Bugs fixed         | 7        | 9         | better |
+| Verify             | pass     | pass      | both   |
 
-See [`benchmarks/REPORT-iterative-fix.md`](benchmarks/REPORT-iterative-fix.md) for the
-full analysis.
+The dominant strategy is `pruneStale`, which stops the conversation context from growing
+unboundedly across iterative fix/verify cycles. This is one run on one fixture — treat it
+as indicative. Full analysis:
+[`benchmarks/REPORT-iterative-fix.md`](benchmarks/REPORT-iterative-fix.md).
+
+## Benchmarks
+
+`benchmarks/` contains a corpus of small, self-contained fixtures (each with a planted,
+verifiable bug) and a runner that executes the same tasks through an agent, tagged for
+profiling.
+
+```
+aap serve
+./benchmarks/run.sh opencode --fixture task-queue
+aap sessions           # find the runs
+aap commands           # which shell commands cost the most
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md).
 
 ## Development
 
@@ -264,9 +239,9 @@ npm run format             # prettier --write
 npm run build              # compile to dist/
 ```
 
-The proxy is written with Node's native `http`/`https` for byte-faithful streaming; the
-SQLite index uses `better-sqlite3`. Source is under `src/` (proxy, capture, store, parse,
-recommend, api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
+The proxy uses Node's native `http`/`https` for byte-faithful streaming; the SQLite index
+uses `better-sqlite3`. Source is under `src/` (proxy, capture, store, parse, recommend,
+api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 
 ## Documentation
 
@@ -274,7 +249,7 @@ recommend, api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
-- [`docs/aish-requirements.md`](docs/aish-requirements.md) — evidence-driven AISH capability skeleton.
+- [`benchmarks/REPORT-iterative-fix.md`](benchmarks/REPORT-iterative-fix.md) — full optimize-layer benchmark.
 
 ## License
 
