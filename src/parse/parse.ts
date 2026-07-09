@@ -28,7 +28,7 @@ export interface ParsedContext {
 }
 
 export interface ParsedTrace {
-  format: "anthropic" | "openai" | "bedrock" | "unknown";
+  format: "anthropic" | "openai" | "bedrock" | "ollama" | "unknown";
   model: string | null;
   inputTokens: number | null;
   cachedInputTokens: number | null;
@@ -118,6 +118,22 @@ function extractSSE(text: string): unknown[] {
       objects.push(JSON.parse(payload));
     } catch {
       // skip malformed SSE data line
+    }
+  }
+  return objects;
+}
+
+// Ollama streams responses as newline-delimited JSON (application/x-ndjson):
+// one complete JSON object per line, no "data:" prefix.
+function extractNDJSON(text: string): unknown[] {
+  const objects: unknown[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    try {
+      objects.push(JSON.parse(trimmed));
+    } catch {
+      // skip malformed NDJSON line
     }
   }
   return objects;
@@ -227,6 +243,18 @@ function looksBedrock(objects: unknown[]): boolean {
       r.metadata !== undefined ||
       (r.output !== undefined && r.stopReason !== undefined)
     );
+  });
+}
+
+// Ollama native responses carry a boolean `done` and either a chat `message`
+// object or a `/api/generate` `response` string. No `type`/`usage`/`choices`
+// fields, so this never collides with the anthropic/openai/bedrock detectors.
+function looksOllama(objects: unknown[]): boolean {
+  return objects.some((o) => {
+    const r = asRecord(o);
+    if (!r) return false;
+    if (typeof r.done !== "boolean") return false;
+    return asRecord(r.message) !== null || typeof r.response === "string";
   });
 }
 
@@ -497,6 +525,40 @@ function parseOpenAI(objects: unknown[]): Extract {
             arguments: entry.args,
           }))
       : noIndex;
+  return acc;
+}
+
+function parseOllama(objects: unknown[]): Extract {
+  const acc = emptyExtract();
+  for (const object of objects) {
+    const record = asRecord(object);
+    if (!record) continue;
+    const model = asString(record.model);
+    if (model) acc.model = model;
+    const promptEval = asNumber(record.prompt_eval_count);
+    if (promptEval !== null) acc.inputTokens = promptEval;
+    const evalCount = asNumber(record.eval_count);
+    if (evalCount !== null) acc.outputTokens = evalCount;
+    const doneReason = asString(record.done_reason);
+    if (doneReason) acc.stopReason = doneReason;
+    const message = asRecord(record.message);
+    if (!message) continue;
+    // Ollama emits complete tool calls (arguments as an object, no id/index),
+    // not the fragmented deltas OpenAI streaming uses.
+    for (const call of asArray(message.tool_calls)) {
+      const callRecord = asRecord(call);
+      if (!callRecord) continue;
+      const fn = asRecord(callRecord.function);
+      const name = fn ? asString(fn.name) : null;
+      if (!name) continue;
+      acc.toolCalls.push({
+        id: asString(callRecord.id) ?? "",
+        name,
+        arguments:
+          fn && fn.arguments !== undefined ? JSON.stringify(fn.arguments) : "",
+      });
+    }
+  }
   return acc;
 }
 
@@ -783,20 +845,33 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
   const isBinaryEventStream = contentType.includes(
     "application/vnd.amazon.eventstream",
   );
-  const streaming =
-    isBinaryEventStream ||
+  const isNdjson = contentType.includes("x-ndjson");
+  const isSSE =
     contentType.includes("text/event-stream") ||
     text.startsWith("data:") ||
     text.startsWith("event:");
 
   let objects: unknown[];
+  let ndjsonStream = false;
   if (isBinaryEventStream) {
     objects = extractBedrockEvents(body);
-  } else if (streaming) {
+  } else if (isNdjson) {
+    objects = extractNDJSON(text);
+  } else if (isSSE) {
     objects = extractSSE(text);
   } else {
     objects = parseWholeJson(text);
+    // Ollama streams newline-delimited JSON but labels it application/json.
+    // When the body is not a single JSON value, fall back to NDJSON parsing.
+    if (objects.length === 0) {
+      const lines = extractNDJSON(text);
+      if (lines.length > 0) {
+        objects = lines;
+        ndjsonStream = lines.length > 1;
+      }
+    }
   }
+  const streaming = isBinaryEventStream || isNdjson || isSSE || ndjsonStream;
   if (objects.length === 0) return { ...base, streaming };
 
   if (looksAnthropic(objects)) {
@@ -831,6 +906,15 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
       ...extracted,
       model: extracted.model ?? extractBedrockModel(events),
       format: "bedrock",
+      toolResults,
+      context,
+      streaming,
+    };
+  }
+  if (looksOllama(objects)) {
+    return {
+      ...parseOllama(objects),
+      format: "ollama",
       toolResults,
       context,
       streaming,

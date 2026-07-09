@@ -140,6 +140,37 @@ provider through the proxy. opencode still supplies the API key itself; the prox
 forwards it and redacts it from stored traces. If a provider's base path isn't `/v1`,
 set `apiPath` on its `[providers.<name>]` entry.
 
+### Providers & known issues
+
+`aap` redirects each agent's provider base URL through the proxy. How that redirect
+works — and its caveats — differ per provider:
+
+| Provider      | Routing                                                                                      | Known issues                                                                                                                                                                      |
+| ------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Anthropic** | `ANTHROPIC_BASE_URL` → `/<session>/anthropic`                                                | —                                                                                                                                                                                 |
+| **OpenAI**    | `OPENAI_BASE_URL` → `/<session>/openai`                                                      | —                                                                                                                                                                                 |
+| **DeepSeek**  | opencode only, via `OPENCODE_CONFIG_CONTENT`                                                 | Not routed for non-opencode agents (no base-URL env). Base path is `/v1`; set `apiPath` if different.                                                                             |
+| **Bedrock**   | Host-based `/model/...` (no session prefix); attributed to the active `meta.bedrock` session | Requires SigV4 re-signing, so AWS creds / `AWS_PROFILE` must be available to `aap serve`. Concurrent Bedrock sessions can mis-attribute (routing is host-based, not per-session). |
+| **Ollama**    | Host-based `/api/...` (native API); attributed to the active `meta.ollama` session           | See below.                                                                                                                                                                        |
+
+**Ollama specifics**
+
+- `OLLAMA_HOST` accepts only scheme+host+port (no path), so requests can't carry a
+  `/<session>/` prefix. They're matched by the `/api/` path and attributed to the
+  session started by `aap run ollama` — concurrent Ollama sessions can mis-attribute.
+- For **cloud** models (`*:cloud`), point the upstream at your **local Ollama daemon**,
+  not `ollama.com`:
+  ```toml
+  [providers.ollama]
+  upstream = "http://127.0.0.1:11434"
+  ```
+  The daemon relays to `ollama.com` and authenticates via `~/.ollama/id_ed25519`.
+  Pointing the upstream directly at `https://ollama.com` returns **401**: the CLI treats
+  the proxy as a local daemon and sends no cloud credentials. Requires `ollama serve`.
+- The daemon streams newline-delimited JSON labelled `application/json` (not
+  `x-ndjson`); `aap` detects and parses it. Token usage comes from
+  `prompt_eval_count`/`eval_count`; Ollama reports no cache tokens.
+
 ### Self-introspection via MCP
 
 `aap mcp` starts a stdio MCP server so an agent can query its own captured behaviour —

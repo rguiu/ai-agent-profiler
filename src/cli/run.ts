@@ -32,6 +32,13 @@ export function buildProviderEnv(
     if (varName) out[varName] = `${origin}/${sessionId}/${name}`;
   }
 
+  // Ollama CLI talks to its native API and only honours OLLAMA_HOST (scheme+
+  // host+port, no path). Point it at the proxy; requests are attributed to this
+  // session via meta.ollama (see run()), matched by path in parseRoute.
+  if (agent === "ollama" && config.providers.ollama) {
+    out.OLLAMA_HOST = origin;
+  }
+
   // Bedrock: Claude Code uses ANTHROPIC_BEDROCK_BASE_URL (not the AWS SDK env var).
   // The SDK sends requests to /model/{id}/converse-stream on this host.
   const useBedrock = env?.CLAUDE_CODE_USE_BEDROCK;
@@ -97,6 +104,9 @@ export async function run(args: string[]): Promise<void> {
   );
   if (overrides.ANTHROPIC_BEDROCK_BASE_URL) {
     meta.bedrock = "1";
+  }
+  if (overrides.OLLAMA_HOST) {
+    meta.ollama = "1";
   }
 
   const session: SessionInfo = {

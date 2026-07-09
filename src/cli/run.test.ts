@@ -78,6 +78,42 @@ describe("buildProviderEnv", () => {
       "http://h:1/s/openrouter/api/v1",
     );
   });
+
+  it("sets OLLAMA_HOST for the ollama agent when configured", () => {
+    const withOllama: Pick<Config, "providers"> = {
+      providers: { ollama: { upstream: "https://ollama.com" } },
+    };
+    const env = buildProviderEnv(
+      "ollama",
+      withOllama,
+      "http://localhost:8080",
+      "sid1",
+    );
+    expect(env.OLLAMA_HOST).toBe("http://localhost:8080");
+  });
+
+  it("does not set OLLAMA_HOST when ollama provider is absent", () => {
+    const env = buildProviderEnv(
+      "ollama",
+      providers,
+      "http://localhost:8080",
+      "sid1",
+    );
+    expect(env.OLLAMA_HOST).toBeUndefined();
+  });
+
+  it("does not set OLLAMA_HOST for non-ollama agents", () => {
+    const withOllama: Pick<Config, "providers"> = {
+      providers: { ollama: { upstream: "https://ollama.com" } },
+    };
+    const env = buildProviderEnv(
+      "claude",
+      withOllama,
+      "http://localhost:8080",
+      "sid1",
+    );
+    expect(env.OLLAMA_HOST).toBeUndefined();
+  });
 });
 
 describe("parseRunArgs", () => {

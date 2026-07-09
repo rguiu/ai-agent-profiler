@@ -3,6 +3,7 @@ import { parseRoute } from "./route.js";
 
 const providers = new Set(["anthropic", "openai"]);
 const withBedrock = new Set(["anthropic", "openai", "bedrock"]);
+const withOllama = new Set(["anthropic", "openai", "ollama"]);
 
 describe("parseRoute", () => {
   it("parses session + provider + path", () => {
@@ -75,6 +76,26 @@ describe("parseRoute", () => {
 
   it("does not route /model/ when bedrock provider is not configured", () => {
     expect(parseRoute("/model/some-model/converse", providers)).toBeNull();
+  });
+
+  it("routes Ollama /api/ paths with active session", () => {
+    expect(parseRoute("/api/chat", withOllama, null, "ollama-sid")).toEqual({
+      sessionId: "ollama-sid",
+      provider: "ollama",
+      upstreamPath: "/api/chat",
+    });
+  });
+
+  it("routes Ollama /api/ paths without active session", () => {
+    expect(parseRoute("/api/generate", withOllama)).toEqual({
+      sessionId: null,
+      provider: "ollama",
+      upstreamPath: "/api/generate",
+    });
+  });
+
+  it("does not route /api/ when ollama provider is not configured", () => {
+    expect(parseRoute("/api/chat", providers)).toBeNull();
   });
 
   it("rejects path-traversal session IDs", () => {

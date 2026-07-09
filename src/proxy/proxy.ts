@@ -30,6 +30,7 @@ const HOP_BY_HOP: ReadonlySet<string> = new Set([
 
 export interface ProxyState {
   activeBedrockSession: string | null;
+  activeOllamaSession: string | null;
 }
 
 export interface ProxyOptions {
@@ -45,14 +46,18 @@ export function createProxyServer(
   options?: ProxyOptions,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
-  // Initialize activeBedrockSession from hydrated registry (survives proxy restart)
-  let initial: string | null = null;
-  if (providers.has("bedrock")) {
-    for (const s of registry.list()) {
-      if (s.meta?.bedrock === "1") initial = s.id;
-    }
+  // Initialize active provider sessions from hydrated registry (survives restart)
+  let initialBedrock: string | null = null;
+  let initialOllama: string | null = null;
+  for (const s of registry.list()) {
+    if (providers.has("bedrock") && s.meta?.bedrock === "1")
+      initialBedrock = s.id;
+    if (providers.has("ollama") && s.meta?.ollama === "1") initialOllama = s.id;
   }
-  const state: ProxyState = { activeBedrockSession: initial };
+  const state: ProxyState = {
+    activeBedrockSession: initialBedrock,
+    activeOllamaSession: initialOllama,
+  };
 
   const optimizeLayers: Map<string, OptimizeLayer> | null = options?.optimize
     ? new Map()
@@ -103,7 +108,12 @@ function handle(
   if (handleUi(req, res, pathname)) return;
   if (store && handleApi(req, res, pathname, store)) return;
 
-  const route = parseRoute(pathname, providers, state.activeBedrockSession);
+  const route = parseRoute(
+    pathname,
+    providers,
+    state.activeBedrockSession,
+    state.activeOllamaSession,
+  );
   if (!route) {
     sendError(res, 404, `No provider route for "${pathname}"`);
     return;
@@ -187,6 +197,7 @@ function handle(
       extraHeaders,
       optimizer,
       throttle,
+      timeoutMs: route.provider === "ollama" ? 120_000 : undefined,
       meta: {
         sessionId: route.sessionId,
         provider: route.provider,
@@ -278,6 +289,9 @@ function registerSession(
     if (session.meta?.bedrock === "1") {
       state.activeBedrockSession = session.id;
     }
+    if (session.meta?.ollama === "1") {
+      state.activeOllamaSession = session.id;
+    }
     sendJson(res, 200, { ok: true });
   });
 }
@@ -288,6 +302,7 @@ interface ForwardObs {
   extraHeaders?: Record<string, string>;
   optimizer?: OptimizeLayer;
   throttle?: Throttle;
+  timeoutMs?: number;
   meta: Omit<
     RequestLogEntry,
     "status" | "latencyMs" | "responseBytes" | "error"
@@ -301,7 +316,8 @@ function forward(
   pathWithQuery: string,
   obs: ForwardObs,
 ): void {
-  const { trace, logger, extraHeaders, optimizer, throttle, meta } = obs;
+  const { trace, logger, extraHeaders, optimizer, throttle, timeoutMs, meta } =
+    obs;
   const startedAt = Date.now();
   let status: number | null = null;
   let responseBytes = 0;
@@ -364,7 +380,7 @@ function forward(
         method: req.method,
         path: fullPath,
         headers,
-        timeout: 30_000,
+        timeout: timeoutMs ?? 30_000,
       },
       (upstreamRes) => {
         status = upstreamRes.statusCode ?? 502;
