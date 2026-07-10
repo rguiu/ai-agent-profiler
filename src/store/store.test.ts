@@ -389,7 +389,9 @@ describe("optimize actions", () => {
     const dir = tmpDir();
     const store = openStore(dir);
     store.upsertSession({ id: "s1", startedAt: "t" });
-    store.recordOptimizeActions("s1", [{ type: "prune_stale", tokensSaved: 10 }]);
+    store.recordOptimizeActions("s1", [
+      { type: "prune_stale", tokensSaved: 10 },
+    ]);
     store.recordOptimizeActions("s1", [
       { type: "prune_stale", tokensSaved: 10 },
       { type: "prune_stale", tokensSaved: 40 },
@@ -404,7 +406,9 @@ describe("optimize actions", () => {
     const dir = tmpDir();
     const store = openStore(dir);
     store.upsertSession({ id: "s1", startedAt: "t" });
-    store.recordOptimizeActions("s1", [{ type: "prune_stale", tokensSaved: 10 }]);
+    store.recordOptimizeActions("s1", [
+      { type: "prune_stale", tokensSaved: 10 },
+    ]);
     store.deleteSession("s1");
     const rows = store.rawQuery(
       "SELECT COUNT(*) AS c FROM optimize_actions",

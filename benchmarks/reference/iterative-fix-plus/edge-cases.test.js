@@ -206,7 +206,13 @@ describe("Scheduler — dependency edge cases", () => {
   it("task with no deps runs immediately", async () => {
     const s = new Scheduler({ maxConcurrency: 1 });
     let ran = false;
-    s.add({ id: "x", fn: () => { ran = true; }, deps: [] });
+    s.add({
+      id: "x",
+      fn: () => {
+        ran = true;
+      },
+      deps: [],
+    });
     await s.run();
     assert.ok(ran);
   });
@@ -409,7 +415,9 @@ describe("Pipeline — context accumulation edge cases", () => {
   it("context from earlier stages is visible in later stages", async () => {
     const p = new Pipeline({ limiter: new RateLimiter(1000) });
     p.addStage("s1", [{ id: "a", fn: async () => "first" }]);
-    p.addStage("s2", [{ id: "b", fn: async (ctx) => ({ ...ctx, added: "second" }) }]);
+    p.addStage("s2", [
+      { id: "b", fn: async (ctx) => ({ ...ctx, added: "second" }) },
+    ]);
     p.addStage("s3", [
       {
         id: "c",
@@ -508,7 +516,11 @@ describe("ResultCache.topKeys — edge cases", () => {
     await new Promise((r) => setTimeout(r, 30));
     // Both are expired, cache still has them until pruned but topKeys should skip
     const top = cache.topKeys(10);
-    assert.equal(top.length, 0, `expired entries should not appear, got ${top}`);
+    assert.equal(
+      top.length,
+      0,
+      `expired entries should not appear, got ${top}`,
+    );
   });
 
   it("topKeys returns keys sorted by access count descending", () => {
@@ -588,7 +600,7 @@ describe("Integration — cross-module", () => {
   it("EventBus history survives scheduler run with many events", async () => {
     const bus = new EventBus({ maxHistory: 50 });
     const s = new Scheduler({ maxConcurrency: 4 });
-    // Use the scheduler's own bus by constructing differently... 
+    // Use the scheduler's own bus by constructing differently...
     // Actually just test that a bus with small maxHistory works under emit load
     for (let i = 0; i < 200; i++) bus.emit("tick", i);
     const h = bus.history(10);

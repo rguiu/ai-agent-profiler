@@ -172,7 +172,9 @@ function handle(
             const byType: Record<string, number> = {};
             for (const a of actions) byType[a.type] = (byType[a.type] || 0) + 1;
             process.stderr.write(
-              `[optimize] ${route.sessionId} ${Object.entries(byType).map(([k, v]) => `${k}=${v}`).join(" ")}\n`,
+              `[optimize] ${route.sessionId} ${Object.entries(byType)
+                .map(([k, v]) => `${k}=${v}`)
+                .join(" ")}\n`,
             );
           }
           store.recordOptimizeActions(route.sessionId!, actions);
@@ -340,8 +342,16 @@ function forward(
   pathWithQuery: string,
   obs: ForwardObs,
 ): void {
-  const { trace, logger, extraHeaders, optimizer, recordOptimize, throttle, timeoutMs, meta } =
-    obs;
+  const {
+    trace,
+    logger,
+    extraHeaders,
+    optimizer,
+    recordOptimize,
+    throttle,
+    timeoutMs,
+    meta,
+  } = obs;
   const startedAt = Date.now();
   let status: number | null = null;
   let responseBytes = 0;

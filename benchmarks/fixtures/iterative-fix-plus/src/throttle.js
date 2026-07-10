@@ -12,8 +12,12 @@ export class SlidingWindowThrottle {
     this.#windowMs = windowMs;
   }
 
-  get maxRequests() { return this.#maxRequests; }
-  get windowMs() { return this.#windowMs; }
+  get maxRequests() {
+    return this.#maxRequests;
+  }
+  get windowMs() {
+    return this.#windowMs;
+  }
 
   /**
    * Check whether userId is allowed to make a request at the given timestamp.
@@ -29,7 +33,7 @@ export class SlidingWindowThrottle {
     const userLog = this.#requests.get(userId);
     const windowStart = timestamp - this.#windowMs;
 
-    const activeRequests = userLog.filter(ts => ts > windowStart);
+    const activeRequests = userLog.filter((ts) => ts > windowStart);
     this.#requests.set(userId, activeRequests);
 
     if (activeRequests.length < this.#maxRequests) {
@@ -49,6 +53,6 @@ export class SlidingWindowThrottle {
     const userLog = this.#requests.get(userId);
     if (!userLog) return 0;
     const windowStart = timestamp - this.#windowMs;
-    return userLog.filter(ts => ts > windowStart).length;
+    return userLog.filter((ts) => ts > windowStart).length;
   }
 }

@@ -623,7 +623,12 @@ export class Store {
       context: this.sessionContextStmt.get(id) as SessionContext,
       commands: commandBreakdown(this.bashToolCalls(id)),
     };
-    return { session, requests, analysis, optimize: this.getOptimizeActions(id) };
+    return {
+      session,
+      requests,
+      analysis,
+      optimize: this.getOptimizeActions(id),
+    };
   }
 
   globalToolUsage(): ToolUsage[] {

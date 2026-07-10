@@ -194,7 +194,9 @@ export class OptimizeLayer {
   }
 
   /** Expose action count for debugging. */
-  get actionCount(): number { return this.actions.length; }
+  get actionCount(): number {
+    return this.actions.length;
+  }
 
   rewriteToolResult(toolName: string, args: string, content: string): string {
     const tokens = estimateTokens(content);
@@ -384,10 +386,10 @@ export class OptimizeLayer {
 
       if (Array.isArray(msg.content)) {
         const rewritten = msg.content.map((block: ContentBlock) => {
-        if (block.type !== "tool_result") return block;
-        if (!block.content || typeof block.content !== "string") return block;
-        const tokens = estimateTokens(block.content);
-        if (tokens < 50) return block;
+          if (block.type !== "tool_result") return block;
+          if (!block.content || typeof block.content !== "string") return block;
+          const tokens = estimateTokens(block.content);
+          if (tokens < 50) return block;
 
           const toolUseId = block.tool_use_id as string | undefined;
           const toolName = this.resolveToolName(messages, toolUseId) ?? "tool";
@@ -439,7 +441,9 @@ export class OptimizeLayer {
       if (msg.role === "assistant" && Array.isArray(msg.tool_calls)) {
         for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
           if (tc.id === toolCallId && tc.function) {
-            return (tc.function as Record<string, unknown>).name as string ?? null;
+            return (
+              ((tc.function as Record<string, unknown>).name as string) ?? null
+            );
           }
         }
       }

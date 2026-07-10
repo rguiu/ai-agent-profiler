@@ -41,7 +41,7 @@ describe("SlidingWindowThrottle", () => {
     assert.equal(t.isAllowed("u2", 200), true);
     assert.equal(t.isAllowed("u1", 300), true);
     assert.equal(t.isAllowed("u1", 400), false); // u1 at limit
-    assert.equal(t.isAllowed("u2", 500), true);  // u2 still has capacity
+    assert.equal(t.isAllowed("u2", 500), true); // u2 still has capacity
   });
 
   it("exposes maxRequests and windowMs", () => {

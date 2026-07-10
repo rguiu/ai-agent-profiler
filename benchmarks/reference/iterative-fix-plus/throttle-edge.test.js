@@ -23,12 +23,24 @@ describe("SlidingWindowThrottle — boundary condition (BUG #9)", () => {
 
     // A request made exactly windowMs ago is still within the window, so the
     // two earlier requests still count and the next one is blocked — no leak.
-    assert.equal(t.isAllowed("u", 2000), false, "boundary requests still active");
+    assert.equal(
+      t.isAllowed("u", 2000),
+      false,
+      "boundary requests still active",
+    );
 
     // One millisecond later they fall outside the window and expire, freeing slots.
-    assert.equal(t.isAllowed("u", 2001), true,  "first after window rolls over");
-    assert.equal(t.isAllowed("u", 2001), true,  "second after window rolls over");
-    assert.equal(t.isAllowed("u", 2001), false, "third after rollover must be blocked");
+    assert.equal(t.isAllowed("u", 2001), true, "first after window rolls over");
+    assert.equal(
+      t.isAllowed("u", 2001),
+      true,
+      "second after window rolls over",
+    );
+    assert.equal(
+      t.isAllowed("u", 2001),
+      false,
+      "third after rollover must be blocked",
+    );
   });
 
   it("handles burst at window boundary with correct inclusive filter", () => {
@@ -37,7 +49,7 @@ describe("SlidingWindowThrottle — boundary condition (BUG #9)", () => {
     t.isAllowed("u", 500);
     t.isAllowed("u", 500);
     // t=1000: windowStart=500. Requests at 500 should still count.
-    assert.equal(t.isAllowed("u", 1000), true,  "3rd slot (2 from 500 active)");
+    assert.equal(t.isAllowed("u", 1000), true, "3rd slot (2 from 500 active)");
     assert.equal(t.isAllowed("u", 1000), false, "4th should be blocked");
   });
 
@@ -45,14 +57,22 @@ describe("SlidingWindowThrottle — boundary condition (BUG #9)", () => {
     const t = new SlidingWindowThrottle(1, 100);
     t.isAllowed("u", 100);
     // t=200: windowStart=100. Request at 100 is exactly at boundary — must still count.
-    assert.equal(t.isAllowed("u", 200), false, "request at boundary still active, must block");
+    assert.equal(
+      t.isAllowed("u", 200),
+      false,
+      "request at boundary still active, must block",
+    );
   });
 
   it("window boundary correctly expires after windowMs + 1ms", () => {
     const t = new SlidingWindowThrottle(1, 100);
     t.isAllowed("u", 100);
     // t=201: windowStart=101. Request at 100 < 101 — now expired.
-    assert.equal(t.isAllowed("u", 201), true, "request past boundary by 1ms, should be allowed");
+    assert.equal(
+      t.isAllowed("u", 201),
+      true,
+      "request past boundary by 1ms, should be allowed",
+    );
   });
 });
 
@@ -91,7 +111,18 @@ describe("SlidingWindowThrottle — state consistency", () => {
       results.push(t.isAllowed("u", 1000 + i));
     }
     // First 3 allowed, rest blocked
-    assert.deepEqual(results, [true, true, true, false, false, false, false, false, false, false]);
+    assert.deepEqual(results, [
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
   });
 
   it("expired timestamps are properly cleaned from internal storage", () => {
