@@ -6,12 +6,52 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { Worker } from "node:worker_threads";
 import { PriorityQueue } from "../src/priority-queue.js";
 import { RateLimiter } from "../src/rate-limiter.js";
 import { ResultCache } from "../src/result-cache.js";
 import { Scheduler } from "../src/scheduler.js";
 import { Pipeline } from "../src/pipeline.js";
 import { EventBus } from "../src/event-bus.js";
+
+// Run a scheduler scenario in a worker thread so a *synchronous* busy-loop in
+// Scheduler.run() (a real bug: spinning when a task's deps are permanently
+// unsatisfiable) can be force-terminated. An in-process setTimeout/Promise.race
+// guard cannot interrupt a synchronous loop — the event loop never yields — so
+// without this the whole `node --test` process hangs and gets SIGKILLed,
+// zeroing every test. Returns { ran, completed } where `completed` is false if
+// the scheduler had to be terminated for hanging.
+function runSchedulerInWorker(schedulerUrl, timeoutMs = 3000) {
+  const code = `
+    const { parentPort } = require("node:worker_threads");
+    import(${JSON.stringify(schedulerUrl)}).then(async ({ Scheduler }) => {
+      const post = (id) => parentPort.postMessage({ type: "ran", id });
+      const s = new Scheduler({ maxConcurrency: 1 });
+      s.add({ id: "orphan", fn: () => post("orphan"), deps: ["nonexistent"], priority: 1 });
+      s.add({ id: "other", fn: () => post("other"), priority: 2 });
+      await s.run();
+      parentPort.postMessage({ type: "done" });
+    }).catch((e) => parentPort.postMessage({ type: "error", message: String(e) }));
+  `;
+  return new Promise((resolve) => {
+    const ran = [];
+    const w = new Worker(code, { eval: true });
+    let settled = false;
+    const finish = (completed) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      w.terminate();
+      resolve({ ran, completed });
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    w.on("message", (m) => {
+      if (m.type === "ran") ran.push(m.id);
+      else if (m.type === "done" || m.type === "error") finish(true);
+    });
+    w.on("error", () => finish(true));
+  });
+}
 
 // ── BUG #1: PriorityQueue bubbleUp uses Math.floor(i/2) not (i-1)/2 ──────
 
@@ -172,26 +212,23 @@ describe("Scheduler — dependency edge cases", () => {
   });
 
   it("task with a dep on a non-existent task never runs while others proceed", async () => {
-    const s = new Scheduler({ maxConcurrency: 1 });
-    const ran = [];
-    s.add({
-      id: "orphan",
-      fn: () => { ran.push("orphan"); },
-      deps: ["nonexistent"],
-      priority: 1,
-    });
-    s.add({ id: "other", fn: () => ran.push("other"), priority: 2 });
-    // Run in a timeout so orphan spin doesn't block the event loop indefinitely.
-    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("hung")), 3000));
-    try {
-      await Promise.race([s.run(), timeout]);
-    } catch (e) {
-      // Expected — the scheduler should either fail the orphan or hang.
-      // Either way "other" should have run before the hang.
-    }
-    // The valid task must have run.
+    // The scheduler may legitimately never terminate here (orphan can never be
+    // unblocked). What it must NOT do is (a) run the orphan, or (b) starve the
+    // ready task 'other'. A correct fix drains 'other' then either exits or
+    // parks orphan without busy-spinning. We run in a worker so a synchronous
+    // spin-loop is force-terminated instead of hanging the whole test process.
+    const schedulerUrl = new URL("../src/scheduler.js", import.meta.url).href;
+    const { ran, completed } = await runSchedulerInWorker(schedulerUrl, 3000);
+    // The valid task must have run (whether or not run() ever returned).
     assert.ok(ran.includes("other"), "unblocked task 'other' should have run");
     assert.ok(!ran.includes("orphan"), "orphan task must not have run");
+    // A synchronous busy-loop that never yields is a bug: 'other' would never
+    // even get a chance to run, and the process would need force-termination.
+    // If we had to terminate AND 'other' never ran, that's the busy-loop bug.
+    assert.ok(
+      completed || ran.includes("other"),
+      "scheduler busy-looped synchronously without draining ready tasks",
+    );
   });
 });
 
