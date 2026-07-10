@@ -26,12 +26,10 @@ export const optimizeSchema = z.object({
   pruneStale: z.boolean().default(true),
   suppressReread: z.boolean().default(true),
   collapseSystem: z.boolean().default(true),
-  stripToolDefs: z.boolean().default(false),
   pruneUnusedTools: z.boolean().default(true),
   truncateThreshold: z.number().int().positive().default(4096),
   pruneAfterTurns: z.number().int().positive().default(6),
   suppressWithinTurns: z.number().int().positive().default(2),
-  stripToolDefsAfter: z.number().int().positive().default(3),
   pruneUnusedToolsAfter: z.number().int().positive().default(10),
 });
 

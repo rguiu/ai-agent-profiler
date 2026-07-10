@@ -601,6 +601,119 @@ describe("Bedrock format", () => {
   });
 });
 
+describe("Ollama format", () => {
+  function ndjson(objs: unknown[]): string {
+    return objs.map((o) => JSON.stringify(o)).join("\n") + "\n";
+  }
+
+  it("parses an Ollama streaming chat response (NDJSON)", () => {
+    const body = ndjson([
+      {
+        model: "llama3.2",
+        message: { role: "assistant", content: "Hi" },
+        done: false,
+      },
+      {
+        model: "llama3.2",
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            { function: { name: "get_weather", arguments: { city: "NYC" } } },
+          ],
+        },
+        done: false,
+      },
+      {
+        model: "llama3.2",
+        message: { role: "assistant", content: "" },
+        done: true,
+        done_reason: "stop",
+        prompt_eval_count: 26,
+        eval_count: 298,
+      },
+    ]);
+    const result = parseTrace(
+      traceFor("application/x-ndjson", Buffer.from(body)),
+    );
+    expect(result.format).toBe("ollama");
+    expect(result.model).toBe("llama3.2");
+    expect(result.inputTokens).toBe(26);
+    expect(result.outputTokens).toBe(298);
+    expect(result.stopReason).toBe("stop");
+    expect(result.streaming).toBe(true);
+    expect(result.toolCalls).toEqual([
+      { id: "", name: "get_weather", arguments: '{"city":"NYC"}' },
+    ]);
+  });
+
+  it("parses Ollama streaming NDJSON labelled application/json", () => {
+    // The real Ollama daemon streams NDJSON but sets content-type
+    // application/json, so the parser must fall back to NDJSON extraction.
+    const body = ndjson([
+      {
+        model: "minimax-m3",
+        message: { role: "assistant", content: "O" },
+        done: false,
+      },
+      {
+        model: "minimax-m3",
+        message: { role: "assistant", content: "K" },
+        done: false,
+      },
+      {
+        model: "minimax-m3",
+        message: { role: "assistant", content: "" },
+        done: true,
+        done_reason: "stop",
+        prompt_eval_count: 12,
+        eval_count: 3,
+      },
+    ]);
+    const result = parseTrace(traceFor("application/json", Buffer.from(body)));
+    expect(result.format).toBe("ollama");
+    expect(result.model).toBe("minimax-m3");
+    expect(result.inputTokens).toBe(12);
+    expect(result.outputTokens).toBe(3);
+    expect(result.stopReason).toBe("stop");
+    expect(result.streaming).toBe(true);
+  });
+
+  it("parses a non-streaming Ollama chat response (JSON)", () => {
+    const body = JSON.stringify({
+      model: "llama3.2",
+      message: { role: "assistant", content: "Hello" },
+      done: true,
+      done_reason: "stop",
+      prompt_eval_count: 10,
+      eval_count: 5,
+    });
+    const result = parseTrace(traceFor("application/json", Buffer.from(body)));
+    expect(result.format).toBe("ollama");
+    expect(result.model).toBe("llama3.2");
+    expect(result.inputTokens).toBe(10);
+    expect(result.outputTokens).toBe(5);
+    expect(result.stopReason).toBe("stop");
+    expect(result.streaming).toBe(false);
+    expect(result.toolCalls).toEqual([]);
+  });
+
+  it("parses an Ollama /api/generate response", () => {
+    const body = JSON.stringify({
+      model: "llama3.2",
+      response: "the answer",
+      done: true,
+      done_reason: "stop",
+      prompt_eval_count: 8,
+      eval_count: 12,
+    });
+    const result = parseTrace(traceFor("application/json", Buffer.from(body)));
+    expect(result.format).toBe("ollama");
+    expect(result.inputTokens).toBe(8);
+    expect(result.outputTokens).toBe(12);
+  });
+});
+
 describe("computeCost", () => {
   const pricing = { "gpt-4o": { inputPerMTok: 2.5, outputPerMTok: 10 } };
 
@@ -643,5 +756,51 @@ describe("computeCost", () => {
     const cost = computeCost("gpt-4o", 1_000_000, 0, pricing, 500_000);
     // All 1M tokens at 2.5/M regardless of cache
     expect(cost).toBeCloseTo(2.5);
+  });
+
+  it("prices a DeepSeek streaming response from its terminal usage chunk", () => {
+    const deepseek = {
+      "deepseek-chat": { inputPerMTok: 0.435, outputPerMTok: 0.87 },
+    };
+    const body = Buffer.from(
+      sse([
+        {
+          object: "chat.completion.chunk",
+          model: "deepseek-chat",
+          choices: [{ index: 0, delta: { content: "ok" } }],
+        },
+        {
+          object: "chat.completion.chunk",
+          model: "deepseek-chat",
+          choices: [],
+          usage: { prompt_tokens: 1000, completion_tokens: 500 },
+        },
+      ]) + "data: [DONE]\n\n",
+    );
+    const result = parseTrace(traceFor("text/event-stream", body));
+    expect(result.model).toBe("deepseek-chat");
+    expect(result.inputTokens).toBe(1000);
+    expect(result.outputTokens).toBe(500);
+    const cost = computeCost(
+      result.model,
+      result.inputTokens,
+      result.outputTokens,
+      deepseek,
+    );
+    expect(cost).toBeCloseTo((1000 / 1e6) * 0.435 + (500 / 1e6) * 0.87);
+  });
+
+  it("resolves prefixed and mixed-case model keys to the same rates", () => {
+    const deepseek = {
+      "deepseek-chat": { inputPerMTok: 0.435, outputPerMTok: 0.87 },
+    };
+    const base = computeCost("deepseek-chat", 1000, 500, deepseek);
+    expect(computeCost("deepseek/deepseek-chat", 1000, 500, deepseek)).toBe(
+      base,
+    );
+    expect(computeCost("DeepSeek-Chat", 1000, 500, deepseek)).toBe(base);
+    expect(computeCost("provider/DeepSeek-Chat", 1000, 500, deepseek)).toBe(
+      base,
+    );
   });
 });

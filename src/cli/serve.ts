@@ -10,8 +10,11 @@ const SHUTDOWN_TIMEOUT_MS = 5000;
 
 export function serve(args?: string[]): void {
   const cliOptimize = args?.includes("--optimize") ?? false;
+  const cliNoOptimize = args?.includes("--no-optimize") ?? false;
   const config = loadConfig();
-  const optimize = cliOptimize || config.optimize.enabled;
+  const optimize = cliNoOptimize
+    ? false
+    : cliOptimize || config.optimize.enabled;
   const registry = new SessionRegistry();
   const store = openStore(config.storage.dir);
 

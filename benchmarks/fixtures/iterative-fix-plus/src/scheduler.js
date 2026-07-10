@@ -97,7 +97,6 @@ export class Scheduler {
     while (this.#running.size < this.#maxConcurrency && this.#queue.size > 0) {
       const task = this.#queue.peek();
       if (!task) break;
-      // BUG #2: dependency check is inverted (should check all deps ARE completed)
       if (
         task.deps.length > 0 &&
         task.deps.some((d) => this.#completed.has(d))
@@ -135,7 +134,6 @@ export class Scheduler {
         clearTimeout(timeoutId);
         this.#running.delete(task.id);
         if (task.attempts < task.maxRetries) {
-          // BUG #3: re-queues with wrong priority (uses attempts instead of original priority)
           this.#queue.push(task, task.attempts);
           this.#bus.emit("task:retry", {
             id: task.id,

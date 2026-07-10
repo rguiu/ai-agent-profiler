@@ -11,6 +11,7 @@ export {
   type SessionRequest,
   type SessionDetail,
   type RequestDetail,
+  type OptimizeActionSummary,
   type ToolCall,
   type ToolCallInput,
   type Stats,

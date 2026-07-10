@@ -65,6 +65,14 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls (request_id);
+
+CREATE TABLE IF NOT EXISTS optimize_actions (
+  session_id   TEXT NOT NULL,
+  type         TEXT NOT NULL,
+  count        INTEGER NOT NULL,
+  tokens_saved INTEGER NOT NULL,
+  PRIMARY KEY (session_id, type)
+);
 `;
 
 export interface RequestRow {
@@ -163,6 +171,13 @@ export interface SessionDetail {
   session: SessionRow;
   requests: SessionRequest[];
   analysis: SessionAnalysis;
+  optimize: OptimizeActionSummary[];
+}
+
+export interface OptimizeActionSummary {
+  type: string;
+  count: number;
+  tokens_saved: number;
 }
 
 export interface ToolCall {
@@ -282,6 +297,13 @@ export class Store {
   private readonly repeatedToolCallsStmt;
   private readonly contextGrowthStmt;
   private readonly sessionContextStmt;
+  private readonly deleteOptimizeStmt;
+  private readonly insertOptimizeStmt;
+  private readonly getOptimizeStmt;
+  private readonly replaceOptimizeTxn: (
+    sessionId: string,
+    rows: ReadonlyArray<{ type: string; count: number; tokens_saved: number }>,
+  ) => void;
 
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
@@ -455,6 +477,32 @@ export class Store {
       FROM requests r JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
     `);
+    this.deleteOptimizeStmt = db.prepare(
+      `DELETE FROM optimize_actions WHERE session_id = ?`,
+    );
+    this.insertOptimizeStmt = db.prepare(`
+      INSERT INTO optimize_actions (session_id, type, count, tokens_saved)
+      VALUES (@session_id, @type, @count, @tokens_saved)
+    `);
+    this.getOptimizeStmt = db.prepare(`
+      SELECT type, count, tokens_saved FROM optimize_actions
+      WHERE session_id = ? ORDER BY tokens_saved DESC, type
+    `);
+    this.replaceOptimizeTxn = db.transaction(
+      (
+        sessionId: string,
+        rows: ReadonlyArray<{
+          type: string;
+          count: number;
+          tokens_saved: number;
+        }>,
+      ) => {
+        this.deleteOptimizeStmt.run(sessionId);
+        for (const row of rows) {
+          this.insertOptimizeStmt.run({ session_id: sessionId, ...row });
+        }
+      },
+    );
   }
 
   upsertSession(info: SessionInfo): void {
@@ -529,6 +577,32 @@ export class Store {
     this.recordToolResultStmt.run({ tool_id: toolId, bytes, tokens });
   }
 
+  // Persist the optimize layer's cumulative actions for a session as per-type
+  // totals. Called live on each optimized request; getActions() is cumulative,
+  // so replacing the session's rows keeps the totals current.
+  recordOptimizeActions(
+    sessionId: string,
+    actions: ReadonlyArray<{ type: string; tokensSaved: number }>,
+  ): void {
+    const byType = new Map<string, { count: number; tokens_saved: number }>();
+    for (const action of actions) {
+      const entry = byType.get(action.type) ?? { count: 0, tokens_saved: 0 };
+      entry.count++;
+      entry.tokens_saved += action.tokensSaved;
+      byType.set(action.type, entry);
+    }
+    const rows = [...byType.entries()].map(([type, v]) => ({
+      type,
+      count: v.count,
+      tokens_saved: v.tokens_saved,
+    }));
+    this.replaceOptimizeTxn(sessionId, rows);
+  }
+
+  getOptimizeActions(sessionId: string): OptimizeActionSummary[] {
+    return this.getOptimizeStmt.all(sessionId) as OptimizeActionSummary[];
+  }
+
   listSessions(): SessionSummary[] {
     const rows = this.listSessionsStmt.all() as Array<
       Omit<SessionSummary, "meta"> & { meta: string | null }
@@ -549,7 +623,12 @@ export class Store {
       context: this.sessionContextStmt.get(id) as SessionContext,
       commands: commandBreakdown(this.bashToolCalls(id)),
     };
-    return { session, requests, analysis };
+    return {
+      session,
+      requests,
+      analysis,
+      optimize: this.getOptimizeActions(id),
+    };
   }
 
   globalToolUsage(): ToolUsage[] {
@@ -627,6 +706,9 @@ export class Store {
         )
         .run(sid);
       this.db.prepare("DELETE FROM requests WHERE session_id = ?").run(sid);
+      this.db
+        .prepare("DELETE FROM optimize_actions WHERE session_id = ?")
+        .run(sid);
       this.db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
     });
     txn(id);

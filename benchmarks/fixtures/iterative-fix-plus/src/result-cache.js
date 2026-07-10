@@ -44,7 +44,6 @@ export class ResultCache {
     }
     entry.accessCount++;
     entry.lastAccess = Date.now();
-    // BUG #6: returns the entry metadata object instead of just the value
     return entry;
   }
 
@@ -105,8 +104,20 @@ export class ResultCache {
     this.#entries.clear();
   }
 
+  /**
+   * Return the keys of the `n` most-accessed entries, most-accessed first.
+   * Access count is the number of successful get() calls for a key. Ties may be
+   * broken in any order. Returns at most `n` keys (fewer if the cache is smaller).
+   * Expired entries are not counted.
+   *
+   * @param {number} n
+   * @returns {string[]}
+   */
+  topKeys(n) {
+    throw new Error("not implemented: ResultCache.topKeys");
+  }
+
   #evictLRU() {
-    // BUG #7: evicts most-recently-used instead of least-recently-used
     let target = null;
     let targetAccess = -Infinity;
     for (const [key, entry] of this.#entries) {

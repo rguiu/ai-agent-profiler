@@ -20,7 +20,7 @@ export function renderMarkdown(
   detail: SessionDetail,
   recommendations: Recommendation[],
 ): string {
-  const { session, requests, analysis } = detail;
+  const { session, requests, analysis, optimize } = detail;
   const inputTokens = requests.reduce((a, r) => a + (r.input_tokens ?? 0), 0);
   const outputTokens = requests.reduce((a, r) => a + (r.output_tokens ?? 0), 0);
   const totalCost = requests.reduce((a, r) => a + (r.cost ?? 0), 0);
@@ -41,6 +41,18 @@ export function renderMarkdown(
     `- Static context re-sent: ~${num(analysis.context.system_tokens_total)} system + ~${num(analysis.context.tools_tokens_total)} tool-def tokens`,
     "",
   );
+
+  if (optimize.length > 0) {
+    const totalSaved = optimize.reduce((a, o) => a + o.tokens_saved, 0);
+    lines.push("## Optimizations applied", "");
+    lines.push(`- Total tokens saved: ~${num(totalSaved)}`, "");
+    lines.push("| Strategy | Actions | Tokens saved |");
+    lines.push("| --- | ---: | ---: |");
+    for (const o of optimize) {
+      lines.push(`| ${o.type} | ${num(o.count)} | ~${num(o.tokens_saved)} |`);
+    }
+    lines.push("");
+  }
 
   lines.push("## Recommendations", "");
   if (recommendations.length === 0) {

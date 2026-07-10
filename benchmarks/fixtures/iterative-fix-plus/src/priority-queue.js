@@ -65,7 +65,20 @@ export class PriorityQueue {
       .map((e) => e.item);
   }
 
-  // BUG #1: parent calculation is wrong (should be Math.floor((i - 1) / 2))
+  /**
+   * Merge another PriorityQueue into this one.
+   *
+   * Copies every (item, priority) pair from `other` into this queue, preserving
+   * the min-heap invariant. `other` is left unchanged. Returns `this` so calls
+   * can be chained.
+   *
+   * @param {PriorityQueue} other
+   * @returns {this}
+   */
+  merge(other) {
+    throw new Error("not implemented: PriorityQueue.merge");
+  }
+
   #bubbleUp(i) {
     while (i > 0) {
       const parent = Math.floor(i / 2);

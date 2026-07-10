@@ -386,7 +386,6 @@ describe("OptimizeLayer", () => {
         pruneStale: false,
         suppressReread: false,
         collapseSystem: true,
-        stripToolDefs: false,
       });
 
       const system = "You are a helpful assistant.\n".repeat(50);
@@ -418,7 +417,6 @@ describe("OptimizeLayer", () => {
         pruneStale: false,
         suppressReread: false,
         collapseSystem: true,
-        stripToolDefs: false,
       });
 
       const body1 = JSON.stringify({ system: "A ".repeat(200), messages: [] });
@@ -431,43 +429,6 @@ describe("OptimizeLayer", () => {
     });
   });
 
-  describe("stripToolDefs", () => {
-    it("strips tool definitions after N requests", () => {
-      const layer = new OptimizeLayer({
-        dedup: false,
-        truncate: false,
-        stablePrefix: false,
-        pruneStale: false,
-        suppressReread: false,
-        collapseSystem: false,
-        stripToolDefs: true,
-        stripToolDefsAfter: 2,
-      });
-
-      const tools = [
-        { name: "Read", description: "read files", input_schema: {} },
-      ];
-      const body = JSON.stringify({
-        tools,
-        messages: [{ role: "user", content: "hi" }],
-      });
-
-      // Requests 1-2 keep tools
-      const r1 = layer.rewriteRequestBody(Buffer.from(body));
-      expect(JSON.parse(r1.toString())).toHaveProperty("tools");
-      const r2 = layer.rewriteRequestBody(Buffer.from(body));
-      expect(JSON.parse(r2.toString())).toHaveProperty("tools");
-
-      // Request 3 — stripped
-      const r3 = layer.rewriteRequestBody(Buffer.from(body));
-      const p3 = JSON.parse(r3.toString()) as Record<string, unknown>;
-      expect(p3.tools).toBeUndefined();
-      expect(layer.getActions().some((a) => a.type === "strip_tool_defs")).toBe(
-        true,
-      );
-    });
-  });
-
   describe("pruneUnusedTools", () => {
     it("prunes tool definitions not seen in assistant messages after N turns", () => {
       const layer = new OptimizeLayer({
@@ -477,7 +438,6 @@ describe("OptimizeLayer", () => {
         pruneStale: false,
         suppressReread: false,
         collapseSystem: false,
-        stripToolDefs: false,
         pruneUnusedTools: true,
         pruneUnusedToolsAfter: 3,
       });
@@ -525,7 +485,6 @@ describe("OptimizeLayer", () => {
         pruneStale: false,
         suppressReread: false,
         collapseSystem: false,
-        stripToolDefs: false,
         pruneUnusedTools: true,
         pruneUnusedToolsAfter: 2,
       });
@@ -560,7 +519,6 @@ describe("OptimizeLayer", () => {
         pruneStale: false,
         suppressReread: false,
         collapseSystem: false,
-        stripToolDefs: false,
         pruneUnusedTools: true,
         pruneUnusedToolsAfter: 1,
       });

@@ -26,12 +26,13 @@ with ground truth.
 
 Bundled fixtures:
 
-| fixture      | shape                                   | stresses                                        |
-| ------------ | --------------------------------------- | ----------------------------------------------- |
-| `csv-parser` | one small module + tests, 1 planted bug | reading, fixing, a small edit                   |
-| `task-queue` | multi-file lib (queue/scheduler/store)  | cross-file reasoning, locating logic, fix + add |
-| `big-file`   | one ~220-line module (data + funcs)     | whole-file vs ranged reads (read amplification) |
-| `many-files` | 40 tiny handler modules + a registry    | search / exploration cost (find the wrong file) |
+| fixture              | shape                                      | stresses                                        |
+| -------------------- | ------------------------------------------ | ----------------------------------------------- |
+| `csv-parser`         | one small module + tests, 1 planted bug    | reading, fixing, a small edit                   |
+| `task-queue`         | multi-file lib (queue/scheduler/store)     | cross-file reasoning, locating logic, fix + add |
+| `iterative-fix-plus` | 7 modules, 9 planted bugs + 3 method stubs | deep read-fix-verify cycles, hidden edge cases  |
+| `big-file`           | one ~220-line module (data + funcs)        | whole-file vs ranged reads (read amplification) |
+| `many-files`         | 40 tiny handler modules + a registry       | search / exploration cost (find the wrong file) |
 
 Each fixture maps onto AISH capabilities the profiler measures: `big-file` → ranged reads
 (#1) and result amplification (#3); `many-files` → repo-aware search (#2); all of them →
@@ -90,7 +91,7 @@ To run your own tasks against any target, pass a file (one `id|prompt` per line 
 
 ## How `run.sh` works
 
-`./benchmarks/run.sh <agent> [target] [--tasks file] [--verify cmd] [--no-verify] [--dry-run]`:
+`./benchmarks/run.sh <agent> [target] [--tasks file] [--verify cmd] [--no-verify] [--save-artifacts] [--prune --tag <name>] [--dry-run]`:
 
 1. Maps the agent to its headless, auto-approving invocation: opencode →
    `opencode run --auto`, claude → `claude -p --dangerously-skip-permissions`. Without
@@ -106,9 +107,22 @@ To run your own tasks against any target, pass a file (one `id|prompt` per line 
    path would bleed one task's conversation into the next.
 5. **Verify (scoring):** if the task has a verify command (3rd `TASKS` field, or `--verify`
    default), it runs in the scratch dir after the agent finishes. Exit 0 → `pass`, else
-   `fail`. The result is tagged onto the profiler session (`aap tag <sid> verify=pass|fail`)
-   and written to `/tmp/aap-bench/results.tsv`, and a pass/fail summary prints at the end.
+   `fail`. The result is tagged onto the profiler session (`aap tag <sid> verify=pass|fail`
+   plus `fixture=<n>/<m>` and `edge=<n>/<m>` for per-category test results) and written to
+   `benchmarks/runs/<tag>/results.tsv`. A pass/fail summary prints at the end.
    `--no-verify` skips this. Read-only tasks (`explain`/`locate`) have no verify command.
+6. **Save artifacts (optional):** with `--save-artifacts`, each task's produced files are
+   snapshotted to `benchmarks/runs/<tag>/artifacts/<task>/` **after** the agent
+   finishes but **before** verify runs — a clean copy of exactly what the agent wrote
+   (edits + any new files), for later inspection. The scratch dir itself is transient
+   (overwritten on the next run), so this is how you keep the output. Gitignored.
+7. **Prune (cleanup):** `--prune --tag <name>` removes the run directory and its tracked
+   sessions from the profiler. Use this before re-running with the same `--tag`.
+
+Every run always produces a directory under `benchmarks/runs/<tag>/` containing:
+`results.tsv`, `report.md`, verify logs, and per-task session JSON (`metrics/`). With
+`--tag`, the directory is `runs/<tag>` (fails if it already exists). Without `--tag` a
+timestamp suffix guarantees uniqueness.
 
 Use `--dry-run` to print the exact commands (including the verify step) without executing them.
 
@@ -128,6 +142,29 @@ Use `--dry-run` to print the exact commands (including the verify step) without 
    Every task is launched tagged with `--meta task=<id> --meta agent=<name> --meta run=<tag>`.
 
 ## Example: A/B comparison (baseline vs optimize)
+
+> **Results:** the consolidated findings from these A/B runs (DeepSeek vs Claude, the
+> `pruneStale` cache story, and caveats) live in
+> [`REPORT-optimize-layer.md`](REPORT-optimize-layer.md). Raw per-run reports and superseded
+> history are under [`archive/`](archive/).
+
+### One-shot: `iterative-fix-ab.sh`
+
+A self-contained A/B runner. It starts its own `aap serve` on an **isolated port**
+(default `8199`, so it never touches a proxy you already run on `:8080`), executes the
+task once baseline and once with `--optimize`, then prints the cost/token comparison and
+the optimize strategies that **actually fired live** (recorded per session, not
+simulated):
+
+```
+./benchmarks/iterative-fix-ab.sh opencode --fixture iterative-fix-plus
+```
+
+Options: `--fixture <name>`, `--port <N>`, `--keep-serve`. For a fully separate DB, set
+`AAP_CONFIG=/path/to/isolated-config.toml` before running. Requires a freshly built +
+linked `aap` (`npm run build && npm link`).
+
+### Manual
 
 ```bash
 # Terminal 1 — baseline run
@@ -205,6 +242,10 @@ aap export <session-id>        # Markdown report
   and compare distributions, not single points.
 - Token counts for tool results and context composition are **estimates** (~chars/4); they're
   reliable for _relative_ comparison between agents, not billing-exact.
+- Cost for OpenAI-compatible providers (e.g. DeepSeek) needs a `[pricing.<model>]` table in
+  your config. The proxy injects `stream_options.include_usage` on streaming
+  chat-completions so responses report real token usage; without a matching pricing entry
+  cost is left `null` (never faked as `$0`), so a broken capture stays visible in `aap compare`.
 - Success is auto-verified via each task's verify command (`npm test` for the bundled
   fixtures) and tagged onto the session as `verify=pass|fail`. A metric improvement only
   counts when `verify=pass` — never trade task success for token savings.

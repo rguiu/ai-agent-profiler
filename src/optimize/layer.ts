@@ -5,12 +5,10 @@ export interface OptimizeConfig {
   pruneStale: boolean;
   suppressReread: boolean;
   collapseSystem: boolean;
-  stripToolDefs: boolean;
   pruneUnusedTools: boolean;
   truncateThreshold: number;
   pruneAfterTurns: number;
   suppressWithinTurns: number;
-  stripToolDefsAfter: number;
   pruneUnusedToolsAfter: number;
 }
 
@@ -21,12 +19,10 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   pruneStale: true,
   suppressReread: true,
   collapseSystem: true,
-  stripToolDefs: false,
   pruneUnusedTools: true,
   truncateThreshold: 4096,
   pruneAfterTurns: 6,
   suppressWithinTurns: 2,
-  stripToolDefsAfter: 3,
   pruneUnusedToolsAfter: 10,
 };
 
@@ -37,7 +33,6 @@ export type OptimizeActionType =
   | "prune_stale"
   | "suppress_reread"
   | "collapse_system"
-  | "strip_tool_defs"
   | "prune_unused_tools";
 
 export interface OptimizeAction {
@@ -118,7 +113,6 @@ export class OptimizeLayer {
   private lastToolsJson: string | null = null;
   private lastSystemHash: string | null = null;
   private lastSystemTokens = 0;
-  private toolsSentCount = 0;
 
   constructor(config: Partial<OptimizeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -167,22 +161,6 @@ export class OptimizeLayer {
       }
     }
 
-    // Strip tool definitions after N requests (prompt cache makes them redundant)
-    if (this.config.stripToolDefs && Array.isArray(parsed.tools)) {
-      this.toolsSentCount++;
-      if (this.toolsSentCount > this.config.stripToolDefsAfter) {
-        const toolsTokens = estimateTokens(JSON.stringify(parsed.tools));
-        delete parsed.tools;
-        this.actions.push({
-          type: "strip_tool_defs",
-          turn: this.turn,
-          tokensSaved: toolsTokens,
-          detail: `stripped tool definitions on turn ${this.turn} (~${toolsTokens} tokens — already cached)`,
-        });
-        changed = true;
-      }
-    }
-
     // Track tool usage from assistant messages and prune unused tool definitions
     if (
       (this.config.pruneUnusedTools || this.config.stablePrefix) &&
@@ -213,6 +191,11 @@ export class OptimizeLayer {
     }
 
     return changed ? Buffer.from(JSON.stringify(parsed)) : body;
+  }
+
+  /** Expose action count for debugging. */
+  get actionCount(): number {
+    return this.actions.length;
   }
 
   rewriteToolResult(toolName: string, args: string, content: string): string {
@@ -424,6 +407,25 @@ export class OptimizeLayer {
         });
         return { ...msg, content: rewritten };
       }
+      // OpenAI format: { role: "tool", content: "..." }
+      if (msg.role === "tool" && typeof msg.content === "string") {
+        const tokens = estimateTokens(msg.content);
+        if (tokens >= 50) {
+          const toolCallId = msg.tool_call_id as string | undefined;
+          const toolName = this.resolveToolName(messages, toolCallId) ?? "tool";
+          const summary = summarizeToolResult(toolName, "", msg.content);
+          changed = true;
+          this.actions.push({
+            type: "prune_stale",
+            turn: this.turn,
+            tool: toolName,
+            tokensSaved: tokens - estimateTokens(summary),
+            detail: `pruned ${toolName} result from turn ${msgTurn} (~${tokens} → ~${estimateTokens(summary)} tokens)`,
+          });
+          return { ...msg, content: summary };
+        }
+        return msg;
+      }
       return msg;
     });
     return changed ? result : null;
@@ -431,14 +433,26 @@ export class OptimizeLayer {
 
   private resolveToolName(
     messages: Message[],
-    toolUseId?: string,
+    toolCallId?: string,
   ): string | null {
-    if (!toolUseId) return null;
+    if (!toolCallId) return null;
     for (const msg of messages) {
-      if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
-      for (const block of msg.content) {
-        if (block.type === "tool_use" && block.id === toolUseId) {
-          return (block.name as string) ?? null;
+      // OpenAI format: { role: "assistant", tool_calls: [{ id, function: { name } }] }
+      if (msg.role === "assistant" && Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
+          if (tc.id === toolCallId && tc.function) {
+            return (
+              ((tc.function as Record<string, unknown>).name as string) ?? null
+            );
+          }
+        }
+      }
+      // Anthropic format: { role: "assistant", content: [{ type: "tool_use", id, name }] }
+      if (msg.role === "assistant" && Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.type === "tool_use" && block.id === toolCallId) {
+            return (block.name as string) ?? null;
+          }
         }
       }
     }

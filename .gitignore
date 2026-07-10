@@ -1,6 +1,9 @@
 # Private seed / working notes (not part of the public repo)
 notes/
 
+# Marketing / article drafts (LinkedIn, Slack, blog) — not part of the repo
+docs/articles/
+
 # Runtime capture data
 traces/
 data/
@@ -10,6 +13,12 @@ data.sqlite-*
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
+
+# Benchmark artifacts (agent-produced files snapshotted by run.sh --save-artifacts)
+benchmarks/artifacts/
+
+# Benchmark run outputs (results, verify logs, reports — always produced by run.sh)
+benchmarks/runs/
 
 # Local config with secrets/overrides
 config.toml

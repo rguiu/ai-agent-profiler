@@ -37,7 +37,6 @@ export class Pipeline {
     for (const stage of this.#stages) {
       if (this.#aborted) break;
       const results = await this.#runStage(stage);
-      // BUG #8: stage results overwrite previous context entirely instead of merging
       this.#context = results;
     }
     return this.#context;

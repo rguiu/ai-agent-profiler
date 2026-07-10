@@ -48,6 +48,7 @@ function makeDetail(id: string, requests: number): SessionDetail {
       },
       commands: [],
     },
+    optimize: [],
   };
 }
 
@@ -78,6 +79,32 @@ describe("summarize", () => {
       verify: "pass",
     });
     expect(s.toolsTokens).toBe(4321);
+  });
+
+  it("treats cached tokens as included in input for openai/deepseek", () => {
+    const detail = makeDetail("sess-oa", 2);
+    for (const r of detail.requests) {
+      r.format = "openai";
+      r.input_tokens = 100;
+      r.cached_input_tokens = 30;
+    }
+    const s = summarize(detail);
+    expect(s.cachedInputTokens).toBe(60);
+    expect(s.inputTokens).toBe(140);
+    expect(s.totalInputTokens).toBe(200);
+  });
+
+  it("treats cached tokens as separate from input for anthropic", () => {
+    const detail = makeDetail("sess-an", 2);
+    for (const r of detail.requests) {
+      r.format = "anthropic";
+      r.input_tokens = 100;
+      r.cached_input_tokens = 30;
+    }
+    const s = summarize(detail);
+    expect(s.cachedInputTokens).toBe(60);
+    expect(s.inputTokens).toBe(200);
+    expect(s.totalInputTokens).toBe(260);
   });
 });
 
