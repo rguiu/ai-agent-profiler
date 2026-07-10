@@ -26,7 +26,9 @@ mid-prefix mutation that shattered DeepSeek's OpenAI-format cache.
 `scheduler.js` fix contains a synchronous infinite loop that hangs even the basic fixture test
 `Scheduler › respects dependencies`. Both optimize configs passed all 54 fixture tests. See
 "Test scores" — these are **real, manually-gathered pass/fail counts**, because two harness
-bugs (documented below) prevented `aap compare` from scoring the suites automatically.
+bugs prevented `aap compare` from scoring the suites automatically during these runs. **Both
+bugs are now fixed** (in the fixture verify command + the hidden edge test, not `run.sh`) — see
+"Tooling caveats"; a fresh run would now score automatically.
 
 ## Two batches, one conclusion
 
@@ -262,33 +264,46 @@ Opposite conclusions for the *same* strategy, with the `optimize-nps` control is
 by provider cache format** — safe-and-helpful on Anthropic array format, cache-hostile on
 OpenAI-format traffic.
 
-## Tooling caveats (documented, not patched — per the brief)
+## Tooling caveats (root-caused, and now FIXED)
 
-Two harness issues prevented `aap compare` from auto-scoring tests. The task brief says not to
-modify `run.sh`/`compare.ts`/`layer.ts`, so these are documented rather than patched. The one
-change made was to a **test file** (allowed, and the user explicitly requested it).
+Two harness issues prevented `aap compare` from auto-scoring tests during the runs above, so
+the "Test scores" section was gathered manually. Both are now **fixed** — without touching
+`run.sh`/`compare.ts`/`layer.ts` (the brief's constraint). The fixes live in the fixture's
+verify command (`benchmarks/fixtures/iterative-fix-plus/TASKS`) and the hidden edge test.
+Because the fixes landed after the paid Bedrock runs, the scores in this report are still the
+manually-gathered ones; a fresh run would now populate the `aap compare` table's test rows
+automatically.
 
-1. **`aap compare` shows `Fixture 0/0` / `Edge 0/0` although fixtures actually pass 54/54 on
-   both optimize runs.** `count_section()` in `run.sh` parses the **TAP** footer (`# pass N` /
-   `# tests N`), but Node 24's default reporter emits the `ℹ`-prefixed summary (`ℹ pass 54`).
-   Format mismatch → 0/0. The real scores in this report were gathered by running the suites
-   directly and reading the `ℹ` footers.
+1. **`aap compare` showed `Fixture 0/0` / `Edge 0/0` although fixtures actually pass 54/54.**
+   `count_section()` in `run.sh` parses the **TAP** footer (`# pass N` / `# tests N`), but Node
+   24's *default* reporter emits the `ℹ`-prefixed summary (`ℹ pass 54`) instead — format
+   mismatch → 0/0. **Fix:** added `--test-reporter=tap` to both `node --test` invocations in the
+   `TASKS` verify command, so node emits the exact `# pass N` / `# tests N` footer
+   `count_section()` already expects. Verified: `count_section` now parses `54/57` for the edge
+   suite and `54/54` for fixtures. No change to `run.sh` — the reporter flag is in the verify
+   command the harness runs.
 
-2. **The hidden edge suite hung and was SIGKILLed, and — in the baseline run — even the fixture
-   suite hung**, because the agent's `scheduler.js` can enter a **synchronous** busy-loop
-   (`run()` skips its `await` when every queued task is blocked, spinning the event loop). An
-   in-process `setTimeout`/`Promise.race` guard cannot interrupt a synchronous loop, and
-   `timeout -s KILL` on the parent `node --test` orphans the per-file child processes (they
-   keep spinning at 100% CPU). **Fix applied to the test** (`benchmarks/reference/
-   iterative-fix-plus/edge-cases.test.js`): the "dep on a non-existent task" case now runs the
-   scheduler inside a `worker_threads.Worker` that is `terminate()`d after 3s, converting the
-   hang into a clean, scoreable failure while preserving the original assertions (orphan must
-   not run; the ready task must). With that fix the edge suite terminates and reports real
-   counts (57 tests). This does **not** fix the underlying agent bug — it makes the grader
-   robust to it. The corresponding **fixture** hang (`scheduler.test.js › respects
-   dependencies`) is not in the reference tree and was scored by running fixture files
-   individually with an external kill; baseline's Scheduler fixture suite is genuinely
-   unscoreable because the code never terminates.
+2. **The suite hung and was SIGKILLed** because the agent's `scheduler.js` can enter a
+   **synchronous** busy-loop (`run()` skips its `await` when every queued task is permanently
+   blocked, spinning the event loop). Two compounding problems, two fixes:
+   - *An in-process `setTimeout`/`Promise.race` guard can't interrupt a synchronous loop.*
+     **Fix (test file):** in `benchmarks/reference/iterative-fix-plus/edge-cases.test.js`, the
+     "dep on a non-existent task" case now runs the scheduler inside a `worker_threads.Worker`
+     that is `terminate()`d after 3s, turning the hang into a clean, scoreable **failure** while
+     preserving the original assertions (orphan must not run; the ready task must).
+   - *`timeout -s KILL` on the parent `node --test` can orphan the per-file child processes*
+     (`--test-isolation=process` spawns one child per file; a synchronously-looping child can
+     survive the parent's SIGKILL and keep a core pegged at 100%). **Fix:** added
+     `--test-isolation=none` to the `TASKS` verify command so the whole suite runs in one
+     process — `timeout`'s SIGKILL then always lands on the looping process, no orphans. Verified
+     identical pass counts (54/54) with isolation on vs. off, and clean termination with no
+     survivors on a synthetic multi-file hang.
+
+   These make the **grader** robust; they do not fix the underlying agent scheduler bug (that is
+   a genuine correctness failure in the baseline output, and rightly still fails). A synchronous
+   hang under `--test-isolation=none` now dies cleanly at the timeout instead of orphaning
+   processes — though a run that hangs before emitting its footer still scores `0/0` for that
+   section, which is the correct signal that the run did not finish.
 
 ## Configuration used
 
