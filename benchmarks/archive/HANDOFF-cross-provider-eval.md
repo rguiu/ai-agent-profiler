@@ -1,5 +1,11 @@
 # Cross-Provider Optimize-Layer Evaluation — Claude/Bedrock
 
+> **✅ COMPLETED / ARCHIVED.** This was the task brief handed to the Claude Code agent on the
+> Bedrock machine. The run is done; its findings are consolidated in
+> [`../REPORT-optimize-layer.md`](../REPORT-optimize-layer.md), with raw data in
+> `REPORT-iterative-fix-plus-bedrock.md` (this folder). Kept for process provenance; the
+> instructions below are historical.
+
 **You are the Claude Code agent running on a machine with AWS Bedrock access.** This is your
 task brief. Read it fully, run the A/B benchmark, write a report, and push it to this branch.
 Do not merge; the human will review.
@@ -9,7 +15,7 @@ Do not merge; the human will review.
 We ran the optimize layer A/B on **DeepSeek (opencode)** and got a **bad** result:
 optimize cost **+491%**, used **+217% tokens**, looped (**117 vs 49 requests**), and scored
 **worse** on hidden tests. Full writeup:
-[`benchmarks/REPORT-iterative-fix-plus-deepseek.md`](../benchmarks/REPORT-iterative-fix-plus-deepseek.md).
+[`benchmarks/REPORT-iterative-fix-plus-deepseek.md`](./REPORT-iterative-fix-plus-deepseek.md).
 
 We traced the root cause and **confirmed it with a control run**: an uncommitted edit to
 `src/optimize/layer.ts` made the `prune_stale` strategy fire on **OpenAI-format** traffic
@@ -31,7 +37,7 @@ win. **Your job is to determine whether the same is true on Anthropic/Bedrock.**
 **Where you come in — Claude/Bedrock is the missing quadrant.** Claude Code sends
 **Anthropic array-format** tool results, so `prune_stale` has _always_ been active for it —
 and on Claude an earlier run _helped_ (the v2 report,
-[`benchmarks/REPORT-iterative-fix-v2.md`](../benchmarks/REPORT-iterative-fix-v2.md), showed
+[`benchmarks/REPORT-iterative-fix-v2.md`](./REPORT-iterative-fix-v2.md), showed
 −77% cost + reliability gains). But that run used a **different, smaller fixture** and
 **pre-fix token accounting**. The open questions your runs answer:
 
@@ -148,7 +154,7 @@ your proof the control is configured correctly.
 ### Manual A/B alternative
 
 If you must run baseline/optimize phases manually (e.g. to attach AWS creds differently), see
-the "Manual" section of [`benchmarks/README.md`](../benchmarks/README.md#manual) — the key is
+the "Manual" section of [`benchmarks/README.md`](../README.md#manual) — the key is
 tagging (`--tag baseline` / `--tag optimize`) and starting `aap serve` with `--no-optimize`
 vs `--optimize`. Keep all three runs in the **same storage dir** so `aap compare` sees them.
 
@@ -202,7 +208,7 @@ convention for Bedrock. See `summarize()` in `src/cli/compare.ts` and `cachedIsI
 
 ## Report skeleton
 
-Mirror [`benchmarks/REPORT-iterative-fix-plus-deepseek.md`](../benchmarks/REPORT-iterative-fix-plus-deepseek.md)
+Mirror [`benchmarks/REPORT-iterative-fix-plus-deepseek.md`](./REPORT-iterative-fix-plus-deepseek.md)
 so the two are directly comparable. Sections: Headline · Results (3-run compare table) ·
 Per-bucket breakdown · Key findings table · **A/B control (`prune_stale` OFF)** — the
 DeepSeek report has this exact section, replicate it · Analysis (the 3 hypotheses +
@@ -211,7 +217,7 @@ region) · Session IDs (all three) · Conclusion.
 
 ## Report skeleton
 
-Mirror [`benchmarks/REPORT-iterative-fix-plus-deepseek.md`](../benchmarks/REPORT-iterative-fix-plus-deepseek.md)
+Mirror [`benchmarks/REPORT-iterative-fix-plus-deepseek.md`](./REPORT-iterative-fix-plus-deepseek.md)
 so the two are directly comparable. Sections: Headline · Results (compare table) · Key
 findings table · Analysis (the 3 hypotheses + cross-provider contrast) · Config used
 (including your Bedrock pricing block and region) · Session IDs · Conclusion.

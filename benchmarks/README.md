@@ -26,13 +26,13 @@ with ground truth.
 
 Bundled fixtures:
 
-| fixture              | shape                                       | stresses                                        |
-| -------------------- | ------------------------------------------- | ----------------------------------------------- |
-| `csv-parser`         | one small module + tests, 1 planted bug     | reading, fixing, a small edit                   |
-| `task-queue`         | multi-file lib (queue/scheduler/store)      | cross-file reasoning, locating logic, fix + add |
-| `iterative-fix-plus` | 7 modules, 9 planted bugs + 3 method stubs  | deep read-fix-verify cycles, hidden edge cases   |
-| `big-file`           | one ~220-line module (data + funcs)         | whole-file vs ranged reads (read amplification) |
-| `many-files`         | 40 tiny handler modules + a registry        | search / exploration cost (find the wrong file) |
+| fixture              | shape                                      | stresses                                        |
+| -------------------- | ------------------------------------------ | ----------------------------------------------- |
+| `csv-parser`         | one small module + tests, 1 planted bug    | reading, fixing, a small edit                   |
+| `task-queue`         | multi-file lib (queue/scheduler/store)     | cross-file reasoning, locating logic, fix + add |
+| `iterative-fix-plus` | 7 modules, 9 planted bugs + 3 method stubs | deep read-fix-verify cycles, hidden edge cases  |
+| `big-file`           | one ~220-line module (data + funcs)        | whole-file vs ranged reads (read amplification) |
+| `many-files`         | 40 tiny handler modules + a registry       | search / exploration cost (find the wrong file) |
 
 Each fixture maps onto AISH capabilities the profiler measures: `big-file` → ranged reads
 (#1) and result amplification (#3); `many-files` → repo-aware search (#2); all of them →
@@ -112,7 +112,7 @@ To run your own tasks against any target, pass a file (one `id|prompt` per line 
    `benchmarks/runs/<tag>/results.tsv`. A pass/fail summary prints at the end.
    `--no-verify` skips this. Read-only tasks (`explain`/`locate`) have no verify command.
 6. **Save artifacts (optional):** with `--save-artifacts`, each task's produced files are
-    snapshotted to `benchmarks/runs/<tag>/artifacts/<task>/` **after** the agent
+   snapshotted to `benchmarks/runs/<tag>/artifacts/<task>/` **after** the agent
    finishes but **before** verify runs — a clean copy of exactly what the agent wrote
    (edits + any new files), for later inspection. The scratch dir itself is transient
    (overwritten on the next run), so this is how you keep the output. Gitignored.
@@ -142,6 +142,11 @@ Use `--dry-run` to print the exact commands (including the verify step) without 
    Every task is launched tagged with `--meta task=<id> --meta agent=<name> --meta run=<tag>`.
 
 ## Example: A/B comparison (baseline vs optimize)
+
+> **Results:** the consolidated findings from these A/B runs (DeepSeek vs Claude, the
+> `pruneStale` cache story, and caveats) live in
+> [`REPORT-optimize-layer.md`](REPORT-optimize-layer.md). Raw per-run reports and superseded
+> history are under [`archive/`](archive/).
 
 ### One-shot: `iterative-fix-ab.sh`
 

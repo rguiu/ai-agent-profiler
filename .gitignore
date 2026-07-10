@@ -1,6 +1,9 @@
 # Private seed / working notes (not part of the public repo)
 notes/
 
+# Marketing / article drafts (LinkedIn, Slack, blog) — not part of the repo
+docs/articles/
+
 # Runtime capture data
 traces/
 data/

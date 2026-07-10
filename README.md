@@ -11,9 +11,11 @@ It is a **performance profiler for autonomous coding agents** — not an observa
 dashboard, not an enterprise proxy. See [`VISION.md`](VISION.md).
 
 On top of profiling, an optional [optimize layer](#optimize-layer) can rewrite requests
-in-flight to cut token waste on long sessions. It's off by default; when enabled it
-produced strong results on our benchmark — roughly **-66% cost** and **-25% wall time**
-on a ~50-request session. See [Optimize layer](#optimize-layer) for the full numbers.
+in-flight to cut token waste on long sessions. It's off by default. On our benchmark it
+produced a large win on Claude/Bedrock (**~−75% cost**) but a **regression** on
+DeepSeek — the effect is **provider-dependent**, driven by how each provider's prompt cache
+reacts to editing old context. See the
+[benchmark report](benchmarks/REPORT-optimize-layer.md) for the full, honest picture.
 
 ## How it works
 
@@ -51,7 +53,7 @@ the LLM.
   high amplification, context duplication, inefficient search→read).
 - **Export & compare** — session reports as Markdown/JSON; sessions side by side.
 - **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data for agent self-introspection.
-- **Optimize layer** — 8 request-rewriting strategies (see below).
+- **Optimize layer** — 7 request-rewriting strategies (see below).
 
 See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
@@ -286,19 +288,19 @@ aap optimize <session-id>          # simulation over the captured session
 ### Benchmark results
 
 On the `iterative-fix-plus` fixture (9 planted bugs + 3 method stubs, ~50-request session),
-a single run showed:
+the optimize layer's effect was **opposite on the two providers we tested** — same task,
+same code, same strategies:
 
-| Metric             | Baseline | Optimized | Change |
-| ------------------ | -------- | --------- | ------ |
-| Cost               | $2.88    | $0.99     | -66%   |
-| Total input tokens | 1.83M    | 502K      | -73%   |
-| Wall time          | 18m 14s  | 13m 39s   | -25%   |
-| Fixture tests      | 7/7      | 7/7       | —      |
-| Edge tests         | 1/3      | 2/3       | —      |
+| Setup                 | Optimize vs baseline (cost) | Notes                         |
+| --------------------- | --------------------------- | ----------------------------- |
+| Claude Code / Bedrock | **−75%**                    | cache held; best task quality |
+| OpenCode / DeepSeek   | **+491%**                   | cache broke; agent looped     |
 
-The dominant strategy is `pruneStale`, which stops the conversation context from growing
-unboundedly across iterative fix/verify cycles. Full analysis:
-[`benchmarks/REPORT-iterative-fix.md`](benchmarks/REPORT-iterative-fix.md).
+The whole difference is one strategy — `pruneStale` — interacting with each provider's
+prompt-cache format. It's cache-safe and load-bearing on Anthropic-format traffic (Claude)
+but cache-hostile on OpenAI-format traffic (DeepSeek). These are **single-sample, work-in-
+progress** numbers; trust the direction, not the decimals. Full analysis, control runs, and
+caveats: [`benchmarks/REPORT-optimize-layer.md`](benchmarks/REPORT-optimize-layer.md).
 
 ## Benchmarks
 
@@ -339,7 +341,7 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
-- [`benchmarks/REPORT-iterative-fix.md`](benchmarks/REPORT-iterative-fix.md) — full optimize-layer benchmark.
+- [`benchmarks/REPORT-optimize-layer.md`](benchmarks/REPORT-optimize-layer.md) — full optimize-layer benchmark (DeepSeek vs Claude).
 
 ## License
 

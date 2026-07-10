@@ -1,5 +1,9 @@
 # Claude/Bedrock benchmark — entry prompt
 
+> **✅ COMPLETED / ARCHIVED.** The entry prompt used to kick off the Claude/Bedrock run.
+> Findings are consolidated in [`../REPORT-optimize-layer.md`](../REPORT-optimize-layer.md).
+> Kept for provenance.
+
 Paste the block below to the Claude Code agent on the Bedrock machine. It assumes the shell
 already has `AWS_PROFILE=claude` and Bedrock access.
 
