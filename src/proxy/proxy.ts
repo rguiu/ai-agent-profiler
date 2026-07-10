@@ -15,6 +15,7 @@ import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
 import { forwardBedrock } from "./bedrock.js";
 import { parseRoute } from "./route.js";
+import { needsShaping, shapeRequestBody } from "./shape.js";
 import { Throttle } from "./throttle.js";
 
 const HOP_BY_HOP: ReadonlySet<string> = new Set([
@@ -161,6 +162,23 @@ function handle(
     optimizer = layer;
   }
 
+  // Persist which strategies the optimizer actually applied, so a live
+  // optimized session records its own savings (not just via simulation).
+  const recordOptimize: (() => void) | undefined =
+    optimizer && store && route.sessionId
+      ? () => {
+          const actions = optimizer!.getActions();
+          if (actions.length > 0) {
+            const byType: Record<string, number> = {};
+            for (const a of actions) byType[a.type] = (byType[a.type] || 0) + 1;
+            process.stderr.write(
+              `[optimize] ${route.sessionId} ${Object.entries(byType).map(([k, v]) => `${k}=${v}`).join(" ")}\n`,
+            );
+          }
+          store.recordOptimizeActions(route.sessionId!, actions);
+        }
+      : undefined;
+
   const doForward = (): void => {
     // Bedrock requires SigV4 re-signing — the original signature is for the proxy host.
     if (route.provider === "bedrock") {
@@ -180,7 +198,11 @@ function handle(
         extraHeaders:
           Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
         rewriteBody: optimizer
-          ? (body) => optimizer!.rewriteRequestBody(body)
+          ? (body) => {
+              const out = optimizer!.rewriteRequestBody(body);
+              recordOptimize?.();
+              return out;
+            }
           : undefined,
         onRequestChunk: (chunk) => trace?.requestChunk(chunk),
         onResponse: (status, headers) =>
@@ -196,6 +218,7 @@ function handle(
       logger,
       extraHeaders,
       optimizer,
+      recordOptimize,
       throttle,
       timeoutMs: route.provider === "ollama" ? 120_000 : undefined,
       meta: {
@@ -301,6 +324,7 @@ interface ForwardObs {
   logger?: RequestLogger;
   extraHeaders?: Record<string, string>;
   optimizer?: OptimizeLayer;
+  recordOptimize?: () => void;
   throttle?: Throttle;
   timeoutMs?: number;
   meta: Omit<
@@ -316,7 +340,7 @@ function forward(
   pathWithQuery: string,
   obs: ForwardObs,
 ): void {
-  const { trace, logger, extraHeaders, optimizer, throttle, timeoutMs, meta } =
+  const { trace, logger, extraHeaders, optimizer, recordOptimize, throttle, timeoutMs, meta } =
     obs;
   const startedAt = Date.now();
   let status: number | null = null;
@@ -362,15 +386,14 @@ function forward(
     for (const [k, v] of Object.entries(extraHeaders)) headers[k] = v;
   }
 
-  if (trace) {
-    req.on("data", (chunk: Buffer) => trace.requestChunk(chunk));
-  }
-
+  // Request-body tracing happens in sendUpstream so the trace records the
+  // exact bytes sent upstream (post shaping/optimize), not the raw request.
   const transport = isHttps ? https : http;
 
   const sendUpstream = (body?: Buffer): void => {
     if (body) {
       headers["content-length"] = body.length.toString();
+      trace?.requestChunk(body);
     }
     const upstreamReq = transport.request(
       {
@@ -420,15 +443,30 @@ function forward(
     if (body) {
       upstreamReq.end(body);
     } else {
+      if (trace) req.on("data", (chunk: Buffer) => trace.requestChunk(chunk));
       req.pipe(upstreamReq);
     }
   };
 
-  if (optimizer) {
+  // Buffer the body when either the request shaper (always-on, for token/cost
+  // accuracy) or the optimizer (--optimize only) needs to rewrite it. Shaper
+  // runs first, then the optimizer.
+  const willShape = needsShaping(meta.provider, req.method ?? "GET", meta.path);
+  if (willShape || optimizer) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
-      const body = optimizer.rewriteRequestBody(Buffer.concat(chunks));
+      let body: Buffer = Buffer.concat(chunks);
+      if (willShape) {
+        body = shapeRequestBody(
+          body,
+          meta.provider,
+          req.method ?? "GET",
+          meta.path,
+        );
+      }
+      if (optimizer) body = optimizer.rewriteRequestBody(body);
+      recordOptimize?.();
       sendUpstream(body);
     });
   } else {

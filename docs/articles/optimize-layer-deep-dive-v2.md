@@ -69,9 +69,9 @@ None of this is magic. It's just refusing to pay the same bill twice.
 
 ## The experiment: fix seven bugs, count the money
 
-To put real numbers on it, we ran a controlled test. We built a small JavaScript project with six modules, planted seven deliberate bugs, and wired up 48 tests (8 of them failing). The task handed to the agent was blunt: fix everything until all tests pass.
+To put real numbers on it, we ran a controlled test. We built a JavaScript project with seven modules, planted nine deliberate bugs plus three stubbed methods, and wired up ~54 tests. Hidden edge-case tests graded at verify time. The task handed to the agent was blunt: fix everything, implement the stubs, and pass all tests.
 
-Then we ran that same task with the profiler in the middle, comparing a plain passthrough against the optimize layer, across two different agents. Every run started from a clean copy of the code and used the same success check — all 48 tests must pass. No partial credit.
+Then we ran that same task with the profiler in the middle, comparing a plain passthrough against the optimize layer, across two different agents. Every run started from a clean copy of the code. Success is measured by both visible and hidden tests — no partial credit.
 
 ## What happened
 

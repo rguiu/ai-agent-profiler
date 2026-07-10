@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Config } from "../config/index.js";
 import { SessionRegistry } from "../session/index.js";
+import { openStore, type Store } from "../store/index.js";
 import { createProxyServer } from "./index.js";
 import type { RequestLogEntry } from "./index.js";
 
@@ -48,7 +52,21 @@ async function startStack(
   const upstreamPort = await listen(upstream);
   servers.push(upstream);
 
-  const config: Config = {
+  const config = buildConfig(upstreamPort);
+  const proxy = createProxyServer(
+    config,
+    new SessionRegistry(),
+    undefined,
+    undefined,
+    logger,
+  );
+  const proxyPort = await listen(proxy);
+  servers.push(proxy);
+  return { proxyPort };
+}
+
+function buildConfig(upstreamPort: number): Config {
+  return {
     server: { port: 0, host: "127.0.0.1" },
     sessions: { idleTimeoutMs: 300_000 },
     storage: { dir: "data" },
@@ -60,11 +78,9 @@ async function startStack(
       pruneStale: true,
       suppressReread: true,
       collapseSystem: true,
-      stripToolDefs: false,
       truncateThreshold: 4096,
       pruneAfterTurns: 6,
       suppressWithinTurns: 2,
-      stripToolDefsAfter: 3,
       pruneUnusedTools: true,
       pruneUnusedToolsAfter: 10,
     },
@@ -72,12 +88,22 @@ async function startStack(
     pricing: {},
     throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
   };
+}
+
+async function startOptimizeStack(
+  store: Store,
+): Promise<{ proxyPort: number }> {
+  const upstream = http.createServer(upstreamHandler);
+  const upstreamPort = await listen(upstream);
+  servers.push(upstream);
+
   const proxy = createProxyServer(
-    config,
+    buildConfig(upstreamPort),
     new SessionRegistry(),
     undefined,
+    store,
     undefined,
-    logger,
+    { optimize: true },
   );
   const proxyPort = await listen(proxy);
   servers.push(proxy);
@@ -147,6 +173,34 @@ describe("proxy passthrough", () => {
     expect(entry?.status).toBe(200);
     expect(entry?.responseBytes).toBeGreaterThan(0);
     expect(entry?.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("optimize recording", () => {
+  it("persists which strategies fired for a session", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aap-proxy-"));
+    const store = openStore(dir);
+    try {
+      const { proxyPort } = await startOptimizeStack(store);
+      const system = "S".repeat(600); // ~150 tokens — over the collapse threshold
+      const body = JSON.stringify({
+        system,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      const url = `http://127.0.0.1:${proxyPort}/sess-opt/test/echo`;
+      // First request primes the system hash; the second collapses it.
+      await (await fetch(url, { method: "POST", body })).text();
+      await (await fetch(url, { method: "POST", body })).text();
+
+      const actions = store.getOptimizeActions("sess-opt");
+      const collapse = actions.find((a) => a.type === "collapse_system");
+      expect(collapse).toBeDefined();
+      expect(collapse!.count).toBeGreaterThanOrEqual(1);
+      expect(collapse!.tokens_saved).toBeGreaterThan(0);
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

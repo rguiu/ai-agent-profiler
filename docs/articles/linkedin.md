@@ -11,12 +11,12 @@ I built a transparent proxy that rewrites request bodies before they hit the LLM
 - **Re-reads** of files you just wrote → suppressed entirely
 - **Tool definitions** → canonicalised for better prompt-cache hits
 
-Ran a controlled benchmark against the same bug-fixing task (7 planted bugs, 48 tests) with two agents:
+Ran a controlled benchmark against the same bug-fixing task (9 planted bugs + 3 method stubs, hidden edge-case tests) with two agents:
 
 **Claude Code (Bedrock):** $2.88 → $0.99 (-66%)
 **OpenCode (DeepSeek):** $1.27 → $0.36 (-72%)
 
-Both found all 7 bugs. The optimized runs actually caught *more* edge cases — cleaner context gave the models headroom to spot subtle issues the bloated baseline context obscured.
+Both found all planted bugs. The optimized runs actually caught *more* edge cases — cleaner context gave the models headroom to spot subtle issues the bloated baseline context obscured.
 
 Wall time improved 25-29% too. Less data = faster round-trips.
 

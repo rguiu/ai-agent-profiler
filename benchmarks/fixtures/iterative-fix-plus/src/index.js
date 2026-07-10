@@ -4,3 +4,4 @@ export { EventBus } from "./event-bus.js";
 export { RateLimiter } from "./rate-limiter.js";
 export { ResultCache } from "./result-cache.js";
 export { Pipeline } from "./pipeline.js";
+export { SlidingWindowThrottle } from "./throttle.js";

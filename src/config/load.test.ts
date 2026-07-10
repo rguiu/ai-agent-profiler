@@ -87,23 +87,23 @@ describe("config resolution", () => {
     ]);
   });
 
-  it("prefers the XDG config home, then cwd", () => {
-    expect(configCandidates({ XDG_CONFIG_HOME: "/xdg" }, "/project")).toEqual([
-      "/xdg/aap/config.toml",
+  it("prefers the ~/.aap home config, then cwd", () => {
+    expect(configCandidates({}, "/project", "/home")).toEqual([
+      "/home/.aap/config.toml",
       "/project/config.toml",
     ]);
   });
 
-  it("resolves the global config regardless of cwd", () => {
+  it("resolves the home config regardless of cwd", () => {
     const home = mkdtempSync(join(tmpdir(), "aap-home-"));
     created.push(home);
-    mkdirSync(join(home, "aap"), { recursive: true });
-    const global = join(home, "aap", "config.toml");
+    mkdirSync(join(home, ".aap"), { recursive: true });
+    const global = join(home, ".aap", "config.toml");
     writeFileSync(global, MINIMAL);
     const emptyCwd = mkdtempSync(join(tmpdir(), "aap-cwd-"));
     created.push(emptyCwd);
 
-    expect(resolveConfigPath({ XDG_CONFIG_HOME: home }, emptyCwd)).toBe(global);
+    expect(resolveConfigPath({}, emptyCwd, home)).toBe(global);
   });
 
   it("returns null when no config exists", () => {
@@ -111,9 +111,7 @@ describe("config resolution", () => {
     created.push(emptyHome);
     const emptyCwd = mkdtempSync(join(tmpdir(), "aap-cwd-"));
     created.push(emptyCwd);
-    expect(
-      resolveConfigPath({ XDG_CONFIG_HOME: emptyHome }, emptyCwd),
-    ).toBeNull();
+    expect(resolveConfigPath({}, emptyCwd, emptyHome)).toBeNull();
   });
 
   it("loadConfig throws a helpful error when nothing is found", () => {
@@ -121,14 +119,8 @@ describe("config resolution", () => {
     created.push(emptyHome);
     const emptyCwd = mkdtempSync(join(tmpdir(), "aap-cwd-"));
     created.push(emptyCwd);
-    const original = process.cwd();
-    process.chdir(emptyCwd);
-    try {
-      expect(() =>
-        loadConfig(undefined, { XDG_CONFIG_HOME: emptyHome }),
-      ).toThrow(/No config file found/);
-    } finally {
-      process.chdir(original);
-    }
+    expect(() => loadConfig(undefined, {}, emptyCwd, emptyHome)).toThrow(
+      /No config file found/,
+    );
   });
 });

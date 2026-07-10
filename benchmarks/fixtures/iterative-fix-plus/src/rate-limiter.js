@@ -48,6 +48,18 @@ export class RateLimiter {
     return false;
   }
 
+  /**
+   * Return the number of milliseconds until `n` tokens would be available,
+   * WITHOUT consuming any tokens. Returns 0 if `n` tokens are already available.
+   * Accounts for tokens that will refill over time.
+   *
+   * @param {number} n - number of tokens to wait for (default 1)
+   * @returns {number} milliseconds until `n` tokens are available (>= 0)
+   */
+  peekWait(n = 1) {
+    throw new Error("not implemented: RateLimiter.peekWait");
+  }
+
   /** Acquire multiple tokens at once. */
   async acquireMany(n) {
     if (n <= 0) throw new Error("Must acquire at least 1 token");

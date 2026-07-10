@@ -43,11 +43,11 @@ stablePrefix = true           # canonicalise tool defs for prompt-cache stabilit
 pruneStale = true             # replace old tool results with compact summaries
 suppressReread = true         # suppress reads of files just written
 collapseSystem = true         # collapse repeated system prompts to a hash stub
-stripToolDefs = false         # remove tool defs after N requests (aggressive — may break)
+pruneUnusedTools = true       # drop tool defs never called (after pruneUnusedToolsAfter)
 truncateThreshold = 4096      # bytes above which truncation kicks in
 pruneAfterTurns = 6           # prune results older than N assistant turns
 suppressWithinTurns = 2       # suppress re-reads within N turns of a write
-stripToolDefsAfter = 3        # strip tools after this many requests (if stripToolDefs=true)
+pruneUnusedToolsAfter = 10    # drop never-called tool defs after this many requests
 
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.
@@ -60,3 +60,14 @@ stripToolDefsAfter = 3        # strip tools after this many requests (if stripTo
 # [pricing."deepseek-chat"]
 # inputPerMTok = 0.27
 # outputPerMTok = 1.10
+
+# Bedrock note: cost is ALWAYS computed locally from these rates — Bedrock
+# responses report token usage, never a dollar amount. The key must match the
+# model id Bedrock reports (from the request path, e.g. the whole
+# "eu.anthropic.claude-..." string), not the short name. Run one call, then
+# `aap sessions`/`aap export` to see the exact model string, and key on it.
+# cacheInputPerMTok matters for A/B accuracy (cache reads are ~10% of input).
+# [pricing."eu.anthropic.claude-sonnet-4-20250514-v1:0"]
+# inputPerMTok = 3.0
+# outputPerMTok = 15.0
+# cacheInputPerMTok = 0.30

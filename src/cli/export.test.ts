@@ -53,6 +53,7 @@ function makeDetail(): SessionDetail {
       },
       commands: [],
     },
+    optimize: [],
   };
 }
 

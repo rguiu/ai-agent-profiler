@@ -35,7 +35,6 @@ export class EventBus {
 
   emit(event, data) {
     this.#history.push({ event, data, ts: Date.now() });
-    // BUG #4: history trimming is backwards (keeps oldest, drops newest)
     if (this.#history.length > this.#maxHistory) {
       this.#history.splice(0, 0, ...this.#history.splice(this.#maxHistory));
       this.#history.length = this.#maxHistory;

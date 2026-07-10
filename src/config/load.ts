@@ -12,20 +12,18 @@ export class ConfigError extends Error {
 export function configCandidates(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
+  home: string = homedir(),
 ): string[] {
   if (env.AAP_CONFIG) return [env.AAP_CONFIG];
-  const configHome =
-    env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.length > 0
-      ? env.XDG_CONFIG_HOME
-      : join(homedir(), ".config");
-  return [join(configHome, "aap", "config.toml"), join(cwd, "config.toml")];
+  return [join(home, ".aap", "config.toml"), join(cwd, "config.toml")];
 }
 
 export function resolveConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
+  home: string = homedir(),
 ): string | null {
-  const candidates = configCandidates(env, cwd);
+  const candidates = configCandidates(env, cwd, home);
   if (env.AAP_CONFIG) return candidates[0] ?? null;
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
@@ -33,14 +31,16 @@ export function resolveConfigPath(
 export function loadConfig(
   pathArg?: string,
   env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+  home: string = homedir(),
 ): Config {
-  const path = pathArg ?? resolveConfigPath(env);
+  const path = pathArg ?? resolveConfigPath(env, cwd, home);
   if (path === null) {
-    const looked = configCandidates(env)
+    const looked = configCandidates(env, cwd, home)
       .map((candidate) => `  - ${candidate}`)
       .join("\n");
     throw new ConfigError(
-      `No config file found. Looked in:\n${looked}\n\nCreate one from config.example.toml (e.g. ~/.config/aap/config.toml) or set AAP_CONFIG.`,
+      `No config file found. Looked in:\n${looked}\n\nRun ./install.sh (creates ~/.aap/config.toml), or copy config.example.toml to ~/.aap/config.toml, or set AAP_CONFIG.`,
     );
   }
 

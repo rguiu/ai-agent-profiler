@@ -43,16 +43,16 @@ Six strategies run on every request, ordered for correctness:
 
 All strategies are configurable and can be toggled independently. The defaults are conservative — prune at 6 turns, suppress re-reads within 2 turns, truncate at 4KB.
 
-## The experiment: fix 7 bugs with two agents
+## The experiment: fix bugs with two agents
 
-To measure the impact, we ran a controlled benchmark using the `iterative-fix` fixture: a small JavaScript project with 6 modules, 7 deliberately planted bugs, and 48 tests (8 failing). The task: fix all bugs until every test passes.
+To measure the impact, we ran a controlled benchmark using the `iterative-fix-plus` fixture: a JavaScript project with 7 modules, 9 planted bugs (plus 3 unimplemented methods), ~54 visible tests. The task: fix all bugs, implement the stubbed methods, and pass all tests — including hidden edge-case tests graded at verify time.
 
 We ran the same task four times:
 
 - **Claude Code** (Bedrock, eu-west-1): baseline and optimized
 - **OpenCode** (DeepSeek v4 Pro): baseline and optimized
 
-Each run used a fresh copy of the codebase, the same task prompt, and the same verification command (`node --test test/*.test.js`). Success is binary: all 48 tests must pass.
+Each run used a fresh copy of the codebase, the same task prompt, and the same verification command. Success is measured by both visible fixture tests and hidden edge-case tests.
 
 ## Results
 
@@ -108,7 +108,7 @@ OpenCode's wall-time improvement (-29%) came from a different mechanism: the opt
 
 ### Task quality (equal or better)
 
-Critically, neither agent degraded. Both found all 7 planted bugs in all runs. The optimized runs actually found *more* issues:
+Critically, neither agent degraded. Both found all planted bugs and implemented the stubs correctly in all runs. The optimized runs actually found *more* issues:
 
 - Claude optimized found 9 issues (+2: a `Date.now()` tie-breaking edge case in LRU eviction, and a scheduler starvation bug).
 - OpenCode optimized found 8 issues (+1: a scheduler deadlock caused by a `break` in the scheduling loop).

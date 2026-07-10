@@ -757,4 +757,50 @@ describe("computeCost", () => {
     // All 1M tokens at 2.5/M regardless of cache
     expect(cost).toBeCloseTo(2.5);
   });
+
+  it("prices a DeepSeek streaming response from its terminal usage chunk", () => {
+    const deepseek = {
+      "deepseek-chat": { inputPerMTok: 0.435, outputPerMTok: 0.87 },
+    };
+    const body = Buffer.from(
+      sse([
+        {
+          object: "chat.completion.chunk",
+          model: "deepseek-chat",
+          choices: [{ index: 0, delta: { content: "ok" } }],
+        },
+        {
+          object: "chat.completion.chunk",
+          model: "deepseek-chat",
+          choices: [],
+          usage: { prompt_tokens: 1000, completion_tokens: 500 },
+        },
+      ]) + "data: [DONE]\n\n",
+    );
+    const result = parseTrace(traceFor("text/event-stream", body));
+    expect(result.model).toBe("deepseek-chat");
+    expect(result.inputTokens).toBe(1000);
+    expect(result.outputTokens).toBe(500);
+    const cost = computeCost(
+      result.model,
+      result.inputTokens,
+      result.outputTokens,
+      deepseek,
+    );
+    expect(cost).toBeCloseTo((1000 / 1e6) * 0.435 + (500 / 1e6) * 0.87);
+  });
+
+  it("resolves prefixed and mixed-case model keys to the same rates", () => {
+    const deepseek = {
+      "deepseek-chat": { inputPerMTok: 0.435, outputPerMTok: 0.87 },
+    };
+    const base = computeCost("deepseek-chat", 1000, 500, deepseek);
+    expect(computeCost("deepseek/deepseek-chat", 1000, 500, deepseek)).toBe(
+      base,
+    );
+    expect(computeCost("DeepSeek-Chat", 1000, 500, deepseek)).toBe(base);
+    expect(computeCost("provider/DeepSeek-Chat", 1000, 500, deepseek)).toBe(
+      base,
+    );
+  });
 });

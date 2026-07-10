@@ -17,7 +17,7 @@ So I built a small transparent proxy that trims the pile before it goes out. It 
 [article2.png]
 > *The profiler flags exactly what's wasteful — repeated reads, re-sent tool definitions, runaway context growth — then the optimizer trims it automatically.*
 
-I ran a controlled benchmark — same task (7 planted bugs, 48 tests), fresh code each time, two different agents:
+I ran a controlled benchmark — same task (9 planted bugs + 3 method stubs, hidden edge-case tests), fresh code each time, two different agents:
 
 Claude Code: $2.88 → $0.68  (-77%)
 OpenCode (DeepSeek): $1.27 → $0.28  (-78%)

@@ -8,6 +8,7 @@ export interface SessionSummary {
   meta: Record<string, string> | null;
   requests: number;
   inputTokens: number;
+  totalInputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
   cost: number;
@@ -36,15 +37,33 @@ function wallMs(detail: SessionDetail): number {
   return Math.max(...ends) - Math.min(...starts);
 }
 
+// OpenAI-compatible providers (incl. DeepSeek) report prompt_tokens as the FULL
+// input, cached tokens included. Anthropic/Bedrock report input_tokens as the
+// uncached remainder, with cache reads counted separately. Normalise both to a
+// single convention: inputTokens = true uncached, totalInputTokens = uncached +
+// cached — so the comparison table never double-counts the cached portion.
+function cachedIsInInput(format: string | null): boolean {
+  return format === "openai";
+}
+
 export function summarize(detail: SessionDetail): SessionSummary {
   const requests = detail.requests;
+  let uncached = 0;
+  let cached = 0;
+  for (const r of requests) {
+    const raw = r.input_tokens ?? 0;
+    const cachedTok = r.cached_input_tokens ?? 0;
+    cached += cachedTok;
+    uncached += cachedIsInInput(r.format) ? Math.max(0, raw - cachedTok) : raw;
+  }
   return {
     id: detail.session.id,
     client: detail.session.client,
     meta: detail.session.meta ?? null,
     requests: requests.length,
-    inputTokens: requests.reduce((a, r) => a + (r.input_tokens ?? 0), 0),
-    cachedInputTokens: detail.analysis.context.cached_input_tokens_total,
+    inputTokens: uncached,
+    totalInputTokens: uncached + cached,
+    cachedInputTokens: cached,
     outputTokens: requests.reduce((a, r) => a + (r.output_tokens ?? 0), 0),
     cost: requests.reduce((a, r) => a + (r.cost ?? 0), 0),
     toolCalls: requests.reduce((a, r) => a + (r.tool_call_count ?? 0), 0),
@@ -89,14 +108,14 @@ type MetricRow = [
 ];
 
 function cacheRate(s: SessionSummary): string {
-  const total = s.inputTokens + s.cachedInputTokens;
+  const total = s.totalInputTokens;
   if (total === 0) return "—";
   const pct = (s.cachedInputTokens / total) * 100;
   return `${pct.toFixed(0)}%`;
 }
 
 function totalInput(s: SessionSummary): number {
-  return s.inputTokens + s.cachedInputTokens;
+  return s.totalInputTokens;
 }
 
 const METRICS: MetricRow[] = [
@@ -177,6 +196,24 @@ export function renderComparison(summaries: SessionSummary[]): string {
         : undefined,
   }));
 
+  // Append fixture / edge test-result rows when tagged by the benchmark harness.
+  const hasFixture = summaries.some((s) => s.meta?.fixture);
+  const hasEdge = summaries.some((s) => s.meta?.edge);
+  if (hasFixture) {
+    rows.push({
+      label: "Fixture tests",
+      cells: summaries.map((s) => s.meta?.fixture ?? "—"),
+      delta: undefined,
+    });
+  }
+  if (hasEdge) {
+    rows.push({
+      label: "Edge tests",
+      cells: summaries.map((s) => s.meta?.edge ?? "—"),
+      delta: undefined,
+    });
+  }
+
   return "\n" + renderTable("Session comparison", colNames, rows);
 }
 
@@ -202,6 +239,24 @@ function renderGroupedComparison(
       delta: cols[0] && cols[1] ? delta(getNum(cols[0]), getNum(cols[1])) : "",
     }));
 
+    // Append fixture / edge test-result rows per task.
+    const hasFixture = cols.some((c) => c?.meta?.fixture);
+    const hasEdge = cols.some((c) => c?.meta?.edge);
+    if (hasFixture) {
+      rows.push({
+        label: "Fixture tests",
+        cells: cols.map((c) => c?.meta?.fixture ?? "—"),
+        delta: "",
+      });
+    }
+    if (hasEdge) {
+      rows.push({
+        label: "Edge tests",
+        cells: cols.map((c) => c?.meta?.edge ?? "—"),
+        delta: "",
+      });
+    }
+
     sections.push(renderTable(`[${task}]`, runs, rows));
   }
 
@@ -211,6 +266,7 @@ function renderGroupedComparison(
     return {
       requests: group.reduce((a, s) => a + s.requests, 0),
       inputTokens: group.reduce((a, s) => a + s.inputTokens, 0),
+      totalInputTokens: group.reduce((a, s) => a + s.totalInputTokens, 0),
       cachedInputTokens: group.reduce((a, s) => a + s.cachedInputTokens, 0),
       outputTokens: group.reduce((a, s) => a + s.outputTokens, 0),
       cost: group.reduce((a, s) => a + s.cost, 0),
@@ -222,7 +278,7 @@ function renderGroupedComparison(
   const t0 = totals[0]!;
   const t1 = totals[1]!;
   const totalCacheRate = (t: typeof t0) => {
-    const total = t.inputTokens + t.cachedInputTokens;
+    const total = t.totalInputTokens;
     return total > 0
       ? `${((t.cachedInputTokens / total) * 100).toFixed(0)}%`
       : "—";
@@ -235,11 +291,8 @@ function renderGroupedComparison(
     },
     {
       label: "Total input",
-      cells: totals.map((t) => num(t.inputTokens + t.cachedInputTokens)),
-      delta: delta(
-        t0.inputTokens + t0.cachedInputTokens,
-        t1.inputTokens + t1.cachedInputTokens,
-      ),
+      cells: totals.map((t) => num(t.totalInputTokens)),
+      delta: delta(t0.totalInputTokens, t1.totalInputTokens),
     },
     {
       label: "  ↳ cached",

@@ -931,7 +931,7 @@ export function computeCost(
   cachedInputTokens?: number | null,
 ): number | null {
   if (!model) return null;
-  const rates = pricing[model];
+  const rates = resolvePricing(model, pricing);
   if (!rates) return null;
   const totalInput = inputTokens ?? 0;
   const cached = cachedInputTokens ?? 0;
@@ -942,4 +942,26 @@ export function computeCost(
     (cached / 1_000_000) * cacheRate +
     ((outputTokens ?? 0) / 1_000_000) * rates.outputPerMTok
   );
+}
+
+function normalizeModelKey(model: string): string {
+  const slash = model.lastIndexOf("/");
+  const bare = slash === -1 ? model : model.slice(slash + 1);
+  return bare.toLowerCase();
+}
+
+// Exact match first (preserves existing semantics); otherwise fall back to a
+// normalized comparison that strips any `provider/` prefix and lowercases, so
+// e.g. `deepseek/deepseek-chat` resolves to a `deepseek-chat` pricing entry.
+function resolvePricing(
+  model: string,
+  pricing: Record<string, ModelPricing>,
+): ModelPricing | undefined {
+  const exact = pricing[model];
+  if (exact) return exact;
+  const normalized = normalizeModelKey(model);
+  for (const [key, rates] of Object.entries(pricing)) {
+    if (normalizeModelKey(key) === normalized) return rates;
+  }
+  return undefined;
 }
