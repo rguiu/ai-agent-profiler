@@ -17,6 +17,10 @@ DeepSeek — the effect is **provider-dependent**, driven by how each provider's
 reacts to editing old context. See the
 [benchmark report](benchmarks/REPORT-optimize-layer.md) for the full, honest picture.
 
+**Live demo:** explore real captured sessions in a static, read-only clone of the
+dashboard — no install required: **https://rguiu.github.io/ai-agent-profiler/**
+(sample data from two DeepSeek/opencode benchmark sessions; paths and credentials redacted).
+
 ## How it works
 
 Launch your agent through a small wrapper that points its provider base URL at the
