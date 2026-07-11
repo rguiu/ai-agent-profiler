@@ -294,6 +294,7 @@ export class OptimizeLayer {
   // advances when context crosses the threshold again — a rare, deliberate reset.
   private compactBoundary = 0;
   private frozenSummary: string | null = null;
+  private markersBeforeOpt = 0;
 
   constructor(config: Partial<OptimizeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -317,6 +318,12 @@ export class OptimizeLayer {
     }
 
     let changed = false;
+
+    // Snapshot how many cache_control markers the client placed BEFORE we
+    // modify anything. Used by insertCacheBreakpoints to restore destroyed ones.
+    if (this.config.insertBreakpoints) {
+      this.markersBeforeOpt = this.countMarkers(parsed);
+    }
 
     // Collapse repeated system prompts to a short hash stub
     if (this.config.collapseSystem && parsed.system != null) {
@@ -869,57 +876,96 @@ export class OptimizeLayer {
   }
 
   // Insert `cache_control: {type: "ephemeral"}` markers at stable-layer
-  // boundaries for Anthropic/Bedrock explicit-breakpoint caching. Places up to 3
-  // breakpoints: (1) end of system content, (2) last tool definition, (3) the
-  // second-to-last user message (the boundary between stable context and the new
-  // turn). Only operates on Anthropic-format requests (array `system`, array
-  // `content` blocks in messages). Returns true if the body was mutated.
+  // boundaries for Anthropic/Bedrock. Runs AFTER all other optimizations.
+  //
+  // Strategy: restore + supplement cache coverage.
+  //   - `markersBeforeOpt` (set at the top of rewriteRequestBody) records how
+  //     many markers the client originally placed.
+  //   - After pruneStale / collapseSystem / pruneUnusedTools run, some of those
+  //     markers may have been destroyed (the block they lived on was replaced).
+  //   - We count what survived, then place new markers at optimal positions up
+  //     to: max(originalCount, 3) capped at 4 total.
+  //   - This ensures the client's cache intent is preserved even after our edits,
+  //     and naive clients (0 markers) get up to 3 for free.
+  //
+  // Placement priorities (most stable → least):
+  //   1. End of system content
+  //   2. Last tool definition
+  //   3. Second-to-last user message (the context boundary)
   private insertCacheBreakpoints(parsed: Record<string, unknown>): boolean {
-    // Detect Anthropic message format: system is array or string, messages have
-    // content arrays with typed blocks. Skip OpenAI-format payloads silently.
+    const MAX_BREAKPOINTS = 4;
     const messages = parsed.messages as Message[] | undefined;
     if (!Array.isArray(messages)) return false;
 
-    let placed = 0;
-
-    // Breakpoint 1: system prompt. Anthropic supports `system` as a string or
-    // as an array of content blocks. For the array form, tag the last block.
+    // Count markers that survived the optimization passes.
+    let surviving = 0;
     if (Array.isArray(parsed.system)) {
-      const sysBlocks = parsed.system as ContentBlock[];
-      if (sysBlocks.length > 0) {
-        const last = sysBlocks[sysBlocks.length - 1]!;
-        if (!last.cache_control) {
-          last.cache_control = { type: "ephemeral" };
-          placed++;
+      for (const b of parsed.system as ContentBlock[]) {
+        if (b.cache_control) surviving++;
+      }
+    }
+    if (Array.isArray(parsed.tools)) {
+      for (const t of parsed.tools as Array<Record<string, unknown>>) {
+        if (t.cache_control) surviving++;
+      }
+    }
+    for (const msg of messages) {
+      if (Array.isArray(msg.content)) {
+        for (const b of msg.content as ContentBlock[]) {
+          if (b.cache_control) surviving++;
         }
       }
-    } else if (typeof parsed.system === "string" && parsed.system.length > 0) {
-      // Convert string system to array form so we can attach cache_control
-      parsed.system = [
-        {
-          type: "text",
-          text: parsed.system,
-          cache_control: { type: "ephemeral" },
-        },
-      ];
-      placed++;
+    }
+
+    // Target: at least as many markers as the client originally placed (restore
+    // destroyed ones), plus fill up to 3 for naive clients. Never exceed 4.
+    const target = Math.min(
+      MAX_BREAKPOINTS,
+      Math.max(this.markersBeforeOpt, 3),
+    );
+    let budget = target - surviving;
+    if (budget <= 0) return false;
+
+    let placed = 0;
+
+    // Breakpoint 1: system prompt
+    if (budget > 0) {
+      if (Array.isArray(parsed.system)) {
+        const sysBlocks = parsed.system as ContentBlock[];
+        if (sysBlocks.length > 0) {
+          const last = sysBlocks[sysBlocks.length - 1]!;
+          if (!last.cache_control) {
+            last.cache_control = { type: "ephemeral" };
+            placed++;
+            budget--;
+          }
+        }
+      } else if (typeof parsed.system === "string" && parsed.system.length > 0) {
+        parsed.system = [
+          {
+            type: "text",
+            text: parsed.system,
+            cache_control: { type: "ephemeral" },
+          },
+        ];
+        placed++;
+        budget--;
+      }
     }
 
     // Breakpoint 2: last tool definition
-    if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+    if (budget > 0 && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
       const tools = parsed.tools as Array<Record<string, unknown>>;
       const lastTool = tools[tools.length - 1]!;
       if (!lastTool.cache_control) {
         lastTool.cache_control = { type: "ephemeral" };
         placed++;
+        budget--;
       }
     }
 
-    // Breakpoint 3: the last user message BEFORE the final user message.
-    // This marks the boundary of "everything the model saw last turn" — the
-    // most valuable cache checkpoint for multi-turn conversations because
-    // everything above it is byte-identical across consecutive requests.
-    if (messages.length >= 3) {
+    // Breakpoint 3: second-to-last user message (context boundary)
+    if (budget > 0 && messages.length >= 3) {
       let lastUserIdx = -1;
       let secondLastUserIdx = -1;
       for (let i = messages.length - 1; i >= 0; i--) {
@@ -945,15 +991,45 @@ export class OptimizeLayer {
     }
 
     if (placed > 0) {
+      const destroyed = this.markersBeforeOpt - surviving;
+      const detail =
+        destroyed > 0
+          ? `placed ${placed} breakpoint(s) (${destroyed} destroyed by optimize, ${placed} restored/added)`
+          : `placed ${placed} breakpoint(s) — client had none`;
       this.actions.push({
         type: "insert_breakpoints",
         turn: this.turn,
         tokensSaved: 0,
-        detail: `placed ${placed} cache_control breakpoint(s) (system, tools, context boundary)`,
+        detail,
       });
     }
 
     return placed > 0;
+  }
+
+  private countMarkers(parsed: Record<string, unknown>): number {
+    let count = 0;
+    if (Array.isArray(parsed.system)) {
+      for (const b of parsed.system as ContentBlock[]) {
+        if (b.cache_control) count++;
+      }
+    }
+    if (Array.isArray(parsed.tools)) {
+      for (const t of parsed.tools as Array<Record<string, unknown>>) {
+        if (t.cache_control) count++;
+      }
+    }
+    const messages = parsed.messages as Message[] | undefined;
+    if (Array.isArray(messages)) {
+      for (const msg of messages) {
+        if (Array.isArray(msg.content)) {
+          for (const b of msg.content as ContentBlock[]) {
+            if (b.cache_control) count++;
+          }
+        }
+      }
+    }
+    return count;
   }
 
   private resolveToolName(

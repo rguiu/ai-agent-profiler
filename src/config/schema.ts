@@ -35,6 +35,7 @@ export const optimizeSchema = z.object({
   suppressReread: z.boolean().default(true),
   collapseSystem: z.boolean().default(true),
   pruneUnusedTools: z.boolean().default(true),
+  insertBreakpoints: z.boolean().default(false),
   truncateThreshold: z.number().int().positive().default(4096),
   pruneAfterTurns: z.number().int().positive().default(6),
   suppressWithinTurns: z.number().int().positive().default(2),

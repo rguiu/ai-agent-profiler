@@ -108,6 +108,7 @@ async function startStack(): Promise<{
       pruneAfterTurns: 6,
       suppressWithinTurns: 2,
       pruneUnusedTools: true,
+      insertBreakpoints: false,
       pruneUnusedToolsAfter: 10,
       compactThreshold: 60000,
       compactKeepTail: 20,

@@ -176,7 +176,100 @@ describe("insertCacheBreakpoints", () => {
     const actions = layer.getActions();
     expect(actions).toHaveLength(1);
     expect(actions[0]!.type).toBe("insert_breakpoints");
-    expect(actions[0]!.detail).toContain("3 cache_control breakpoint(s)");
+    expect(actions[0]!.detail).toContain("3 breakpoint(s)");
+  });
+
+  it("respects the 4-marker cap and restores after optimize destroys markers", () => {
+    const layer = new OptimizeLayer({
+      insertBreakpoints: true,
+      dedup: false,
+      truncate: false,
+      stablePrefix: false,
+      pruneStale: false,
+      collapseSystem: false,
+      pruneUnusedTools: false,
+      suppressReread: false,
+    });
+
+    // Client placed 3 markers — after optimization none are destroyed,
+    // but target = max(3, 3) = 3, surviving = 3, budget = 0 → no-op
+    const body = makeAnthropicBody({
+      system: [
+        { type: "text", text: "system", cache_control: { type: "ephemeral" } },
+      ],
+      tools: [
+        { name: "Read", description: "Read", input_schema: {}, cache_control: { type: "ephemeral" } },
+        { name: "Write", description: "Write", input_schema: {} },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "first", cache_control: { type: "ephemeral" } }],
+        },
+        { role: "assistant", content: [{ type: "text", text: "reply" }] },
+        { role: "user", content: [{ type: "text", text: "second" }] },
+      ],
+    });
+
+    const out = layer.rewriteRequestBody(body);
+    const parsed = JSON.parse(out.toString());
+
+    // No new markers added — client's 3 all survived, target met
+    const actions = layer.getActions();
+    expect(actions).toHaveLength(0);
+
+    // Count total markers — must not exceed 4
+    let total = 0;
+    for (const b of parsed.system) if (b.cache_control) total++;
+    for (const t of parsed.tools) if (t.cache_control) total++;
+    for (const m of parsed.messages) {
+      if (Array.isArray(m.content)) {
+        for (const b of m.content) if (b.cache_control) total++;
+      }
+    }
+    expect(total).toBe(3);
+  });
+
+  it("is a no-op when client already has 4 markers that all survive", () => {
+    const layer = new OptimizeLayer({
+      insertBreakpoints: true,
+      dedup: false,
+      truncate: false,
+      stablePrefix: false,
+      pruneStale: false,
+      collapseSystem: false,
+      pruneUnusedTools: false,
+      suppressReread: false,
+    });
+
+    const body = makeAnthropicBody({
+      system: [
+        { type: "text", text: "sys1", cache_control: { type: "ephemeral" } },
+        { type: "text", text: "sys2", cache_control: { type: "ephemeral" } },
+      ],
+      tools: [
+        { name: "Read", description: "Read", input_schema: {}, cache_control: { type: "ephemeral" } },
+        { name: "Write", description: "Write", input_schema: {} },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "q1", cache_control: { type: "ephemeral" } }],
+        },
+        { role: "assistant", content: [{ type: "text", text: "a1" }] },
+        { role: "user", content: [{ type: "text", text: "q2" }] },
+      ],
+    });
+
+    const out = layer.rewriteRequestBody(body);
+    const parsed = JSON.parse(out.toString());
+
+    // No new markers added — all 4 survived
+    const actions = layer.getActions();
+    expect(actions).toHaveLength(0);
+
+    // Tools[1] (Write) should NOT have gotten a marker
+    expect(parsed.tools[1].cache_control).toBeUndefined();
   });
 
   it("handles multi-block system content", () => {
