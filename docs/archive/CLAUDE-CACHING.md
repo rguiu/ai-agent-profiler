@@ -69,9 +69,9 @@ Checkpoint C
 
 If only the conversation summary changes:
 
-* Checkpoint C becomes invalid.
-* Checkpoint B is still reusable.
-* Claude resumes processing from Checkpoint B.
+- Checkpoint C becomes invalid.
+- Checkpoint B is still reusable.
+- Claude resumes processing from Checkpoint B.
 
 ---
 
@@ -81,14 +81,14 @@ Cache reuse requires that everything before the selected checkpoint be identical
 
 This means identical:
 
-* token sequence
-* ordering
-* whitespace (after provider tokenization)
-* tool definitions
-* system prompt
-* JSON schemas
-* examples
-* summaries
+- token sequence
+- ordering
+- whitespace (after provider tokenization)
+- tool definitions
+- system prompt
+- JSON schemas
+- examples
+- summaries
 
 Changing any earlier content invalidates checkpoints after that location.
 
@@ -116,9 +116,9 @@ Live Conversation
 
 Benefits:
 
-* Repository updates do not invalidate the System/Tools cache.
-* Conversation-summary updates do not invalidate repository caching.
-* Only the minimum amount of prompt must be recomputed.
+- Repository updates do not invalidate the System/Tools cache.
+- Conversation-summary updates do not invalidate repository caching.
+- Only the minimum amount of prompt must be recomputed.
 
 ---
 
@@ -130,38 +130,38 @@ Suggested ordering:
 
 Layer 1
 
-* System prompt
-* Global instructions
-* Stable policies
+- System prompt
+- Global instructions
+- Stable policies
 
 Layer 2
 
-* Tool definitions
-* Function schemas
-* MCP descriptions
+- Tool definitions
+- Function schemas
+- MCP descriptions
 
 Layer 3
 
-* Repository documentation
-* Project architecture
-* Coding conventions
-* Long-term memory
+- Repository documentation
+- Project architecture
+- Coding conventions
+- Long-term memory
 
 Layer 4
 
-* Project summary
+- Project summary
 
 Layer 5
 
-* Conversation summary
+- Conversation summary
 
 Layer 6
 
-* Recent messages
+- Recent messages
 
 Layer 7
 
-* Current user message
+- Current user message
 
 Each layer should change significantly less frequently than the one below it.
 
@@ -171,16 +171,16 @@ Each layer should change significantly less frequently than the one below it.
 
 Good candidates for cached prefixes include:
 
-* system prompts
-* coding guidelines
-* organization policies
-* API documentation
-* repository summaries
-* dependency graphs
-* architectural documentation
-* tool schemas
-* MCP descriptions
-* long-term project memory
+- system prompts
+- coding guidelines
+- organization policies
+- API documentation
+- repository summaries
+- dependency graphs
+- architectural documentation
+- tool schemas
+- MCP descriptions
+- long-term project memory
 
 These usually remain unchanged across many requests.
 
@@ -192,14 +192,14 @@ Avoid placing frequently changing content before cache checkpoints.
 
 Examples:
 
-* timestamps
-* request IDs
-* token counts
-* execution statistics
-* temporary notes
-* progress bars
-* rotating examples
-* ephemeral metadata
+- timestamps
+- request IDs
+- token counts
+- execution statistics
+- temporary notes
+- progress bars
+- rotating examples
+- ephemeral metadata
 
 Even a tiny modification before a checkpoint prevents reuse of that checkpoint.
 
@@ -293,10 +293,10 @@ Tool definitions are excellent cache candidates because they usually remain stat
 
 Examples:
 
-* function schemas
-* MCP server descriptions
-* JSON schemas
-* parameter documentation
+- function schemas
+- MCP server descriptions
+- JSON schemas
+- parameter documentation
 
 Only modify them when necessary.
 

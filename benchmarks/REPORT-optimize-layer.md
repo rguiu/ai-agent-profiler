@@ -151,7 +151,7 @@ Edge tests         50/57         54/57          54/57
 
 ### OpenCode / DeepSeek
 
-> **⚠️ Superseded — this is the *provider-blind* layer.** The +491% blow-up below is what
+> **⚠️ Superseded — this is the _provider-blind_ layer.** The +491% blow-up below is what
 > happened when the Anthropic-tuned strategies (`pruneStale` et al.) ran unchanged against
 > DeepSeek's OpenAI-format prefix cache. It is **not** the current behavior. A DeepSeek
 > cache-safe profile (`profile = auto`) has since been built — it disables the prefix-editing

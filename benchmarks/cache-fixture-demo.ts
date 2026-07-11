@@ -35,11 +35,62 @@ const SYSTEM =
   "Be concise and precise. ".repeat(20);
 
 const tools = [
-  { type: "function", function: { name: "read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
-  { type: "function", function: { name: "edit", description: "Edit a file", parameters: { type: "object", properties: { path: { type: "string" }, old: { type: "string" }, new: { type: "string" } } } } },
-  { type: "function", function: { name: "bash", description: "Run a shell command", parameters: { type: "object", properties: { command: { type: "string" } } } } },
-  { type: "function", function: { name: "grep", description: "Search file contents", parameters: { type: "object", properties: { pattern: { type: "string" } } } } },
-  { type: "function", function: { name: "glob", description: "Find files by pattern", parameters: { type: "object", properties: { pattern: { type: "string" } } } } },
+  {
+    type: "function",
+    function: {
+      name: "read",
+      description: "Read a file",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit",
+      description: "Edit a file",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          old: { type: "string" },
+          new: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Run a shell command",
+      parameters: {
+        type: "object",
+        properties: { command: { type: "string" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "grep",
+      description: "Search file contents",
+      parameters: {
+        type: "object",
+        properties: { pattern: { type: "string" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "glob",
+      description: "Find files by pattern",
+      parameters: {
+        type: "object",
+        properties: { pattern: { type: "string" } },
+      },
+    },
+  },
 ];
 
 type Msg = Record<string, unknown>;
@@ -66,7 +117,11 @@ function testOutput(pass: boolean): string {
   for (let i = 1; i <= per * 4; i++) {
     lines.push(`${pass || i % 5 !== 0 ? "ok" : "not ok"} ${i} - case ${i}`);
   }
-  lines.push(`# tests ${per * 4}`, `# pass ${pass ? per * 4 : per * 4 - per}`, `# fail ${pass ? 0 : per}`);
+  lines.push(
+    `# tests ${per * 4}`,
+    `# pass ${pass ? per * 4 : per * 4 - per}`,
+    `# fail ${pass ? 0 : per}`,
+  );
   return lines.join("\n");
 }
 
@@ -74,24 +129,50 @@ function testOutput(pass: boolean): string {
 // edit → re-read → re-run cycles (the shape iterative-fix-plus actually induces).
 function buildSteps(): Step[] {
   const steps: Step[] = [];
-  const glob = [...srcFiles, ...testFiles].map((f) => relative(fx, join(fx, f))).join("\n");
+  const glob = [...srcFiles, ...testFiles]
+    .map((f) => relative(fx, join(fx, f)))
+    .join("\n");
   steps.push({ tool: "glob", args: { pattern: "**/*.js" }, result: glob });
   try {
-    steps.push({ tool: "read", args: { path: "README.md" }, result: read("README.md") });
-  } catch { /* no README */ }
+    steps.push({
+      tool: "read",
+      args: { path: "README.md" },
+      result: read("README.md"),
+    });
+  } catch {
+    /* no README */
+  }
   for (const f of [...srcFiles, ...testFiles]) {
     steps.push({ tool: "read", args: { path: f }, result: read(f) });
   }
-  steps.push({ tool: "bash", args: { command: "node --test test/*.test.js" }, result: testOutput(false) });
+  steps.push({
+    tool: "bash",
+    args: { command: "node --test test/*.test.js" },
+    result: testOutput(false),
+  });
 
   for (let c = 0; c < EDIT_CYCLES; c++) {
     const target = srcFiles[c % Math.max(srcFiles.length, 1)] ?? "src/index.js";
     const content = read(target);
-    steps.push({ tool: "edit", args: { path: target, old: `cycle-${c}-old`, new: `cycle-${c}-new` }, result: `Edited ${target}` });
+    steps.push({
+      tool: "edit",
+      args: { path: target, old: `cycle-${c}-old`, new: `cycle-${c}-new` },
+      result: `Edited ${target}`,
+    });
     steps.push({ tool: "read", args: { path: target }, result: content });
-    steps.push({ tool: "grep", args: { pattern: "not implemented" }, result: srcFiles.map((f) => `${f}:1: throw new Error('not implemented')`).join("\n") });
+    steps.push({
+      tool: "grep",
+      args: { pattern: "not implemented" },
+      result: srcFiles
+        .map((f) => `${f}:1: throw new Error('not implemented')`)
+        .join("\n"),
+    });
     const last = c === EDIT_CYCLES - 1;
-    steps.push({ tool: "bash", args: { command: "node --test test/*.test.js" }, result: testOutput(last) });
+    steps.push({
+      tool: "bash",
+      args: { command: "node --test test/*.test.js" },
+      result: testOutput(last),
+    });
   }
   return steps;
 }
@@ -99,10 +180,16 @@ function buildSteps(): Step[] {
 const steps = buildSteps();
 
 function buildBody(messages: Msg[]): Buffer {
-  return Buffer.from(JSON.stringify({ model: MODEL, system: SYSTEM, tools, messages }));
+  return Buffer.from(
+    JSON.stringify({ model: MODEL, system: SYSTEM, tools, messages }),
+  );
 }
 
-function scoreStream(bodies: string[]): { hit: number; miss: number; cost: number } {
+function scoreStream(bodies: string[]): {
+  hit: number;
+  miss: number;
+  cost: number;
+} {
   let prev: string | null = null;
   let hit = 0,
     miss = 0,
@@ -117,8 +204,18 @@ function scoreStream(bodies: string[]): { hit: number; miss: number; cost: numbe
   return { hit, miss, cost };
 }
 
-function run(layer: OptimizeLayer | null): { hit: number; miss: number; cost: number } {
-  const messages: Msg[] = [{ role: "user", content: "Fix all failing tests and implement the stubbed methods; run tests after each change." }];
+function run(layer: OptimizeLayer | null): {
+  hit: number;
+  miss: number;
+  cost: number;
+} {
+  const messages: Msg[] = [
+    {
+      role: "user",
+      content:
+        "Fix all failing tests and implement the stubbed methods; run tests after each change.",
+    },
+  ];
   const bodies: string[] = [];
 
   for (let i = 0; i < steps.length; i++) {
@@ -127,7 +224,13 @@ function run(layer: OptimizeLayer | null): { hit: number; miss: number; cost: nu
     messages.push({
       role: "assistant",
       content: null,
-      tool_calls: [{ id: callId, type: "function", function: { name: step.tool, arguments: JSON.stringify(step.args) } }],
+      tool_calls: [
+        {
+          id: callId,
+          type: "function",
+          function: { name: step.tool, arguments: JSON.stringify(step.args) },
+        },
+      ],
     });
     // The live proxy only sees the FULL result in the request history and
     // reshapes the whole body via rewriteRequestBody each turn — it never
@@ -151,9 +254,13 @@ const usd = (n: number) => `$${n.toFixed(5)}`;
 const rate = (s: { hit: number; miss: number }) =>
   `${Math.round((s.hit / (s.hit + s.miss)) * 100)}%`;
 
-console.log(`\n${FIXTURE} — DeepSeek prefix-cache cost (input side, ${steps.length} requests, ${srcFiles.length} src + ${testFiles.length} test files)`);
+console.log(
+  `\n${FIXTURE} — DeepSeek prefix-cache cost (input side, ${steps.length} requests, ${srcFiles.length} src + ${testFiles.length} test files)`,
+);
 console.log("─".repeat(78));
-console.log(`                     hit-rate     hit tok      miss tok     input cost`);
+console.log(
+  `                     hit-rate     hit tok      miss tok     input cost`,
+);
 const row = (label: string, s: { hit: number; miss: number; cost: number }) =>
   console.log(
     `  ${label.padEnd(17)} ${rate(s).padStart(6)}    ${fmt(s.hit).padStart(9)}    ${fmt(s.miss).padStart(9)}     ${usd(s.cost)}`,
@@ -162,6 +269,9 @@ row("baseline", base);
 row("optimize(default)", opt);
 row("optimize(safe)", safe);
 console.log("─".repeat(78));
-const pctVs = (s: { cost: number }) => `${s.cost > base.cost ? "+" : ""}${((s.cost / base.cost - 1) * 100).toFixed(1)}%`;
-console.log(`  vs baseline:  default ${pctVs(opt)}   cache-safe ${pctVs(safe)}`);
+const pctVs = (s: { cost: number }) =>
+  `${s.cost > base.cost ? "+" : ""}${((s.cost / base.cost - 1) * 100).toFixed(1)}%`;
+console.log(
+  `  vs baseline:  default ${pctVs(opt)}   cache-safe ${pctVs(safe)}`,
+);
 console.log();

@@ -1,13 +1,14 @@
-import { memoize } from '../src/memo.js';
-import { describe, it } from 'node:test';
-import { strict as assert } from 'node:assert';
+import { memoize } from "../src/memo.js";
+import { describe, it } from "node:test";
+import { strict as assert } from "node:assert";
 
-describe('memoize', () => {
-  it('should cache results for same arguments', () => {
+describe("memoize", () => {
+  it("should cache results for same arguments", () => {
     let callCount = 0;
     function sumSquares(n) {
       callCount++;
-      if (!Number.isInteger(n) || n < 0) throw new Error('n must be a non-negative integer');
+      if (!Number.isInteger(n) || n < 0)
+        throw new Error("n must be a non-negative integer");
       let sum = 0;
       for (let i = 1; i <= n; i++) {
         sum += i * i;
@@ -25,14 +26,19 @@ describe('memoize', () => {
     const callsAfterSecond = callCount;
 
     assert.strictEqual(result1, result2);
-    assert.strictEqual(callsAfterSecond, callsAfterFirst, 'Second call should not invoke the original function');
+    assert.strictEqual(
+      callsAfterSecond,
+      callsAfterFirst,
+      "Second call should not invoke the original function",
+    );
   });
 
-  it('should produce correct sum of squares', () => {
+  it("should produce correct sum of squares", () => {
     let callCount = 0;
     function sumSquares(n) {
       callCount++;
-      if (!Number.isInteger(n) || n < 0) throw new Error('n must be a non-negative integer');
+      if (!Number.isInteger(n) || n < 0)
+        throw new Error("n must be a non-negative integer");
       let sum = 0;
       for (let i = 1; i <= n; i++) {
         sum += i * i;
@@ -47,7 +53,7 @@ describe('memoize', () => {
       { n: 1, expected: 1 },
       { n: 2, expected: 5 }, // 1+4
       { n: 3, expected: 14 }, // 1+4+9
-      { n: 10, expected: 385 } // sum of squares up to 10
+      { n: 10, expected: 385 }, // sum of squares up to 10
     ];
     for (const { n, expected } of testCases) {
       assert.strictEqual(memoized(n), expected);

@@ -20,7 +20,7 @@ concrete strategy for keeping the discount.
 
 The cache key is a **continuous token-prefix match starting at position 0**. Only
 requests whose beginning is byte-identical to a previous request reuse the cache.
-Partial matches in the *middle* of the input never trigger a hit on their own.
+Partial matches in the _middle_ of the input never trigger a hit on their own.
 
 The whole request is flattened into one token sequence in this order:
 
@@ -28,7 +28,7 @@ The whole request is flattened into one token sequence in this order:
 system  →  tools / function definitions  →  messages[0..n]
 ```
 
-So the system prompt and the tool schema are the *first* tokens. They are part of the
+So the system prompt and the tool schema are the _first_ tokens. They are part of the
 same prefix as the conversation.
 
 ### 64-token storage units
@@ -46,7 +46,7 @@ but for planning purposes:
 
 Editing, deleting, or inserting a message does **not** wipe the cache before the edit.
 The prefix up to the change (rounded down to a 64-token boundary) still hits; everything
-from the change onward is a miss and becomes the seed for a *new* cache path.
+from the change onward is a miss and becomes the seed for a _new_ cache path.
 
 ```
 0 ──────────── identical ──────────────┊──── changed ────── end
@@ -55,10 +55,10 @@ from the change onward is a miss and becomes the seed for a *new* cache path.
                                    edit point
 ```
 
-**The cost of an edit is therefore determined by *where* it lands, not *how* you make
+**The cost of an edit is therefore determined by _where_ it lands, not _how_ you make
 it.** Deleting a message, blanking it, or shortening it all break the cache at the same
-position and re-bill the same downstream tokens. The lever that matters is the *position*
-of the earliest divergence, and *how often* it moves.
+position and re-bill the same downstream tokens. The lever that matters is the _position_
+of the earliest divergence, and _how often_ it moves.
 
 ### Reordering does not help
 
@@ -110,17 +110,17 @@ question that governs every strategy: **is caching a strict token-prefix from po
 or can identical blocks cache regardless of position?** Result (deepseek-chat, 5 blocks of
 ~1.6K tokens each, base prompt = 8046 tokens):
 
-| Test                              | prompt | hit  | miss | reading                                  |
-| --------------------------------- | -----: | ---: | ---: | ---------------------------------------- |
-| base, cold                        |   8046 |    0 | 8046 | first send is all miss                   |
-| base, repeated                    |   8046 | 7936 |  110 | ~99% hit — prefix cache works            |
-| **append at tail**                |   9606 | 7936 | 1670 | full base prefix hits; only new tail misses |
-| **edit early message**            |   8166 |    0 | 8166 | early edit → **entire** request misses   |
-| **remove middle block**           |   6364 | 1536 | 4828 | hits only up to the removal, rest misses |
-| **reorder two blocks (same bytes)** | 8046 | 1536 | 6510 | identical content, new order → **miss**  |
+| Test                                | prompt |  hit | miss | reading                                     |
+| ----------------------------------- | -----: | ---: | ---: | ------------------------------------------- |
+| base, cold                          |   8046 |    0 | 8046 | first send is all miss                      |
+| base, repeated                      |   8046 | 7936 |  110 | ~99% hit — prefix cache works               |
+| **append at tail**                  |   9606 | 7936 | 1670 | full base prefix hits; only new tail misses |
+| **edit early message**              |   8166 |    0 | 8166 | early edit → **entire** request misses      |
+| **remove middle block**             |   6364 | 1536 | 4828 | hits only up to the removal, rest misses    |
+| **reorder two blocks (same bytes)** |   8046 | 1536 | 6510 | identical content, new order → **miss**     |
 
 **Verdict: strict prefix-from-token-0.** Position is everything. Reordering identical
-content does *not* hit. Removing or moving a block breaks the cache from that point on.
+content does _not_ hit. Removing or moving a block breaks the cache from that point on.
 There is **no** position-independent block caching — an earlier informal measurement that
 suggested otherwise was an artifact of the agent's `messages…tools` JSON ordering plus a
 char/4 token estimate, not real cache behaviour.
@@ -144,13 +144,13 @@ from opencode's `auth.json`).
 larger cache-write model make aggressive prompt rewriting cheap. On DeepSeek the same
 edits land near token 0 and re-bill everything after them:
 
-| Action (`layer.ts`)     | Where it edits            | DeepSeek effect                                  |
-| ----------------------- | ------------------------- | ------------------------------------------------ |
-| `collapseSystem`        | `system` (token 0)        | Whole request is a miss every turn               |
-| `pruneUnusedTools`      | `tools` (before messages) | Invalidates the entire message history           |
-| `stablePrefix` (re-run) | `tools`                   | Any change re-seeds the whole downstream cache   |
-| `pruneStale`            | oldest messages           | Early edit point → most of the context misses    |
-| `dedup` / `truncate` / `suppressReread` | a fresh tool result, tail | Cache-safe — only touches never-cached suffix    |
+| Action (`layer.ts`)                     | Where it edits            | DeepSeek effect                                |
+| --------------------------------------- | ------------------------- | ---------------------------------------------- |
+| `collapseSystem`                        | `system` (token 0)        | Whole request is a miss every turn             |
+| `pruneUnusedTools`                      | `tools` (before messages) | Invalidates the entire message history         |
+| `stablePrefix` (re-run)                 | `tools`                   | Any change re-seeds the whole downstream cache |
+| `pruneStale`                            | oldest messages           | Early edit point → most of the context misses  |
+| `dedup` / `truncate` / `suppressReread` | a fresh tool result, tail | Cache-safe — only touches never-cached suffix  |
 
 The trap: a rewrite "saves" 2K tokens by shrinking an old result, but flips 40K+
 downstream tokens from hit-price to miss-price. Net cost goes **up**. Our current
@@ -179,7 +179,7 @@ Per the break-even in §2b, deleting content at position `P` only pays off if it
 `> ~0.9 ×` the tokens that follow `P` — so mid-history deletion is almost always a loss.
 
 **Better — periodic frozen summary.** Replace the head with one summary block, but
-regenerate it *rarely*. Each regeneration is one deliberate miss; between regenerations
+regenerate it _rarely_. Each regeneration is one deliberate miss; between regenerations
 the summary is a stable prefix again.
 
 **Best — tiered context**, each layer changing less often than the one below it:
@@ -200,7 +200,7 @@ One expensive cache reset per compaction cycle instead of gradual per-turn inval
 2. **Canonicalise `tools` once, then freeze the bytes.** Never reorder or prune tool defs
    after the first request. Disable `pruneUnusedTools` / per-turn `stablePrefix` re-runs.
 3. **Replace age-based `pruneStale` with a position-independent transform.** The token
-   saver must be a *pure function of the result content*, not of its turn/position — then
+   saver must be a _pure function of the result content_, not of its turn/position — then
    the same tool result maps to the same bytes in every request and the prefix never moves.
    This is what `stableTruncate` does (see below).
 4. **Keep tail-only rewrites** (`dedup`, `truncate`, `suppressReread`).
@@ -225,9 +225,9 @@ One expensive cache reset per compaction cycle instead of gradual per-turn inval
 
 > Why not the response path? In OpenAI/DeepSeek format the model's response only contains
 > the assistant's `tool_calls`; the agent runs tools locally and appends results to the
-> *next request*. So the only live hook that sees tool results is `rewriteRequestBody`.
+> _next request_. So the only live hook that sees tool results is `rewriteRequestBody`.
 
-- **`frozenCompact`** (`src/optimize/layer.ts`) — the one strategy that *removes* history, done
+- **`frozenCompact`** (`src/optimize/layer.ts`) — the one strategy that _removes_ history, done
   the cache-correct way. Measured cost data shows the dominant DeepSeek spend in long sessions
   is **re-missing accumulated context** (in one 440-turn session, 96.6% of miss tokens were
   content that wasn't new that turn — cache evictions re-billed). Compaction attacks that
@@ -251,13 +251,14 @@ One expensive cache reset per compaction cycle instead of gradual per-turn inval
 
 ## 5. Cheat sheet
 
-| Do                                       | Don't                                        |
-| ---------------------------------------- | -------------------------------------------- |
-| Append to the tail                       | Delete/rewrite old messages every turn       |
-| Freeze system + tools for the session    | Collapse/hash the system prompt mid-session  |
-| Summarise the head rarely, then freeze   | Re-summarise every few turns                 |
-| Canonicalise tool order once             | Reorder or prune tools per request           |
-| Rewrite a tool result on first send only | Edit a result that's already in the history  |
-| Price edits by downstream miss tokens    | Count only the tokens you removed            |
+| Do                                       | Don't                                       |
+| ---------------------------------------- | ------------------------------------------- |
+| Append to the tail                       | Delete/rewrite old messages every turn      |
+| Freeze system + tools for the session    | Collapse/hash the system prompt mid-session |
+| Summarise the head rarely, then freeze   | Re-summarise every few turns                |
+| Canonicalise tool order once             | Reorder or prune tools per request          |
+| Rewrite a tool result on first send only | Edit a result that's already in the history |
+| Price edits by downstream miss tokens    | Count only the tokens you removed           |
+
 </content>
 </invoke>

@@ -88,7 +88,10 @@ describe("PriorityQueue — bubbleUp edge cases", () => {
     const result = [];
     // Bounded drain: a broken heap must fail here, not spin forever.
     for (let guard = 0; !pq.isEmpty(); guard++) {
-      assert.ok(guard < 8, "pop() did not drain the queue (heap/pop is broken)");
+      assert.ok(
+        guard < 8,
+        "pop() did not drain the queue (heap/pop is broken)",
+      );
       result.push(pq.pop());
     }
     assert.deepEqual(result, ["h", "g", "f", "e", "d", "c", "b", "a"]);
@@ -99,7 +102,10 @@ describe("PriorityQueue — bubbleUp edge cases", () => {
     for (let i = 100; i >= 1; i--) pq.push(`v${i}`, i);
     let prev = 0;
     for (let guard = 0; !pq.isEmpty(); guard++) {
-      assert.ok(guard < 100, "pop() did not drain the queue (heap/pop is broken)");
+      assert.ok(
+        guard < 100,
+        "pop() did not drain the queue (heap/pop is broken)",
+      );
       const item = pq.pop();
       const n = parseInt(item.slice(1), 10);
       assert.ok(n >= prev, `out of order: ${n} < ${prev}`);
@@ -200,7 +206,10 @@ describe("PriorityQueue.merge — edge cases", () => {
     let prev = -1;
     // Verify full heap order by popping all (bounded so a broken merge/heap fails)
     for (let guard = 0; !small.isEmpty(); guard++) {
-      assert.ok(guard < 51, "pop() did not drain the queue (merge/heap is broken)");
+      assert.ok(
+        guard < 51,
+        "pop() did not drain the queue (merge/heap is broken)",
+      );
       const item = small.pop();
       const n = item.startsWith("s") ? 100 : parseInt(item.slice(1), 10);
       assert.ok(n >= prev, `out of order: ${n} < ${prev}`);

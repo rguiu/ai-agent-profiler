@@ -6,11 +6,11 @@ Tracking document for optimization improvements explored on the `feat/deepseek-c
 
 All benchmarks: iterative-fix-plus fixture, Claude Code, Opus 4.6 via Bedrock (eu-west-1).
 
-| Condition | Reqs | Input tokens | Cached | Hit% | Cost | vs baseline |
-|-----------|------|-------------|--------|------|------|-------------|
-| baseline (no optimize) | 70 | 3,917,198 | 3,916,482 | 100.0% | $6.13 | — |
-| opt-full (all + breakpoints) | 85 | 817,455 | 816,725 | 99.9% | $1.57 | -74% |
-| opt-nobreak (all, no breakpoints) | 47 | 212,877 | 212,184 | 99.7% | $0.47 | -92% |
+| Condition                         | Reqs | Input tokens | Cached    | Hit%   | Cost  | vs baseline |
+| --------------------------------- | ---- | ------------ | --------- | ------ | ----- | ----------- |
+| baseline (no optimize)            | 70   | 3,917,198    | 3,916,482 | 100.0% | $6.13 | —           |
+| opt-full (all + breakpoints)      | 85   | 817,455      | 816,725   | 99.9%  | $1.57 | -74%        |
+| opt-nobreak (all, no breakpoints) | 47   | 212,877      | 212,184   | 99.7%  | $0.47 | -92%        |
 
 Key finding: Claude Code already manages cache markers perfectly. The token-reduction strategies (pruneStale -1.55M, collapseSystem -577K, pruneUnusedTools -651K) are what drive cost savings.
 
@@ -22,19 +22,19 @@ After fixing the simulator's chunked-body bug (was only reading first 64KB chunk
 
 ### 85-request session (baseline fixture, Haiku 4.5)
 
-| Variant | Tokens saved | Cache hit% | Cache cost delta |
-|---------|-------------|-----------|------------------|
-| Token reduction only | 2,783,284 | 67.1% | -$19.37 |
-| + breakpoints (A) | 1,228,714 | 87.3% | -$18.16 |
-| + breakpoints + volatile reorder (A+D) | 1,228,714 | 74.8% | -$12.91 |
+| Variant                                | Tokens saved | Cache hit% | Cache cost delta |
+| -------------------------------------- | ------------ | ---------- | ---------------- |
+| Token reduction only                   | 2,783,284    | 67.1%      | -$19.37          |
+| + breakpoints (A)                      | 1,228,714    | 87.3%      | -$18.16          |
+| + breakpoints + volatile reorder (A+D) | 1,228,714    | 74.8%      | -$12.91          |
 
 ### 102-request session (baseline fixture, Haiku 4.5)
 
-| Variant | Tokens saved | Cache hit% | Cache cost delta |
-|---------|-------------|-----------|------------------|
-| Token reduction only | 3,574,863 | 70.6% | -$24.04 |
-| + breakpoints (A) | 1,494,518 | 88.8% | -$22.14 |
-| + breakpoints + volatile reorder (A+D) | 1,494,518 | 77.4% | -$15.84 |
+| Variant                                | Tokens saved | Cache hit% | Cache cost delta |
+| -------------------------------------- | ------------ | ---------- | ---------------- |
+| Token reduction only                   | 3,574,863    | 70.6%      | -$24.04          |
+| + breakpoints (A)                      | 1,494,518    | 88.8%      | -$22.14          |
+| + breakpoints + volatile reorder (A+D) | 1,494,518    | 77.4%      | -$15.84          |
 
 ### Key takeaways
 
@@ -95,7 +95,7 @@ After fixing the simulator's chunked-body bug (was only reading first 64KB chunk
 
 **Why it fails:** The hypothesis assumed that removing volatile content from earlier messages would make those messages more stable between turns. But the content removal ITSELF is the change — the previous turn's cached version had that content in place. On the next turn, the content is gone from that position, breaking the prefix match.
 
-**Correct approach (future):** Instead of moving content, *duplicate* it at the end (so the original stays in place for cache stability) and mark the duplicate with `cache_control` for fresh-data emphasis. Or accept that system-reminders are already cached effectively by Claude Code's 4-marker placement.
+**Correct approach (future):** Instead of moving content, _duplicate_ it at the end (so the original stays in place for cache stability) and mark the duplicate with `cache_control` for fresh-data emphasis. Or accept that system-reminders are already cached effectively by Claude Code's 4-marker placement.
 
 ---
 
@@ -108,6 +108,7 @@ After fixing the simulator's chunked-body bug (was only reading first 64KB chunk
 **Approach:** Extended the simulator's cache-cost model to compute per-variant cache cost deltas. The `cacheRate` field on `OptimizeAction` tracks whether a pruned block was inside the cached prefix.
 
 **Simulation finding:** The cache-cost model clearly shows the trade-offs:
+
 - Token reduction only: highest savings ($19-24 delta) but lowest cache hit (67-70%)
 - With cache protection: slightly less savings ($14-22 delta) but much higher cache hit (85-88%)
 - The net cost difference is modest ($1-2) because cached tokens are so cheap to re-read

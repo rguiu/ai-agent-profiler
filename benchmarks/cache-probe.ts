@@ -31,9 +31,15 @@ async function call(messages: Msg[], label: string): Promise<Usage> {
       "content-type": "application/json",
       authorization: `Bearer ${KEY}`,
     },
-    body: JSON.stringify({ model: MODEL, messages, max_tokens: 1, temperature: 0 }),
+    body: JSON.stringify({
+      model: MODEL,
+      messages,
+      max_tokens: 1,
+      temperature: 0,
+    }),
   });
-  if (!res.ok) throw new Error(`${label}: HTTP ${res.status} ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(`${label}: HTTP ${res.status} ${await res.text()}`);
   const json = (await res.json()) as { usage: Usage };
   const u = json.usage;
   console.log(
@@ -44,7 +50,10 @@ async function call(messages: Msg[], label: string): Promise<Usage> {
 
 // Distinct, sizeable blocks so cache units (64 tokens) are clearly exceeded.
 const block = (tag: string, n: number): string =>
-  Array.from({ length: n }, (_, i) => `${tag} line ${i} lorem ipsum dolor sit amet consectetur`).join("\n");
+  Array.from(
+    { length: n },
+    (_, i) => `${tag} line ${i} lorem ipsum dolor sit amet consectetur`,
+  ).join("\n");
 
 const SYS = block("SYSTEM", 120);
 const A = block("ALPHA", 120);
@@ -72,7 +81,10 @@ async function main(): Promise<void> {
   await pause(1500);
 
   // 2. Append a NEW block at the tail. Prefix unchanged → head should hit.
-  const appended: Msg[] = [...base, { role: "user", content: block("ECHO", 120) }];
+  const appended: Msg[] = [
+    ...base,
+    { role: "user", content: block("ECHO", 120) },
+  ];
   await call(appended, "2. append tail (expect prefix hit)");
   await pause(1500);
 
@@ -98,7 +110,9 @@ async function main(): Promise<void> {
   console.log("Interpretation:");
   console.log("  - #2 hit ~= base size → prefix caching works.");
   console.log("  - #3/#5 hit small → STRICT PREFIX (H2): position matters.");
-  console.log("  - #3/#5 hit large → POSITION-INDEPENDENT (H1): blocks cache anywhere.");
+  console.log(
+    "  - #3/#5 hit large → POSITION-INDEPENDENT (H1): blocks cache anywhere.",
+  );
   console.log("  - #4 hit ~= SYS+A+B → confirms prefix-up-to-removal (H2).");
 }
 

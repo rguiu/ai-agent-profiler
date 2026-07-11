@@ -45,7 +45,9 @@ describe("cache-aware pruning (Idea B)", () => {
 
     // Message at index 0 has cache_control — pruning now proceeds but
     // the action is tagged cacheRate=true (was inside cached prefix)
-    const pruneActions = layer.getActions().filter((a) => a.type === "prune_stale");
+    const pruneActions = layer
+      .getActions()
+      .filter((a) => a.type === "prune_stale");
     expect(pruneActions.length).toBeGreaterThan(0);
     const inCache = pruneActions.filter((a) => a.cacheRate === true);
     expect(inCache.length).toBeGreaterThan(0);
@@ -160,7 +162,9 @@ describe("cache-aware pruning (Idea B)", () => {
     layer.rewriteRequestBody(makeRequest(messages));
     layer.rewriteRequestBody(makeRequest(messages));
 
-    const pruneActions = layer.getActions().filter((a) => a.type === "prune_stale");
+    const pruneActions = layer
+      .getActions()
+      .filter((a) => a.type === "prune_stale");
     expect(pruneActions.length).toBeGreaterThan(0);
     // No breakpoint marker in messages, so cacheRate should be false
     for (const a of pruneActions) {
@@ -181,7 +185,10 @@ describe("volatile content reordering (Idea D)", () => {
       {
         role: "user",
         content: [
-          { type: "text", text: "<system-reminder>\nAvailable skills: foo\n</system-reminder>" },
+          {
+            type: "text",
+            text: "<system-reminder>\nAvailable skills: foo\n</system-reminder>",
+          },
           { type: "text", text: "Hello Claude" },
         ],
       },
@@ -260,7 +267,8 @@ describe("volatile content reordering (Idea D)", () => {
       insertBreakpoints: false,
     });
 
-    const reminder = "<system-reminder>\n" + "x".repeat(200) + "\n</system-reminder>";
+    const reminder =
+      "<system-reminder>\n" + "x".repeat(200) + "\n</system-reminder>";
     const messages = [
       {
         role: "user",
@@ -274,7 +282,9 @@ describe("volatile content reordering (Idea D)", () => {
     ];
 
     layer.rewriteRequestBody(makeRequest(messages));
-    const actions = layer.getActions().filter((a) => a.type === "reorder_volatile");
+    const actions = layer
+      .getActions()
+      .filter((a) => a.type === "reorder_volatile");
     expect(actions).toHaveLength(1);
     expect(actions[0]!.detail).toContain("1 <system-reminder> block(s)");
     expect(actions[0]!.tokensSaved).toBe(0);
@@ -343,10 +353,21 @@ describe("volatile content reordering (Idea D)", () => {
 
 describe("tool-def token tracking (Idea C)", () => {
   it("accumulates tool-def tokens across turns", () => {
-    const layer = new OptimizeLayer({ pruneStale: false, reorderVolatile: false });
+    const layer = new OptimizeLayer({
+      pruneStale: false,
+      reorderVolatile: false,
+    });
     const tools = [
-      { name: "Read", description: "Reads a file", input_schema: { type: "object" } },
-      { name: "Write", description: "Writes a file", input_schema: { type: "object" } },
+      {
+        name: "Read",
+        description: "Reads a file",
+        input_schema: { type: "object" },
+      },
+      {
+        name: "Write",
+        description: "Writes a file",
+        input_schema: { type: "object" },
+      },
     ];
 
     layer.rewriteRequestBody(makeRequest([], tools));

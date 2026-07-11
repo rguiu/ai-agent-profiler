@@ -341,7 +341,9 @@ export class OptimizeLayer {
 
     // Idea D: move volatile <system-reminder> blocks to last user message
     if (this.config.reorderVolatile && Array.isArray(parsed.messages)) {
-      const reordered = this.reorderVolatileContent(parsed.messages as Message[]);
+      const reordered = this.reorderVolatileContent(
+        parsed.messages as Message[],
+      );
       if (reordered) {
         parsed.messages = reordered;
         changed = true;
@@ -402,7 +404,9 @@ export class OptimizeLayer {
     }
 
     if (this.config.frozenCompact && Array.isArray(parsed.messages)) {
-      const compacted = this.frozenCompactMessages(parsed.messages as Message[]);
+      const compacted = this.frozenCompactMessages(
+        parsed.messages as Message[],
+      );
       if (compacted) {
         parsed.messages = compacted;
         changed = true;
@@ -659,7 +663,10 @@ export class OptimizeLayer {
             tool: toolName,
             tokensSaved: tokens - estimateTokens(summary),
             detail: `pruned ${toolName} result from turn ${msgTurn} (~${tokens} → ~${estimateTokens(summary)} tokens)`,
-            cacheRate: this.config.insertBreakpoints && lastBreakpointIdx >= 0 && msgIdx <= lastBreakpointIdx,
+            cacheRate:
+              this.config.insertBreakpoints &&
+              lastBreakpointIdx >= 0 &&
+              msgIdx <= lastBreakpointIdx,
           });
           return { ...block, content: summary };
         });
@@ -679,7 +686,10 @@ export class OptimizeLayer {
             tool: toolName,
             tokensSaved: tokens - estimateTokens(summary),
             detail: `pruned ${toolName} result from turn ${msgTurn} (~${tokens} → ~${estimateTokens(summary)} tokens)`,
-            cacheRate: this.config.insertBreakpoints && lastBreakpointIdx >= 0 && msgIdx <= lastBreakpointIdx,
+            cacheRate:
+              this.config.insertBreakpoints &&
+              lastBreakpointIdx >= 0 &&
+              msgIdx <= lastBreakpointIdx,
           });
           return { ...msg, content: summary };
         }
@@ -723,7 +733,10 @@ export class OptimizeLayer {
 
     // First message is typically the system prompt / initial task — never fold
     // index 0; keep the most recent tail intact.
-    const tailStart = Math.max(0, messages.length - this.config.compactKeepTail);
+    const tailStart = Math.max(
+      0,
+      messages.length - this.config.compactKeepTail,
+    );
 
     // Tokens we would NEWLY fold beyond the current boundary. Requiring this to
     // be substantial gives hysteresis: after a compaction the boundary can't
@@ -734,7 +747,10 @@ export class OptimizeLayer {
     for (let i = Math.max(1, this.compactBoundary); i < tailStart; i++) {
       newlyFoldable += msgTokens[i] ?? 0;
     }
-    const foldFloor = Math.max(2000, Math.floor(this.config.compactThreshold / 2));
+    const foldFloor = Math.max(
+      2000,
+      Math.floor(this.config.compactThreshold / 2),
+    );
 
     const needNewBoundary =
       emittedTokens > this.config.compactThreshold &&
@@ -895,7 +911,10 @@ export class OptimizeLayer {
     // hash mismatch in that stable region is a real mid-history edit.
     let editedMsgTokens = 0;
     let editedMsgs = 0;
-    const stableCount = Math.min(prev.msgHashes.length, snapshot.msgHashes.length);
+    const stableCount = Math.min(
+      prev.msgHashes.length,
+      snapshot.msgHashes.length,
+    );
     for (let i = 0; i < stableCount; i++) {
       if (prev.msgHashes[i] !== snapshot.msgHashes[i]) {
         editedMsgs++;
@@ -985,7 +1004,10 @@ export class OptimizeLayer {
             budget--;
           }
         }
-      } else if (typeof parsed.system === "string" && parsed.system.length > 0) {
+      } else if (
+        typeof parsed.system === "string" &&
+        parsed.system.length > 0
+      ) {
         parsed.system = [
           {
             type: "text",
@@ -1026,7 +1048,9 @@ export class OptimizeLayer {
       if (secondLastUserIdx >= 0) {
         const msg = messages[secondLastUserIdx]!;
         if (Array.isArray(msg.content) && msg.content.length > 0) {
-          const lastBlock = msg.content[msg.content.length - 1]! as ContentBlock;
+          const lastBlock = msg.content[
+            msg.content.length - 1
+          ]! as ContentBlock;
           if (!lastBlock.cache_control) {
             lastBlock.cache_control = { type: "ephemeral" };
             placed++;
@@ -1094,7 +1118,8 @@ export class OptimizeLayer {
         }
       }
       if (!msgChanged) return msg;
-      if (kept.length === 0) return { ...msg, content: [{ type: "text", text: "" }] };
+      if (kept.length === 0)
+        return { ...msg, content: [{ type: "text", text: "" }] };
       return { ...msg, content: kept };
     });
 
@@ -1110,7 +1135,10 @@ export class OptimizeLayer {
     const lastHasToolResult = lastContent.some((b) => b.type === "tool_result");
     if (lastHasToolResult) return null;
 
-    result[lastUserIdx] = { ...lastMsg, content: [...movedBlocks, ...lastContent] };
+    result[lastUserIdx] = {
+      ...lastMsg,
+      content: [...movedBlocks, ...lastContent],
+    };
 
     this.actions.push({
       type: "reorder_volatile",

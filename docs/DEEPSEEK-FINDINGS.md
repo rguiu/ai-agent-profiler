@@ -17,6 +17,7 @@ paused to focus on Claude; see §9 to resume.
 > which is why the benchmark's test-pass reporting had to be fixed first (§8).
 
 Companion docs:
+
 - `docs/DEEPSEEK-CACHING.md` — the mechanism, measured evidence, and cheat sheet.
 - `benchmarks/cache-probe.ts` — reproducible ground-truth API probe.
 - `benchmarks/cache-fixture-demo.ts` — offline cost model over a fixture.
@@ -36,14 +37,14 @@ prompt forfeits that discount for everything downstream. Our layer edited the fr
 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`. Result (deepseek-chat, base
 prompt 8046 tokens):
 
-| Test | hit | miss | reading |
-|---|---:|---:|---|
-| base, cold | 0 | 8046 | first send is all miss |
-| base, repeated | 7936 | 110 | ~99% hit — prefix cache works |
-| append at tail | 7936 | 1670 | full prefix hits; only new tail misses |
-| edit early message | 0 | 8166 | early edit → **entire** request misses |
-| remove middle block | 1536 | 4828 | hits only up to the removal, rest misses |
-| reorder two blocks (same bytes) | 1536 | 6510 | identical content, new order → **miss** |
+| Test                            |  hit | miss | reading                                  |
+| ------------------------------- | ---: | ---: | ---------------------------------------- |
+| base, cold                      |    0 | 8046 | first send is all miss                   |
+| base, repeated                  | 7936 |  110 | ~99% hit — prefix cache works            |
+| append at tail                  | 7936 | 1670 | full prefix hits; only new tail misses   |
+| edit early message              |    0 | 8166 | early edit → **entire** request misses   |
+| remove middle block             | 1536 | 4828 | hits only up to the removal, rest misses |
+| reorder two blocks (same bytes) | 1536 | 6510 | identical content, new order → **miss**  |
 
 **Verdict: strict token-prefix from position 0.** Position is everything; reordering
 identical content does not hit; removing/moving a block breaks the cache from that point.
@@ -59,6 +60,7 @@ is otherwise a net loss.
 ## 3. Where the money actually goes (cost decomposition)
 
 Across 29 captured DeepSeek sessions:
+
 - **Cached input is ~96% of tokens but only ~3–17% of cost.** The prefix cache is cheap
   and already working; squeezing it harder has little upside.
 - **Cost splits by session length:** short sessions are **output-dominated** (50–85%);
@@ -81,12 +83,12 @@ the full legacy layer. All strategies live in `src/optimize/layer.ts`.
 
 **Enabled for DeepSeek** (cache-safe, position-independent, idempotent):
 
-| Strategy | What it does | Cache property |
-|---|---|---|
-| `stableTruncate` | Head+tail truncate large tool results, identical bytes every request | No prefix move |
-| `shapeTestOutput` | Drop passing-test spam / ANSI / dup lines from test output deterministically | No prefix move |
-| `frozenCompact` | Once emitted context > `compactThreshold`, fold old messages into ONE frozen summary; keep a recent tail; hysteresis floor prevents re-firing | One reset per compaction, amortised |
-| `prefixProbe` | Diagnostic: structural per-section comparison flags genuine prefix edits (not appends/reorders) | Read-only |
+| Strategy          | What it does                                                                                                                                  | Cache property                      |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `stableTruncate`  | Head+tail truncate large tool results, identical bytes every request                                                                          | No prefix move                      |
+| `shapeTestOutput` | Drop passing-test spam / ANSI / dup lines from test output deterministically                                                                  | No prefix move                      |
+| `frozenCompact`   | Once emitted context > `compactThreshold`, fold old messages into ONE frozen summary; keep a recent tail; hysteresis floor prevents re-firing | One reset per compaction, amortised |
+| `prefixProbe`     | Diagnostic: structural per-section comparison flags genuine prefix edits (not appends/reorders)                                               | Read-only                           |
 
 Plus a **post-hoc reconciliation** (`src/recommend/recommend.ts`,
 `prefix_cache_reset`): uses real `prompt_cache_miss_tokens`, flagging only miss that
@@ -105,46 +107,50 @@ all scored with the **fixed** verify harness (§8), via `benchmarks/iterative-fi
 A third earlier full-opt run (`45/54 ❌`, listed below) is retained only as the "failed"
 data point.
 
-| run | fixture | edge | requests | input tok | cache hit | cost | strategies |
-|---|---|---|---|---|---|---|---|
-| baseline (no-opt) | **54/54 ✅** | 54/57 | 41 | 985,422 | 100% | $0.0102 | none |
-| optimize (full opt) | **54/54 ✅** | 54/57 | 23 | 769,950 | 96% | $0.0363 | frozen_compact ×1 (~49K), truncate ×10 (~17K), shape ×13 (~3K) |
-| earlier full-opt run | **45/54 ❌** | 15/57 | 21 | 330,536 | 88% | $0.0331 | frozen_compact ×1 (~39K), truncate ×12 (~37K), shape ×3 |
+| run                  | fixture      | edge  | requests | input tok | cache hit | cost    | strategies                                                     |
+| -------------------- | ------------ | ----- | -------- | --------- | --------- | ------- | -------------------------------------------------------------- |
+| baseline (no-opt)    | **54/54 ✅** | 54/57 | 41       | 985,422   | 100%      | $0.0102 | none                                                           |
+| optimize (full opt)  | **54/54 ✅** | 54/57 | 23       | 769,950   | 96%       | $0.0363 | frozen_compact ×1 (~49K), truncate ×10 (~17K), shape ×13 (~3K) |
+| earlier full-opt run | **45/54 ❌** | 15/57 | 21       | 330,536   | 88%       | $0.0331 | frozen_compact ×1 (~39K), truncate ×12 (~37K), shape ×3        |
 
 ### Correctness
+
 The two full-opt runs disagree (54/54 ✅ vs 45/54 ❌) despite near-identical strategy
 engagement. So the failure is **within opencode's run-to-run non-determinism**, not
 evidence the optimizer breaks correctness. The passing optimize run matched baseline
 **exactly** (54/54 fixture, 54/57 edge). ✅ The optimizer does not inherently break the task.
 
 ### Cost — optimize cost ~3.5× more, but the comparison is confounded
+
 Decomposition (cached $0.0036/M, uncached $0.435/M, output $0.87/M):
 
-| component | baseline | optimize |
-|---|---|---|
-| cached input | $0.00354 | $0.00263 |
+| component      | baseline             | optimize              |
+| -------------- | -------------------- | --------------------- |
+| cached input   | $0.00354             | $0.00263              |
 | uncached input | $0.00054 (1,230 tok) | $0.01666 (38,302 tok) |
-| output | $0.00616 (7,081 tok) | $0.01696 (19,492 tok) |
-| **total** | **$0.01024** | **$0.03625** |
+| output         | $0.00616 (7,081 tok) | $0.01696 (19,492 tok) |
+| **total**      | **$0.01024**         | **$0.03625**          |
 
 **This is NOT a cache reset caused by the optimizer.** Per-request analysis (miss tokens
 minus new-content growth) shows **no reset on any turn in either run** (baseline max
 excess-miss −99, optimize +72; a reset would be thousands). Both caches were healthy.
 The 3.5× gap has two confounds:
+
 1. **Output tripled** (7K → 19.5K tok, +$0.011) — the agent generated more this run; pure
    opencode path noise, unrelated to the optimizer.
 2. **Uncached input rose** (1.2K → 38.3K tok, +$0.016) **as legitimate first-sight misses,
    not resets.** Likely cause: **cross-run cache warming** — the baseline re-sends verbatim
    fixture bytes already warm in DeepSeek's disk cache from prior baseline runs (so ~0 miss),
-   while the optimize run sends *transformed* bytes (truncated/shaped/compacted) that are
+   while the optimize run sends _transformed_ bytes (truncated/shaped/compacted) that are
    novel → cold-miss on first sight. This structurally favors the verbatim baseline in a
    one-shot A/B and would shrink if the optimize arm were warmed/repeated.
 
 ### What we can and cannot say
+
 - ✅ Optimizer does not inherently break correctness (one run matched baseline exactly).
 - ✅ Its own per-turn cache behavior is healthy (96% hit, no resets).
 - ⚠️ **"~69K tokens saved" is prompt shrinkage, not money saved** — those were mostly cheap
-  cached tokens; the transformed prompt incurred *more* expensive uncached input this run.
+  cached tokens; the transformed prompt incurred _more_ expensive uncached input this run.
 - ❌ **This single A/B shows neither a cost win nor a clean loss** — output path-noise and
   cross-run cache warming dominate the raw $ delta. And one of two full-opt runs failed the
   task. **Batches (N≥5/arm, with the cache warmed equally for both arms) are required**
@@ -217,7 +223,7 @@ had been silently scoring every run as `fail` with no test data. All in `benchma
 2. **If the optimized arm shows a higher failure rate than baseline: isolate the culprit.**
    Re-run with `frozenCompact` off (leaving only byte-stable transforms) to test whether
    mid-session compaction is removing context the agent needs. `frozenCompact` is the
-   prime suspect (it's the only strategy that *removes* history).
+   prime suspect (it's the only strategy that _removes_ history).
 3. **`compactThreshold` / `compactKeepTail` tuning** — if compaction hurts, a larger
    threshold and bigger kept-tail may retain enough context while still saving on very long
    sessions.

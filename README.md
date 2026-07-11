@@ -255,27 +255,27 @@ provider (Anthropic/Bedrock vs OpenAI-compatible) and applies the appropriate pr
 
 #### High-impact (proven cost savers on Claude/Bedrock)
 
-| Strategy             | Savings | Provider | What it does |
-| -------------------- | ------- | -------- | ------------ |
-| `pruneStale`         | ~57%    | Claude/Bedrock only | Replaces old tool results with 1-line summaries. **Single biggest saver.** Harmful on DeepSeek (breaks prefix cache). |
-| `collapseSystem`     | ~20%    | Claude/Bedrock only | Replaces repeated system prompt with a hash stub after the first request. |
-| `pruneUnusedTools`   | ~23%    | Claude/Bedrock only | Drops tool definitions the model never called (after 10 turns). |
-| `insertBreakpoints`  | —       | Claude/Bedrock only | Restores `cache_control` markers at optimal positions after other strategies edit the request. No token savings, but achieves near-zero cache misses. |
+| Strategy            | Savings | Provider            | What it does                                                                                                                                          |
+| ------------------- | ------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pruneStale`        | ~57%    | Claude/Bedrock only | Replaces old tool results with 1-line summaries. **Single biggest saver.** Harmful on DeepSeek (breaks prefix cache).                                 |
+| `collapseSystem`    | ~20%    | Claude/Bedrock only | Replaces repeated system prompt with a hash stub after the first request.                                                                             |
+| `pruneUnusedTools`  | ~23%    | Claude/Bedrock only | Drops tool definitions the model never called (after 10 turns).                                                                                       |
+| `insertBreakpoints` | —       | Claude/Bedrock only | Restores `cache_control` markers at optimal positions after other strategies edit the request. No token savings, but achieves near-zero cache misses. |
 
 #### Low-impact (safe everywhere, modest savings)
 
-| Strategy             | Savings | Provider | What it does |
-| -------------------- | ------- | -------- | ------------ |
-| `dedup`              | small   | All      | Returns a stub when the model re-reads an unchanged file. |
-| `truncate`           | varies  | All      | Keeps first 25 + last 30 lines of oversized results. Useful for large files. |
-| `suppressReread`     | small   | All      | Suppresses reading a file immediately after writing it (content already known). |
+| Strategy         | Savings | Provider | What it does                                                                    |
+| ---------------- | ------- | -------- | ------------------------------------------------------------------------------- |
+| `dedup`          | small   | All      | Returns a stub when the model re-reads an unchanged file.                       |
+| `truncate`       | varies  | All      | Keeps first 25 + last 30 lines of oversized results. Useful for large files.    |
+| `suppressReread` | small   | All      | Suppresses reading a file immediately after writing it (content already known). |
 
 #### Cache-preservation (no token savings, prevent cache misses)
 
-| Strategy             | Savings | Provider | What it does |
-| -------------------- | ------- | -------- | ------------ |
-| `stablePrefix`       | 0       | All      | Sorts tool-definition JSON keys so byte order is consistent across requests. |
-| `reorderVolatile`    | 0       | Claude/Bedrock only | Moves volatile `<system-reminder>` blocks past the cache boundary. Rarely fires in practice (most messages have tool_results). Experimental. |
+| Strategy          | Savings | Provider            | What it does                                                                                                                                 |
+| ----------------- | ------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stablePrefix`    | 0       | All                 | Sorts tool-definition JSON keys so byte order is consistent across requests.                                                                 |
+| `reorderVolatile` | 0       | Claude/Bedrock only | Moves volatile `<system-reminder>` blocks past the cache boundary. Rarely fires in practice (most messages have tool_results). Experimental. |
 
 #### Disabled on DeepSeek (automatic)
 

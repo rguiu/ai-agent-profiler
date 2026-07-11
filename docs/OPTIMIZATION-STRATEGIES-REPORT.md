@@ -123,21 +123,22 @@ A typical Claude Code request has this structure:
 
 ### Key Observations
 
-| Part | Size (typical) | Changes between requests? |
-|------|---------------|--------------------------|
-| System prompt | ~5,000 tokens | Never (same every turn) |
-| Tool definitions | ~7,000 tokens | Never (same every turn) |
-| Early messages | Varies | Never (history is append-only) |
-| Recent messages | Varies | Only the last one changes |
-| Tool results | 100-10,000+ tokens each | Added each turn, never modified |
+| Part             | Size (typical)          | Changes between requests?       |
+| ---------------- | ----------------------- | ------------------------------- |
+| System prompt    | ~5,000 tokens           | Never (same every turn)         |
+| Tool definitions | ~7,000 tokens           | Never (same every turn)         |
+| Early messages   | Varies                  | Never (history is append-only)  |
+| Recent messages  | Varies                  | Only the last one changes       |
+| Tool results     | 100-10,000+ tokens each | Added each turn, never modified |
 
 **The key insight:** Most of what's sent on each request is identical to the previous request. Only the newest message at the end is new. This is what makes caching so effective.
 
 ### Why Does the Conversation Grow?
 
 In a typical 94-request coding session:
+
 - System prompt: ~5K tokens × 94 requests = **470K tokens re-sent**
-- Tool definitions: ~7K tokens × 94 requests = **658K tokens re-sent**  
+- Tool definitions: ~7K tokens × 94 requests = **658K tokens re-sent**
 - Message history: grows from 0 to ~40K tokens over the session
 - Cumulative input: **3.9 million tokens** (without optimization)
 
@@ -155,11 +156,12 @@ Anthropic uses an **explicit** caching model. The client tells the API where to 
 {
   "type": "text",
   "text": "You are Claude Code...",
-  "cache_control": {"type": "ephemeral"}
+  "cache_control": { "type": "ephemeral" }
 }
 ```
 
 **Rules:**
+
 - Maximum **4 markers** per request
 - Content before a marker is cached for **5 minutes** after last use
 - Minimum cacheable block: **1,024 tokens** (2,048 on some models)
@@ -167,12 +169,12 @@ Anthropic uses an **explicit** caching model. The client tells the API where to 
 
 ### Pricing (Bedrock, Opus 4.6)
 
-| Token type | Cost per million tokens | Relative |
-|-----------|------------------------|----------|
-| Cache write (5-minute) | $6.25 | 1.25× input |
-| Cache read (subsequent) | $0.50 | 0.10× input |
-| Input (uncached) | $5.00 | 1.0× |
-| Output | $25.00 | 5.0× input |
+| Token type              | Cost per million tokens | Relative    |
+| ----------------------- | ----------------------- | ----------- |
+| Cache write (5-minute)  | $6.25                   | 1.25× input |
+| Cache read (subsequent) | $0.50                   | 0.10× input |
+| Input (uncached)        | $5.00                   | 1.0×        |
+| Output                  | $25.00                  | 5.0× input  |
 
 > _Pricing verified against anthropic.com/pricing on 12 Jul 2026, model Opus 4.x. Rates change — re-verify before quoting._
 
@@ -254,6 +256,7 @@ Optimized request → sent to Bedrock API
 ```
 
 Additionally, tool results are intercepted on the response path for:
+
 - **dedup:** Suppress identical repeat reads
 - **truncate:** Trim oversized results (head+tail)
 - **suppressReread:** Skip reading files just written
@@ -264,17 +267,17 @@ Additionally, tool results are intercepted on the response path for:
 
 ### Quick Reference
 
-| Strategy | Provider | Impact | Status |
-|----------|----------|--------|--------|
-| `pruneStale` | Claude/Bedrock only | **57% of total savings** | Proven |
-| `pruneUnusedTools` | Claude/Bedrock only | **23% of total savings** | Proven |
-| `collapseSystem` | Claude/Bedrock only | **20% of total savings** | Proven |
-| `insertBreakpoints` | Claude/Bedrock only | Near-zero cache misses | Proven |
-| `dedup` | All providers | Small | Proven, low frequency |
-| `truncate` | All providers | Varies by file sizes | Proven, low frequency |
-| `suppressReread` | All providers | Small | Proven, low frequency |
-| `stablePrefix` | All providers | Cache-preservation only | Proven |
-| `reorderVolatile` | Claude/Bedrock only | Cache-preservation only | Experimental — rarely fires |
+| Strategy            | Provider            | Impact                   | Status                      |
+| ------------------- | ------------------- | ------------------------ | --------------------------- |
+| `pruneStale`        | Claude/Bedrock only | **57% of total savings** | Proven                      |
+| `pruneUnusedTools`  | Claude/Bedrock only | **23% of total savings** | Proven                      |
+| `collapseSystem`    | Claude/Bedrock only | **20% of total savings** | Proven                      |
+| `insertBreakpoints` | Claude/Bedrock only | Near-zero cache misses   | Proven                      |
+| `dedup`             | All providers       | Small                    | Proven, low frequency       |
+| `truncate`          | All providers       | Varies by file sizes     | Proven, low frequency       |
+| `suppressReread`    | All providers       | Small                    | Proven, low frequency       |
+| `stablePrefix`      | All providers       | Cache-preservation only  | Proven                      |
+| `reorderVolatile`   | Claude/Bedrock only | Cache-preservation only  | Experimental — rarely fires |
 
 **Disabled on DeepSeek:** `pruneStale`, `collapseSystem`, `pruneUnusedTools`, `insertBreakpoints` — all edit the cached prefix and **cause cost increases** on prefix-cache providers.
 
@@ -330,7 +333,7 @@ After (when current turn is 10+):
   tool_result: "[Read: 1 file, ~2,400 tokens — summary: TypeScript module, imports fs, defines class...]"
 ```
 
-**Cache impact:** In a strict byte-prefix model this *looks* cache-destructive — editing a mid-conversation result would invalidate everything after it. In practice on Bedrock it is not. With `insertBreakpoints` re-anchoring the 4 `cache_control` markers after the edit, the live runs held a ~100% hit rate (92 uncached tokens across 94 requests). The saving comes from carrying ~1.8M **fewer** tokens per session at an unchanged hit rate — not from accepting cache misses. See §6 for the mechanism and the simulation-vs-reality note.
+**Cache impact:** In a strict byte-prefix model this _looks_ cache-destructive — editing a mid-conversation result would invalidate everything after it. In practice on Bedrock it is not. With `insertBreakpoints` re-anchoring the 4 `cache_control` markers after the edit, the live runs held a ~100% hit rate (92 uncached tokens across 94 requests). The saving comes from carrying ~1.8M **fewer** tokens per session at an unchanged hit rate — not from accepting cache misses. See §6 for the mechanism and the simulation-vs-reality note.
 
 **Risk:** The model loses access to the full content of old tool results. If it needs to reference specific details from 10+ turns ago, it will see only a summary. In benchmarks, this did not affect task completion.
 
@@ -403,7 +406,7 @@ After (when current turn is 10+):
 **What it does:** After other strategies modify the request (potentially destroying the client's `cache_control` markers), this strategy counts surviving markers and restores up to 4 total at optimal positions:
 
 1. End of system prompt
-2. End of tool definitions  
+2. End of tool definitions
 3. Context boundary (second-to-last user message)
 4. (Reserved for the client's own marker on the latest message)
 
@@ -471,13 +474,13 @@ This strategy moves `<system-reminder>` blocks from earlier user messages to the
 
 ### Detailed Metrics
 
-| Run | Strategies | Reqs | Input tokens | Uncached | Cache hit | Cost | vs baseline |
-|-----|-----------|------|-------------|----------|-----------|------|-------------|
-| **No optimization** | none | 70 | 3,917,198 | 716 | 100% | $2.04 | — |
-| **Cache-protective** | all except pruneStale | 118 | 4,978,066 | 762 | 100% | $2.67 | **+31% worse** |
-| **Full optimization (early)** | all strategies + breakpoints | 85 | 817,455 | 730 | 100% | $0.52 | **-74%** |
-| **Full optimization** | all strategies + breakpoints + reorder fix | 94 | 776,366 | 92 | 100% | $0.48 | **-77%** |
-| **Full, no breakpoints** | all strategies, no breakpoint insertion | 102 | 635,027 | 747 | 100% | $0.44 | **-78%** |
+| Run                           | Strategies                                 | Reqs | Input tokens | Uncached | Cache hit | Cost  | vs baseline    |
+| ----------------------------- | ------------------------------------------ | ---- | ------------ | -------- | --------- | ----- | -------------- |
+| **No optimization**           | none                                       | 70   | 3,917,198    | 716      | 100%      | $2.04 | —              |
+| **Cache-protective**          | all except pruneStale                      | 118  | 4,978,066    | 762      | 100%      | $2.67 | **+31% worse** |
+| **Full optimization (early)** | all strategies + breakpoints               | 85   | 817,455      | 730      | 100%      | $0.52 | **-74%**       |
+| **Full optimization**         | all strategies + breakpoints + reorder fix | 94   | 776,366      | 92       | 100%      | $0.48 | **-77%**       |
+| **Full, no breakpoints**      | all strategies, no breakpoint insertion    | 102  | 635,027      | 747      | 100%      | $0.44 | **-78%**       |
 
 ### Token Savings Breakdown (full optimization, 94 requests)
 
@@ -517,6 +520,7 @@ The **full optimization** run (with `insertBreakpoints`) achieved the lowest unc
 ### Task Completion
 
 All runs achieved identical task outcomes:
+
 - **Fixture tests:** 54/54 passed (all runs)
 - **Edge-case tests:** 54/57 passed (all runs, same 3 failures)
 
@@ -561,9 +565,9 @@ A naive analysis says: "Don't modify content inside the cached prefix — you'll
 - Not pruning ("cache-protective") → $2.67 per session (**worst result**)
 - Aggressively pruning everything → $0.48 per session (**best result**)
 
-**Why — and it is *not* because misses were outweighed by volume.** The winning run kept a **100% cache hit rate with only 92 uncached tokens** (see the metrics table). Pruning did not trade cache hits for smaller volume; it kept the hit rate *and* shrank the volume. The mechanism is simpler than a paradox:
+**Why — and it is _not_ because misses were outweighed by volume.** The winning run kept a **100% cache hit rate with only 92 uncached tokens** (see the metrics table). Pruning did not trade cache hits for smaller volume; it kept the hit rate _and_ shrank the volume. The mechanism is simpler than a paradox:
 
-1. `pruneStale` removes ~1.8M tokens of stale tool results from the *body* of each request.
+1. `pruneStale` removes ~1.8M tokens of stale tool results from the _body_ of each request.
 2. `insertBreakpoints` re-anchors Anthropic's 4 `cache_control` markers after the edit, so the surviving prefix still cache-hits.
 3. The net effect is **less cached content carried per request** — cached input drops from ~4.3M to ~776K tokens — at an essentially unchanged (~100%) hit rate.
 

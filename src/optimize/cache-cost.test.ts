@@ -49,7 +49,9 @@ describe("cache-cost", () => {
       const appended = base + "q".repeat(CACHE_BLOCK_TOKENS * 4);
       const tc = turnCache(base, appended);
       expect(tc.hitTokens).toBe(estimateTokens(base));
-      expect(tc.missTokens).toBe(estimateTokens(appended) - estimateTokens(base));
+      expect(tc.missTokens).toBe(
+        estimateTokens(appended) - estimateTokens(base),
+      );
     });
 
     it("an early edit forfeits nearly the entire prefix", () => {

@@ -10,7 +10,9 @@ function makeAnthropicBody(opts: {
     JSON.stringify({
       model: "claude-opus-4-8",
       max_tokens: 4096,
-      system: opts.system ?? [{ type: "text", text: "You are a helpful assistant." }],
+      system: opts.system ?? [
+        { type: "text", text: "You are a helpful assistant." },
+      ],
       tools: opts.tools ?? [
         { name: "Read", description: "Read a file", input_schema: {} },
         { name: "Write", description: "Write a file", input_schema: {} },
@@ -123,9 +125,7 @@ describe("insertCacheBreakpoints", () => {
     });
 
     const body = makeAnthropicBody({
-      messages: [
-        { role: "user", content: [{ type: "text", text: "hello" }] },
-      ],
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
     });
 
     const out = layer.rewriteRequestBody(body);
@@ -198,13 +198,24 @@ describe("insertCacheBreakpoints", () => {
         { type: "text", text: "system", cache_control: { type: "ephemeral" } },
       ],
       tools: [
-        { name: "Read", description: "Read", input_schema: {}, cache_control: { type: "ephemeral" } },
+        {
+          name: "Read",
+          description: "Read",
+          input_schema: {},
+          cache_control: { type: "ephemeral" },
+        },
         { name: "Write", description: "Write", input_schema: {} },
       ],
       messages: [
         {
           role: "user",
-          content: [{ type: "text", text: "first", cache_control: { type: "ephemeral" } }],
+          content: [
+            {
+              type: "text",
+              text: "first",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
         },
         { role: "assistant", content: [{ type: "text", text: "reply" }] },
         { role: "user", content: [{ type: "text", text: "second" }] },
@@ -248,13 +259,20 @@ describe("insertCacheBreakpoints", () => {
         { type: "text", text: "sys2", cache_control: { type: "ephemeral" } },
       ],
       tools: [
-        { name: "Read", description: "Read", input_schema: {}, cache_control: { type: "ephemeral" } },
+        {
+          name: "Read",
+          description: "Read",
+          input_schema: {},
+          cache_control: { type: "ephemeral" },
+        },
         { name: "Write", description: "Write", input_schema: {} },
       ],
       messages: [
         {
           role: "user",
-          content: [{ type: "text", text: "q1", cache_control: { type: "ephemeral" } }],
+          content: [
+            { type: "text", text: "q1", cache_control: { type: "ephemeral" } },
+          ],
         },
         { role: "assistant", content: [{ type: "text", text: "a1" }] },
         { role: "user", content: [{ type: "text", text: "q2" }] },

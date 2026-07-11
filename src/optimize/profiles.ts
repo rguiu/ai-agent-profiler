@@ -15,10 +15,7 @@
 // and docs/CLAUDE-CACHING.md (why Anthropic's explicit-breakpoint cache tolerates
 // the full layer).
 
-import {
-  CACHE_SAFE_OVERRIDES,
-  type OptimizeConfig,
-} from "./layer.js";
+import { CACHE_SAFE_OVERRIDES, type OptimizeConfig } from "./layer.js";
 
 // Operator-selected profile. Mirrors the config `[optimize].profile` enum.
 //   auto       — apply cache-safe overrides only to prefix-cache providers.

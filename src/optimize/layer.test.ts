@@ -748,7 +748,9 @@ describe("OptimizeLayer", () => {
 
   describe("prefixProbe (diagnostic)", () => {
     const body = (msgs: unknown[], tools?: unknown[]): Buffer =>
-      Buffer.from(JSON.stringify(tools ? { messages: msgs, tools } : { messages: msgs }));
+      Buffer.from(
+        JSON.stringify(tools ? { messages: msgs, tools } : { messages: msgs }),
+      );
     const filler = (n: number): string =>
       Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
 
@@ -841,10 +843,7 @@ describe("OptimizeLayer", () => {
 
     // Simulate an agent that re-sends the full growing history each turn,
     // returning the messages actually emitted upstream.
-    const runTurn = (
-      layer: OptimizeLayer,
-      history: unknown[],
-    ): unknown[] => {
+    const runTurn = (layer: OptimizeLayer, history: unknown[]): unknown[] => {
       const out = layer.rewriteRequestBody(buildBody(history));
       return (JSON.parse(out.toString()) as { messages: unknown[] }).messages;
     };
