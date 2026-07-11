@@ -141,7 +141,7 @@ In a typical 94-request coding session:
 - Message history: grows from 0 to ~40K tokens over the session
 - Cumulative input: **3.9 million tokens** (without optimization)
 
-Without caching, this would cost approximately $58 on Opus 4.6 ($15/MTok). With caching, it costs ~$6. With optimization, it costs ~$1.44.
+Without caching, this would cost approximately $19.6 on Opus 4.6 ($5/MTok base input). With caching, it costs ~$2. With optimization, it costs ~$0.48.
 
 ---
 
@@ -169,10 +169,12 @@ Anthropic uses an **explicit** caching model. The client tells the API where to 
 
 | Token type | Cost per million tokens | Relative |
 |-----------|------------------------|----------|
-| Cache write (first time) | $18.75 | 1.25× input |
-| Cache read (subsequent) | $1.50 | 0.10× input |
-| Input (uncached) | $15.00 | 1.0× |
-| Output | $75.00 | 5.0× input |
+| Cache write (5-minute) | $6.25 | 1.25× input |
+| Cache read (subsequent) | $0.50 | 0.10× input |
+| Input (uncached) | $5.00 | 1.0× |
+| Output | $25.00 | 5.0× input |
+
+> _Pricing verified against anthropic.com/pricing on 12 Jul 2026, model Opus 4.x. Rates change — re-verify before quoting._
 
 **A cached token is 10× cheaper than an uncached token.** This is why cache hits matter enormously.
 
@@ -328,7 +330,7 @@ After (when current turn is 10+):
   tool_result: "[Read: 1 file, ~2,400 tokens — summary: TypeScript module, imports fs, defines class...]"
 ```
 
-**Cache impact:** This is the most cache-destructive strategy. Replacing content in the middle of the conversation changes the byte sequence, invalidating the cache for everything after that point. However, the token savings are so massive (1.8M tokens) that the net cost is still dramatically lower even with reduced cache hits.
+**Cache impact:** In a strict byte-prefix model this *looks* cache-destructive — editing a mid-conversation result would invalidate everything after it. In practice on Bedrock it is not. With `insertBreakpoints` re-anchoring the 4 `cache_control` markers after the edit, the live runs held a ~100% hit rate (92 uncached tokens across 94 requests). The saving comes from carrying ~1.8M **fewer** tokens per session at an unchanged hit rate — not from accepting cache misses. See §6 for the mechanism and the simulation-vs-reality note.
 
 **Risk:** The model loses access to the full content of old tool results. If it needs to reference specific details from 10+ turns ago, it will see only a summary. In benchmarks, this did not affect task completion.
 
@@ -457,11 +459,11 @@ This strategy moves `<system-reminder>` blocks from earlier user messages to the
 │                         COST COMPARISON (all runs)                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  $8.02  ████████████████████████████████████████  cache-protective*         │
-│  $6.13  ██████████████████████████████▋           no optimization           │
-│  $1.57  ███████▉                                  full optimization (early) │
-│  $1.44  ███████▏                                  full optimization         │
-│  $1.33  ██████▋                                   full, no breakpoints      │
+│  $2.67  ████████████████████████████████████████  cache-protective*         │
+│  $2.04  ██████████████████████████████▋           no optimization           │
+│  $0.52  ███████▉                                  full optimization (early) │
+│  $0.48  ███████▏                                  full optimization         │
+│  $0.44  ██████▋                                   full, no breakpoints      │
 │                                                                             │
 │  * cache-protective = pruneStale disabled to "protect cache" — proved wrong │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -471,11 +473,11 @@ This strategy moves `<system-reminder>` blocks from earlier user messages to the
 
 | Run | Strategies | Reqs | Input tokens | Uncached | Cache hit | Cost | vs baseline |
 |-----|-----------|------|-------------|----------|-----------|------|-------------|
-| **No optimization** | none | 70 | 3,917,198 | 716 | 100% | $6.13 | — |
-| **Cache-protective** | all except pruneStale | 118 | 4,978,066 | 762 | 100% | $8.02 | **+31% worse** |
-| **Full optimization (early)** | all strategies + breakpoints | 85 | 817,455 | 730 | 100% | $1.57 | **-74%** |
-| **Full optimization** | all strategies + breakpoints + reorder fix | 94 | 776,366 | 92 | 100% | $1.44 | **-77%** |
-| **Full, no breakpoints** | all strategies, no breakpoint insertion | 102 | 635,027 | 747 | 100% | $1.33 | **-78%** |
+| **No optimization** | none | 70 | 3,917,198 | 716 | 100% | $2.04 | — |
+| **Cache-protective** | all except pruneStale | 118 | 4,978,066 | 762 | 100% | $2.67 | **+31% worse** |
+| **Full optimization (early)** | all strategies + breakpoints | 85 | 817,455 | 730 | 100% | $0.52 | **-74%** |
+| **Full optimization** | all strategies + breakpoints + reorder fix | 94 | 776,366 | 92 | 100% | $0.48 | **-77%** |
+| **Full, no breakpoints** | all strategies, no breakpoint insertion | 102 | 635,027 | 747 | 100% | $0.44 | **-78%** |
 
 ### Token Savings Breakdown (full optimization, 94 requests)
 
@@ -491,7 +493,7 @@ This strategy moves `<system-reminder>` blocks from earlier user messages to the
 │  stablePrefix      (0 tokens — cache preservation only)                  │
 │                                                                          │
 │  Total removed from requests: 3,167,920 tokens                           │
-│  Net session cost: $1.44 (down from $6.13)                               │
+│  Net session cost: $0.48 (down from $2.04)                               │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -552,16 +554,22 @@ The optimization layer achieves **74-78% cost reduction** on Claude Code session
 2. **pruneUnusedTools** — Remove tool definitions the model never uses (23%)
 3. **collapseSystem** — Hash the repeated system prompt (20%)
 
-### The Cache Paradox
+### The Volume Effect (not a "cache paradox")
 
-A naive analysis would suggest: "Don't modify content in the cached prefix — you'll break the cache and pay more." Our benchmark disproved this:
+A naive analysis says: "Don't modify content inside the cached prefix — you'll break the cache and pay more downstream." Our real benchmark shows that fear is misplaced on Anthropic-format traffic:
 
-- Protecting the cache (not pruning) → $8.02 per session (**worst result**)
-- Aggressively pruning everything → $1.44 per session (**best result**)
+- Not pruning ("cache-protective") → $2.67 per session (**worst result**)
+- Aggressively pruning everything → $0.48 per session (**best result**)
 
-**Why?** Because Anthropic's cache has a **minimum cacheable size** (1,024 tokens). When you remove 1.8 million tokens from the context, the total amount being re-read from cache drops enormously — from 4.3M to 776K. Even if some cache misses occur, paying full rate on 776K tokens costs far less than paying cache rate on 4.3M tokens.
+**Why — and it is *not* because misses were outweighed by volume.** The winning run kept a **100% cache hit rate with only 92 uncached tokens** (see the metrics table). Pruning did not trade cache hits for smaller volume; it kept the hit rate *and* shrank the volume. The mechanism is simpler than a paradox:
 
-The math: `776K × $15/MTok = $11.6` vs `4,300K × $1.5/MTok = $6.45`. But the optimized version has most content still cached (only 92 tokens uncached), so actual cost is closer to `776K × $1.5/MTok = $1.16` plus output.
+1. `pruneStale` removes ~1.8M tokens of stale tool results from the *body* of each request.
+2. `insertBreakpoints` re-anchors Anthropic's 4 `cache_control` markers after the edit, so the surviving prefix still cache-hits.
+3. The net effect is **less cached content carried per request** — cached input drops from ~4.3M to ~776K tokens — at an essentially unchanged (~100%) hit rate.
+
+So the cost win is **volume reduction at a preserved hit rate**, not "misses we paid for and came out ahead anyway." A cached token is cheap ($0.50/MTok) but not free: re-reading 4.3M cached tokens every session still costs far more than re-reading 776K.
+
+> **Simulation vs reality — an honest note.** Our offline simulator models the cache as a strict byte-prefix and predicted `pruneStale` would drop the hit rate to ~67%. The live Bedrock runs did not: they held ~100%. Anthropic's production cache tolerates edits inside a marked region more gracefully than a naive prefix model assumes. Where the simulator and the live runs disagree, **trust the live runs** — and treat any simulator-only cache-hit figure as a pessimistic lower bound, not a measurement.
 
 ### Open Questions for Further Research
 
@@ -602,7 +610,7 @@ Below is a truncated example of what `aap export <session>` produces:
 - Input tokens: 92 (uncached)
 - Cached tokens: 776,274
 - Output tokens: 3,626
-- Estimated cost: $1.4372
+- Estimated cost: $0.4792
 
 ## Optimizations applied
 
@@ -642,7 +650,7 @@ suppressWithinTurns = 2        # Suppress re-reads within N turns of write
 
 # Pricing (for cost reporting)
 [pricing."eu.anthropic.claude-opus-4-6-v1"]
-inputPerMTok = 15.0
-outputPerMTok = 75.0
-cacheInputPerMTok = 1.5
+inputPerMTok = 5.0
+outputPerMTok = 25.0
+cacheInputPerMTok = 0.5
 ```
