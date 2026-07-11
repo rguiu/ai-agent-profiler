@@ -245,17 +245,40 @@ All strategies are **enabled by default** — no per-strategy configuration need
 pass `--optimize` and everything fires automatically. The profiler auto-detects your
 provider (Anthropic/Bedrock vs OpenAI-compatible) and applies the appropriate profile.
 
-| Strategy             | Default | What it does                                                               |
-| -------------------- | ------- | -------------------------------------------------------------------------- |
-| `pruneStale`         | ON      | Replaces tool results older than `pruneAfterTurns` with 1-line summaries   |
-| `collapseSystem`     | ON      | Collapses repeated system prompts to a hash stub                           |
-| `pruneUnusedTools`   | ON      | Drops tool definitions never called after `pruneUnusedToolsAfter` requests |
-| `insertBreakpoints`  | ON      | Restores/adds `cache_control` markers at optimal positions after pruning   |
-| `stablePrefix`       | ON      | Canonicalises tool definitions for byte-stable prompt-cache hits           |
-| `reorderVolatile`    | ON      | Moves volatile `<system-reminder>` blocks past the cache boundary          |
-| `dedup`              | ON      | Returns a stub for identical repeated tool calls (unchanged file reads)    |
-| `truncate`           | ON      | Head+tail truncation for results exceeding `truncateThreshold` bytes       |
-| `suppressReread`     | ON      | Suppresses reads of files written within `suppressWithinTurns` turns       |
+> **You don't need to pick strategies.** The auto-detected profile enables the right set
+> for your provider. The table below is for understanding what each does and where it
+> applies — not for manual selection.
+
+#### High-impact (proven cost savers on Claude/Bedrock)
+
+| Strategy             | Savings | Provider | What it does |
+| -------------------- | ------- | -------- | ------------ |
+| `pruneStale`         | ~57%    | Claude/Bedrock only | Replaces old tool results with 1-line summaries. **Single biggest saver.** Harmful on DeepSeek (breaks prefix cache). |
+| `collapseSystem`     | ~20%    | Claude/Bedrock only | Replaces repeated system prompt with a hash stub after the first request. |
+| `pruneUnusedTools`   | ~23%    | Claude/Bedrock only | Drops tool definitions the model never called (after 10 turns). |
+| `insertBreakpoints`  | —       | Claude/Bedrock only | Restores `cache_control` markers at optimal positions after other strategies edit the request. No token savings, but achieves near-zero cache misses. |
+
+#### Low-impact (safe everywhere, modest savings)
+
+| Strategy             | Savings | Provider | What it does |
+| -------------------- | ------- | -------- | ------------ |
+| `dedup`              | small   | All      | Returns a stub when the model re-reads an unchanged file. |
+| `truncate`           | varies  | All      | Keeps first 25 + last 30 lines of oversized results. Useful for large files. |
+| `suppressReread`     | small   | All      | Suppresses reading a file immediately after writing it (content already known). |
+
+#### Cache-preservation (no token savings, prevent cache misses)
+
+| Strategy             | Savings | Provider | What it does |
+| -------------------- | ------- | -------- | ------------ |
+| `stablePrefix`       | 0       | All      | Sorts tool-definition JSON keys so byte order is consistent across requests. |
+| `reorderVolatile`    | 0       | Claude/Bedrock only | Moves volatile `<system-reminder>` blocks past the cache boundary. Rarely fires in practice (most messages have tool_results). Experimental. |
+
+#### Disabled on DeepSeek (automatic)
+
+DeepSeek uses **prefix caching** (automatic, no markers). Any edit to content in the
+middle of the conversation destroys the cache entirely. The profiler auto-disables
+`pruneStale`, `collapseSystem`, `pruneUnusedTools`, and `insertBreakpoints` for
+DeepSeek sessions — they would cause a **cost increase**, not savings.
 
 ### Configuration
 

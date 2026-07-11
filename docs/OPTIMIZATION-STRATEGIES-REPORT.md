@@ -260,6 +260,22 @@ Additionally, tool results are intercepted on the response path for:
 
 ## 5. Strategy Catalogue <a name="strategy-catalogue"></a>
 
+### Quick Reference
+
+| Strategy | Provider | Impact | Status |
+|----------|----------|--------|--------|
+| `pruneStale` | Claude/Bedrock only | **57% of total savings** | Proven |
+| `pruneUnusedTools` | Claude/Bedrock only | **23% of total savings** | Proven |
+| `collapseSystem` | Claude/Bedrock only | **20% of total savings** | Proven |
+| `insertBreakpoints` | Claude/Bedrock only | Near-zero cache misses | Proven |
+| `dedup` | All providers | Small | Proven, low frequency |
+| `truncate` | All providers | Varies by file sizes | Proven, low frequency |
+| `suppressReread` | All providers | Small | Proven, low frequency |
+| `stablePrefix` | All providers | Cache-preservation only | Proven |
+| `reorderVolatile` | Claude/Bedrock only | Cache-preservation only | Experimental — rarely fires |
+
+**Disabled on DeepSeek:** `pruneStale`, `collapseSystem`, `pruneUnusedTools`, `insertBreakpoints` — all edit the cached prefix and **cause cost increases** on prefix-cache providers.
+
 ### 5.1 collapseSystem — Collapse Repeated System Prompt
 
 **What it does:** The system prompt (~5,000 tokens) is identical every request. After the first request, it replaces the full prompt with a short hash stub: `[system unchanged — hash:abc123]`.
