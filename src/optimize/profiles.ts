@@ -52,6 +52,7 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
 // client-controlled), but we ADD breakpoint placement for maximum cache hits.
 export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
   insertBreakpoints: true,
+  reorderVolatile: true,
 };
 
 export function cacheFamilyFor(provider: string): CacheFamily {

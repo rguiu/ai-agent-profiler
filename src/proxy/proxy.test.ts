@@ -88,6 +88,7 @@ function buildConfig(upstreamPort: number): Config {
       suppressWithinTurns: 2,
       pruneUnusedTools: true,
       insertBreakpoints: false,
+      reorderVolatile: false,
       pruneUnusedToolsAfter: 10,
       compactThreshold: 60000,
       compactKeepTail: 20,

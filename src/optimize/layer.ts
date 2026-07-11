@@ -11,6 +11,7 @@ export interface OptimizeConfig {
   collapseSystem: boolean;
   pruneUnusedTools: boolean;
   insertBreakpoints: boolean;
+  reorderVolatile: boolean;
   truncateThreshold: number;
   pruneAfterTurns: number;
   suppressWithinTurns: number;
@@ -32,6 +33,7 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   collapseSystem: true,
   pruneUnusedTools: true,
   insertBreakpoints: false,
+  reorderVolatile: false,
   truncateThreshold: 4096,
   pruneAfterTurns: 6,
   suppressWithinTurns: 2,
@@ -71,7 +73,8 @@ export type OptimizeActionType =
   | "suppress_reread"
   | "collapse_system"
   | "prune_unused_tools"
-  | "insert_breakpoints";
+  | "insert_breakpoints"
+  | "reorder_volatile";
 
 export interface OptimizeAction {
   type: OptimizeActionType;
@@ -79,6 +82,7 @@ export interface OptimizeAction {
   tool?: string;
   tokensSaved: number;
   detail: string;
+  cacheRate?: boolean;
 }
 
 interface SeenCall {
@@ -295,6 +299,7 @@ export class OptimizeLayer {
   private compactBoundary = 0;
   private frozenSummary: string | null = null;
   private markersBeforeOpt = 0;
+  private toolDefTokensResent = 0;
 
   constructor(config: Partial<OptimizeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -308,6 +313,10 @@ export class OptimizeLayer {
     return this.actions.reduce((sum, a) => sum + a.tokensSaved, 0);
   }
 
+  getToolDefTokens(): number {
+    return this.toolDefTokensResent;
+  }
+
   rewriteRequestBody(body: Buffer): Buffer {
     this.turn++;
     let parsed: Record<string, unknown>;
@@ -319,10 +328,24 @@ export class OptimizeLayer {
 
     let changed = false;
 
+    // Idea C: track tool-def tokens resent each turn
+    if (Array.isArray(parsed.tools)) {
+      this.toolDefTokensResent += estimateTokens(JSON.stringify(parsed.tools));
+    }
+
     // Snapshot how many cache_control markers the client placed BEFORE we
     // modify anything. Used by insertCacheBreakpoints to restore destroyed ones.
     if (this.config.insertBreakpoints) {
       this.markersBeforeOpt = this.countMarkers(parsed);
+    }
+
+    // Idea D: move volatile <system-reminder> blocks to last user message
+    if (this.config.reorderVolatile && Array.isArray(parsed.messages)) {
+      const reordered = this.reorderVolatileContent(parsed.messages as Message[]);
+      if (reordered) {
+        parsed.messages = reordered;
+        changed = true;
+      }
     }
 
     // Collapse repeated system prompts to a short hash stub
@@ -591,12 +614,31 @@ export class OptimizeLayer {
     const threshold = this.turn - this.config.pruneAfterTurns;
     if (threshold <= 0) return null;
 
+    // Idea B: cache-aware pruning — don't prune messages in the cached prefix
+    let lastBreakpointIdx = -1;
+    if (this.config.insertBreakpoints) {
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i]!;
+        if (Array.isArray(msg.content)) {
+          for (const block of msg.content as ContentBlock[]) {
+            if (block.cache_control) {
+              lastBreakpointIdx = i;
+              break;
+            }
+          }
+        }
+      }
+    }
+
     let changed = false;
     let msgTurn = 0;
+    let msgIdx = -1;
     const result = messages.map((msg) => {
+      msgIdx++;
       if (msg.role === "assistant") msgTurn++;
       if (msg.role !== "user" && msg.role !== "tool") return msg;
       if (msgTurn > threshold) return msg;
+      if (lastBreakpointIdx >= 0 && msgIdx <= lastBreakpointIdx) return msg;
 
       if (Array.isArray(msg.content)) {
         const rewritten = msg.content.map((block: ContentBlock) => {
@@ -616,6 +658,7 @@ export class OptimizeLayer {
             tool: toolName,
             tokensSaved: tokens - estimateTokens(summary),
             detail: `pruned ${toolName} result from turn ${msgTurn} (~${tokens} → ~${estimateTokens(summary)} tokens)`,
+            cacheRate: this.config.insertBreakpoints && lastBreakpointIdx >= 0 && msgIdx <= lastBreakpointIdx,
           });
           return { ...block, content: summary };
         });
@@ -635,6 +678,7 @@ export class OptimizeLayer {
             tool: toolName,
             tokensSaved: tokens - estimateTokens(summary),
             detail: `pruned ${toolName} result from turn ${msgTurn} (~${tokens} → ~${estimateTokens(summary)} tokens)`,
+            cacheRate: this.config.insertBreakpoints && lastBreakpointIdx >= 0 && msgIdx <= lastBreakpointIdx,
           });
           return { ...msg, content: summary };
         }
@@ -1005,6 +1049,67 @@ export class OptimizeLayer {
     }
 
     return placed > 0;
+  }
+
+  private reorderVolatileContent(messages: Message[]): Message[] | null {
+    if (messages.length < 2) return null;
+
+    // Find the last user message index
+    let lastUserIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]!.role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return null;
+
+    // Collect volatile blocks from all user messages EXCEPT the last
+    const movedBlocks: ContentBlock[] = [];
+    let movedTokens = 0;
+    const result = messages.map((msg, idx) => {
+      if (msg.role !== "user" || idx === lastUserIdx) return msg;
+      if (!Array.isArray(msg.content)) return msg;
+
+      const kept: ContentBlock[] = [];
+      let msgChanged = false;
+      for (const block of msg.content as ContentBlock[]) {
+        if (
+          block.type === "text" &&
+          typeof block.text === "string" &&
+          (block.text as string).startsWith("<system-reminder>")
+        ) {
+          movedBlocks.push(block);
+          movedTokens += estimateTokens(block.text as string);
+          msgChanged = true;
+        } else {
+          kept.push(block);
+        }
+      }
+      if (!msgChanged) return msg;
+      if (kept.length === 0) return { ...msg, content: [{ type: "text", text: "" }] };
+      return { ...msg, content: kept };
+    });
+
+    if (movedBlocks.length === 0) return null;
+
+    // Prepend moved blocks to the last user message
+    const lastMsg = result[lastUserIdx]!;
+    const existingContent = Array.isArray(lastMsg.content)
+      ? (lastMsg.content as ContentBlock[])
+      : typeof lastMsg.content === "string"
+        ? [{ type: "text", text: lastMsg.content } as ContentBlock]
+        : [];
+    result[lastUserIdx] = { ...lastMsg, content: [...movedBlocks, ...existingContent] };
+
+    this.actions.push({
+      type: "reorder_volatile",
+      turn: this.turn,
+      tokensSaved: 0,
+      detail: `moved ${movedBlocks.length} <system-reminder> block(s) (~${movedTokens} tokens) to last user message for prefix stability`,
+    });
+
+    return result;
   }
 
   private countMarkers(parsed: Record<string, unknown>): number {
