@@ -15,7 +15,10 @@
 // and docs/CLAUDE-CACHING.md (why Anthropic's explicit-breakpoint cache tolerates
 // the full layer).
 
-import { CACHE_SAFE_OVERRIDES, type OptimizeConfig } from "./layer.js";
+import {
+  CACHE_SAFE_OVERRIDES,
+  type OptimizeConfig,
+} from "./layer.js";
 
 // Operator-selected profile. Mirrors the config `[optimize].profile` enum.
 //   auto       — apply cache-safe overrides only to prefix-cache providers.
@@ -43,6 +46,14 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
   ollama: "none",
 };
 
+// Overrides for explicit-breakpoint providers (Anthropic/Bedrock): enable
+// cache_control marker insertion. The full token-reduction layer is fine here
+// (pruneStale, collapseSystem, etc. don't hurt because the cache is
+// client-controlled), but we ADD breakpoint placement for maximum cache hits.
+export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
+  insertBreakpoints: true,
+};
+
 export function cacheFamilyFor(provider: string): CacheFamily {
   return PROVIDER_CACHE_FAMILY[provider] ?? "none";
 }
@@ -61,11 +72,14 @@ export function appliesCacheSafe(
 }
 
 // Resolve the effective strategy overrides for a provider under a profile.
-// Returns the cache-safe override set when it applies, otherwise `undefined`
-// (meaning: run the base config unchanged).
+// Returns the appropriate override set, or `undefined` (base config unchanged).
 export function overridesFor(
   profile: OptimizeProfile,
   provider: string,
 ): Partial<OptimizeConfig> | undefined {
-  return appliesCacheSafe(profile, provider) ? CACHE_SAFE_OVERRIDES : undefined;
+  if (appliesCacheSafe(profile, provider)) return CACHE_SAFE_OVERRIDES;
+  const family = cacheFamilyFor(provider);
+  if (family === "explicit" && profile !== "default")
+    return EXPLICIT_CACHE_OVERRIDES;
+  return undefined;
 }

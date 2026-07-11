@@ -1,5 +1,5 @@
 import { loadConfig } from "../config/index.js";
-import { simulateOptimize } from "../optimize/index.js";
+import { simulateOptimize, overridesFor } from "../optimize/index.js";
 import { openStore } from "../store/index.js";
 
 export async function optimize(args: string[]): Promise<void> {
@@ -26,10 +26,20 @@ export async function optimize(args: string[]): Promise<void> {
       return;
     }
 
+    // Resolve provider from the session's first request, then apply
+    // profile-based overrides (e.g. insertBreakpoints for Bedrock/Anthropic).
+    const detail = store.getSession(sessionId);
+    const provider = detail?.requests?.[0]?.provider ?? "";
+    const profileOverrides = overridesFor("auto", provider);
+    const optimizeConfig = {
+      ...(profileOverrides ?? {}),
+      ...(enableAll ? { pruneStale: true } : {}),
+    };
+
     const result = await simulateOptimize(
       store,
       sessionId,
-      { pruneStale: enableAll },
+      optimizeConfig,
       config.pricing,
     );
 

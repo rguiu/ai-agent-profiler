@@ -4,6 +4,7 @@ import {
   appliesCacheSafe,
   overridesFor,
   PROVIDER_CACHE_FAMILY,
+  EXPLICIT_CACHE_OVERRIDES,
 } from "./profiles.js";
 import { CACHE_SAFE_OVERRIDES } from "./layer.js";
 
@@ -45,14 +46,35 @@ describe("appliesCacheSafe", () => {
 });
 
 describe("overridesFor", () => {
-  it("returns the cache-safe override set when it applies", () => {
+  it("returns cache-safe overrides for prefix-cache providers", () => {
     expect(overridesFor("auto", "deepseek")).toBe(CACHE_SAFE_OVERRIDES);
     expect(overridesFor("cache-safe", "anthropic")).toBe(CACHE_SAFE_OVERRIDES);
   });
 
-  it("returns undefined when overrides do not apply", () => {
-    expect(overridesFor("auto", "anthropic")).toBeUndefined();
+  it("returns explicit-cache overrides for explicit providers on auto", () => {
+    expect(overridesFor("auto", "anthropic")).toBe(EXPLICIT_CACHE_OVERRIDES);
+    expect(overridesFor("auto", "bedrock")).toBe(EXPLICIT_CACHE_OVERRIDES);
+    expect(overridesFor("auto", "bedrock")).toHaveProperty(
+      "insertBreakpoints",
+      true,
+    );
+  });
+
+  it("returns explicit-cache overrides for cache-safe on explicit providers", () => {
+    // cache-safe forces CACHE_SAFE_OVERRIDES (which disables prefix-editing)
+    // This takes priority over explicit cache overrides
+    expect(overridesFor("cache-safe", "bedrock")).toBe(CACHE_SAFE_OVERRIDES);
+  });
+
+  it("returns undefined for default profile (never overrides)", () => {
     expect(overridesFor("default", "deepseek")).toBeUndefined();
+    expect(overridesFor("default", "anthropic")).toBeUndefined();
+    expect(overridesFor("default", "ollama")).toBeUndefined();
+  });
+
+  it("returns undefined for none-family providers on auto", () => {
+    expect(overridesFor("auto", "ollama")).toBeUndefined();
+    expect(overridesFor("auto", "unknown")).toBeUndefined();
   });
 });
 

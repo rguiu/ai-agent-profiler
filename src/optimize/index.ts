@@ -18,6 +18,7 @@ export {
 } from "./cache-cost.js";
 export {
   PROVIDER_CACHE_FAMILY,
+  EXPLICIT_CACHE_OVERRIDES,
   cacheFamilyFor,
   appliesCacheSafe,
   overridesFor,

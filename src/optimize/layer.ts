@@ -10,6 +10,7 @@ export interface OptimizeConfig {
   suppressReread: boolean;
   collapseSystem: boolean;
   pruneUnusedTools: boolean;
+  insertBreakpoints: boolean;
   truncateThreshold: number;
   pruneAfterTurns: number;
   suppressWithinTurns: number;
@@ -30,6 +31,7 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   suppressReread: true,
   collapseSystem: true,
   pruneUnusedTools: true,
+  insertBreakpoints: false,
   truncateThreshold: 4096,
   pruneAfterTurns: 6,
   suppressWithinTurns: 2,
@@ -68,7 +70,8 @@ export type OptimizeActionType =
   | "frozen_compact"
   | "suppress_reread"
   | "collapse_system"
-  | "prune_unused_tools";
+  | "prune_unused_tools"
+  | "insert_breakpoints";
 
 export interface OptimizeAction {
   type: OptimizeActionType;
@@ -392,6 +395,11 @@ export class OptimizeLayer {
         parsed.messages = truncated;
         changed = true;
       }
+    }
+
+    if (this.config.insertBreakpoints) {
+      const inserted = this.insertCacheBreakpoints(parsed);
+      if (inserted) changed = true;
     }
 
     const out = changed ? Buffer.from(JSON.stringify(parsed)) : body;
@@ -858,6 +866,94 @@ export class OptimizeLayer {
       tokensSaved: 0,
       detail: `prefix edited (${changes.join(", ")}) — ~${resetTokens} tokens after the edit point will miss cache`,
     });
+  }
+
+  // Insert `cache_control: {type: "ephemeral"}` markers at stable-layer
+  // boundaries for Anthropic/Bedrock explicit-breakpoint caching. Places up to 3
+  // breakpoints: (1) end of system content, (2) last tool definition, (3) the
+  // second-to-last user message (the boundary between stable context and the new
+  // turn). Only operates on Anthropic-format requests (array `system`, array
+  // `content` blocks in messages). Returns true if the body was mutated.
+  private insertCacheBreakpoints(parsed: Record<string, unknown>): boolean {
+    // Detect Anthropic message format: system is array or string, messages have
+    // content arrays with typed blocks. Skip OpenAI-format payloads silently.
+    const messages = parsed.messages as Message[] | undefined;
+    if (!Array.isArray(messages)) return false;
+
+    let placed = 0;
+
+    // Breakpoint 1: system prompt. Anthropic supports `system` as a string or
+    // as an array of content blocks. For the array form, tag the last block.
+    if (Array.isArray(parsed.system)) {
+      const sysBlocks = parsed.system as ContentBlock[];
+      if (sysBlocks.length > 0) {
+        const last = sysBlocks[sysBlocks.length - 1]!;
+        if (!last.cache_control) {
+          last.cache_control = { type: "ephemeral" };
+          placed++;
+        }
+      }
+    } else if (typeof parsed.system === "string" && parsed.system.length > 0) {
+      // Convert string system to array form so we can attach cache_control
+      parsed.system = [
+        {
+          type: "text",
+          text: parsed.system,
+          cache_control: { type: "ephemeral" },
+        },
+      ];
+      placed++;
+    }
+
+    // Breakpoint 2: last tool definition
+    if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+      const tools = parsed.tools as Array<Record<string, unknown>>;
+      const lastTool = tools[tools.length - 1]!;
+      if (!lastTool.cache_control) {
+        lastTool.cache_control = { type: "ephemeral" };
+        placed++;
+      }
+    }
+
+    // Breakpoint 3: the last user message BEFORE the final user message.
+    // This marks the boundary of "everything the model saw last turn" — the
+    // most valuable cache checkpoint for multi-turn conversations because
+    // everything above it is byte-identical across consecutive requests.
+    if (messages.length >= 3) {
+      let lastUserIdx = -1;
+      let secondLastUserIdx = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]!.role === "user") {
+          if (lastUserIdx === -1) {
+            lastUserIdx = i;
+          } else {
+            secondLastUserIdx = i;
+            break;
+          }
+        }
+      }
+      if (secondLastUserIdx >= 0) {
+        const msg = messages[secondLastUserIdx]!;
+        if (Array.isArray(msg.content) && msg.content.length > 0) {
+          const lastBlock = msg.content[msg.content.length - 1]! as ContentBlock;
+          if (!lastBlock.cache_control) {
+            lastBlock.cache_control = { type: "ephemeral" };
+            placed++;
+          }
+        }
+      }
+    }
+
+    if (placed > 0) {
+      this.actions.push({
+        type: "insert_breakpoints",
+        turn: this.turn,
+        tokensSaved: 0,
+        detail: `placed ${placed} cache_control breakpoint(s) (system, tools, context boundary)`,
+      });
+    }
+
+    return placed > 0;
   }
 
   private resolveToolName(
