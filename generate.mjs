@@ -1,24 +1,20 @@
-// Static-demo generator for the AI Agent Profiler UI.
-//
-// Snapshots the live JSON API (served by `aap serve`) to flat files under
-// demo/data/, so the SPA can run on GitHub Pages with no backend.
+// Static-demo generator for the AI Agent Profiler UI (gh-pages, root layout).
 //
 // Usage:  BASE=http://localhost:8299 node generate.mjs
 //
-// - Features a curated set of sessions (see FEATURED); trims the session list
-//   to those so the UI never links to a view without data.
-// - Strips the heavy base64 bodies from request `events` (keeps envelopes) and
-//   redacts auth headers.
-// - Deep-scrubs every payload: local paths, username, API keys, emails.
+// Snapshots the live JSON API to ./data/*.json so the SPA runs on GitHub Pages
+// with no backend. Strips heavy request bodies, reconstructs a readable
+// (truncated) response body from the SSE stream, and deep-scrubs everything.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { Buffer } from "node:buffer";
 
 const BASE = process.env.BASE || "http://localhost:8299";
 const OUT = join(process.cwd(), "data");
+const RESP_LIMIT = 6000; // chars of reconstructed response text to keep
 
-// The two sessions that back the article's DeepSeek "twist" tables:
-//   baseline (49 req, $0.046) and the +491% optimize run (117 req, $0.272).
+// The two sessions behind the article's DeepSeek "twist" tables.
 const FEATURED = [
   "bench-opencode-iterative-fix-plus-20260710122817-1",
   "bench-opencode-iterative-fix-plus-20260710123727-1",
@@ -38,42 +34,83 @@ async function getJson(path) {
   return res.json();
 }
 
+function scrubText(s) {
+  return s
+    .replace(/\/Users\/[A-Za-z0-9._-]+/g, "/Users/demo")
+    .replace(/\/home\/[A-Za-z0-9._-]+/g, "/home/demo")
+    .replace(/raulguiugallardo/g, "demo")
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-REDACTED")
+    .replace(/Bearer\s+[A-Za-z0-9._-]{8,}/gi, "Bearer REDACTED")
+    .replace(/AKIA[0-9A-Z]{12,}/g, "AKIA-REDACTED")
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "user@example.com");
+}
 function scrub(value) {
-  let s = JSON.stringify(value);
-  s = s.replace(/\/Users\/[A-Za-z0-9._-]+/g, "/Users/demo");
-  s = s.replace(/\/home\/[A-Za-z0-9._-]+/g, "/home/demo");
-  s = s.replace(/raulguiugallardo/g, "demo");
-  s = s.replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-REDACTED");
-  s = s.replace(/Bearer\s+[A-Za-z0-9._-]{8,}/gi, "Bearer REDACTED");
-  s = s.replace(/AKIA[0-9A-Z]{12,}/g, "AKIA-REDACTED");
-  s = s.replace(
-    /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
-    "user@example.com",
-  );
-  return JSON.parse(s);
+  return JSON.parse(scrubText(JSON.stringify(value)));
 }
 
-// Drop giant base64 bodies and redact sensitive headers from request events.
-function lean(detail) {
-  if (Array.isArray(detail.events)) {
-    detail.events = detail.events.map((e) => {
-      const c = { ...e };
-      if (typeof c.data === "string") c.data = "";
-      if (c.headers && typeof c.headers === "object") {
-        const h = { ...c.headers };
-        for (const k of Object.keys(h)) {
-          if (
-            /^(authorization|proxy-authorization|x-api-key|api-key|cookie|set-cookie|x-amz-security-token|x-amz-date)/i.test(
-              k,
-            )
-          )
-            h[k] = "[redacted]";
-        }
-        c.headers = h;
+// Reassemble assistant text from OpenAI-style SSE `data:` chunks.
+function assembleResponseText(events) {
+  let out = "";
+  for (const e of events) {
+    if (e.type !== "response_body" || typeof e.data !== "string" || !e.data)
+      continue;
+    let txt;
+    try {
+      txt = Buffer.from(e.data, "base64").toString("utf8");
+    } catch {
+      continue;
+    }
+    for (const line of txt.split("\n")) {
+      const t = line.trim();
+      if (!t.startsWith("data:")) continue;
+      const payload = t.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const j = JSON.parse(payload);
+        const d = j.choices && j.choices[0] && j.choices[0].delta;
+        if (d && d.content) out += d.content;
+      } catch {
+        /* ignore non-JSON keepalive lines */
       }
-      return c;
-    });
+    }
   }
+  return out;
+}
+
+// Keep event envelopes; drop request bodies; inject one readable response body.
+function lean(detail) {
+  const events = Array.isArray(detail.events) ? detail.events : [];
+  let text = scrubText(assembleResponseText(events));
+  const truncated = text.length > RESP_LIMIT;
+  text =
+    text.slice(0, RESP_LIMIT) +
+    (truncated ? "\n\n…[response truncated for static demo]" : "");
+  const injected = Buffer.from(text, "utf8").toString("base64");
+  let done = false;
+  detail.events = events.map((e) => {
+    const c = { ...e };
+    if (c.headers && typeof c.headers === "object") {
+      const h = { ...c.headers };
+      for (const k of Object.keys(h)) {
+        if (
+          /^(authorization|proxy-authorization|x-api-key|api-key|cookie|set-cookie|x-amz-security-token|x-amz-date)/i.test(
+            k,
+          )
+        )
+          h[k] = "[redacted]";
+      }
+      c.headers = h;
+    }
+    if (typeof c.data === "string") {
+      if (c.type === "response_body" && !done && text) {
+        c.data = injected;
+        done = true;
+      } else {
+        c.data = "";
+      }
+    }
+    return c;
+  });
   return detail;
 }
 
@@ -81,23 +118,17 @@ async function write(path, value) {
   const file = join(OUT, fileKey(path));
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify(scrub(value)));
-  return file;
 }
 
 async function main() {
   await mkdir(OUT, { recursive: true });
-
-  // Global aggregates (real numbers across the whole capture DB).
   await write("/tools", await getJson("/tools"));
   await write("/commands", await getJson("/commands"));
 
-  // Trim the session list to the featured ones.
   const allSessions = await getJson("/sessions");
   const featured = allSessions.filter((s) => FEATURED.includes(s.id));
   await write("/sessions", featured);
 
-  // Stats reflect ONLY the featured sessions (not the whole capture DB), so the
-  // dashboard totals stay consistent with the trimmed session list.
   const sum = (k) => featured.reduce((a, s) => a + (s[k] || 0), 0);
   await write("/stats", {
     sessions: featured.length,
@@ -116,11 +147,12 @@ async function main() {
       `/commands?session=${id}`,
       await getJson(`/commands?session=${encodeURIComponent(id)}`),
     );
-
     const requests = Array.isArray(detail.requests) ? detail.requests : [];
     for (const r of requests) {
-      const rd = lean(await getJson(`/requests/${r.id}?events=1`));
-      await write(`/requests/${r.id}?events=1`, rd);
+      await write(
+        `/requests/${r.id}?events=1`,
+        lean(await getJson(`/requests/${r.id}?events=1`)),
+      );
       await write(
         `/requests/${r.id}/messages`,
         await getJson(`/requests/${r.id}/messages`),
@@ -129,10 +161,7 @@ async function main() {
     }
     console.log(`  ${id}: ${requests.length} requests`);
   }
-
-  console.log(
-    `done: ${featured.length} sessions, ${reqCount} requests → ${OUT}`,
-  );
+  console.log(`done: ${featured.length} sessions, ${reqCount} requests`);
 }
 
 main().catch((e) => {
