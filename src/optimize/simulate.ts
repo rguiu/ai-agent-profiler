@@ -3,11 +3,21 @@
 
 import { readFile } from "node:fs/promises";
 import type { Store, ToolCall } from "../store/index.js";
+import { computeCost } from "../parse/index.js";
+import type { ModelPricing } from "../config/schema.js";
 import {
   OptimizeLayer,
   type OptimizeConfig,
   type OptimizeAction,
 } from "./layer.js";
+import { turnCache } from "./cache-cost.js";
+
+export interface CacheCostResult {
+  hitTokens: number;
+  missTokens: number;
+  hitRate: number;
+  inputCost: number | null;
+}
 
 export interface SimulationResult {
   sessionId: string;
@@ -18,6 +28,13 @@ export interface SimulationResult {
   tokensSaved: number;
   savingsPercent: number;
   byType: Record<string, { count: number; tokensSaved: number }>;
+  // Populated only when pricing is supplied. Models DeepSeek prefix-cache cost
+  // for the raw session (baseline) vs. the optimize-layer-rewritten session.
+  cache?: {
+    baseline: CacheCostResult;
+    optimized: CacheCostResult;
+    inputCostDelta: number | null;
+  };
 }
 
 interface TraceEvent {
@@ -30,12 +47,14 @@ export async function simulateOptimize(
   store: Store,
   sessionId: string,
   config?: Partial<OptimizeConfig>,
+  pricing?: Record<string, ModelPricing>,
 ): Promise<SimulationResult> {
   const detail = store.getSession(sessionId);
   if (!detail) throw new Error(`Session "${sessionId}" not found`);
 
   const layer = new OptimizeLayer(config);
   let totalResultTokens = 0;
+  const turns: RequestTurn[] = [];
 
   // Replay each request in order
   for (const request of detail.requests) {
@@ -43,13 +62,15 @@ export async function simulateOptimize(
     if (!fullReq || !fullReq.trace_file) continue;
 
     const events = await readTraceEvents(fullReq.trace_file);
-    simulateRequest(layer, events, fullReq.toolCalls);
+    const turn = simulateRequest(layer, events, fullReq.toolCalls);
+    if (turn) turns.push({ ...turn, model: fullReq.model });
     totalResultTokens += fullReq.toolCalls.reduce(
       (sum, tc) => sum + (tc.result_tokens ?? 0),
       0,
     );
   }
 
+  const cache = pricing ? computeCacheCost(turns, pricing) : undefined;
   const actions = layer.getActions();
   const tokensSaved = layer.getTotalTokensSaved();
   const totalInputTokens = detail.requests.reduce(
@@ -75,21 +96,40 @@ export async function simulateOptimize(
     tokensSaved,
     savingsPercent: Math.round((tokensSaved / denominator) * 100),
     byType,
+    cache,
   };
+}
+
+interface SimTurn {
+  baseline: string;
+  optimized: string;
+}
+
+interface RequestTurn extends SimTurn {
+  model: string | null;
 }
 
 function simulateRequest(
   layer: OptimizeLayer,
   events: TraceEvent[],
   toolCalls: ToolCall[],
-): void {
-  // Find request body — this is what we'd rewrite on the request path
+): SimTurn | null {
+  let turn: SimTurn | null = null;
+
+  // Concatenate all request_body chunks (large bodies are split across events)
+  const bodyBuffers: Buffer[] = [];
   for (const event of events) {
     if (event.type === "request_body" && event.data) {
-      const body = Buffer.from(event.data, "base64");
-      layer.rewriteRequestBody(body);
-      break;
+      bodyBuffers.push(Buffer.from(event.data, "base64"));
     }
+  }
+  if (bodyBuffers.length > 0) {
+    const body = Buffer.concat(bodyBuffers);
+    const rewritten = layer.rewriteRequestBody(body);
+    turn = {
+      baseline: body.toString("utf8"),
+      optimized: rewritten.toString("utf8"),
+    };
   }
 
   // Simulate tool result rewriting for each tool call in the response
@@ -102,6 +142,68 @@ function simulateRequest(
     const syntheticContent = "x".repeat((tc.result_tokens ?? 0) * 4);
     layer.rewriteToolResult(tc.name, args, syntheticContent);
   }
+
+  return turn;
+}
+
+// Model DeepSeek prefix-cache cost for the session, comparing the raw request
+// bodies (baseline) against the optimize-layer-rewritten bodies (optimized).
+// Each is scored independently: an optimization that edits the prompt prefix
+// resets the shared prefix and shows up as a higher miss-token count / cost.
+function computeCacheCost(
+  turns: RequestTurn[],
+  pricing: Record<string, ModelPricing>,
+): {
+  baseline: CacheCostResult;
+  optimized: CacheCostResult;
+  inputCostDelta: number | null;
+} {
+  const baseline = scoreStream(
+    turns.map((t) => ({ prompt: t.baseline, model: t.model })),
+    pricing,
+  );
+  const optimized = scoreStream(
+    turns.map((t) => ({ prompt: t.optimized, model: t.model })),
+    pricing,
+  );
+  const inputCostDelta =
+    baseline.inputCost !== null && optimized.inputCost !== null
+      ? optimized.inputCost - baseline.inputCost
+      : null;
+  return { baseline, optimized, inputCostDelta };
+}
+
+function scoreStream(
+  stream: Array<{ prompt: string; model: string | null }>,
+  pricing: Record<string, ModelPricing>,
+): CacheCostResult {
+  let prev: string | null = null;
+  let hitTokens = 0;
+  let missTokens = 0;
+  let inputCost = 0;
+  let priced = false;
+
+  for (const { prompt, model } of stream) {
+    const tc = turnCache(prev, prompt);
+    hitTokens += tc.hitTokens;
+    missTokens += tc.missTokens;
+    // computeCost prices cached tokens at cacheInputPerMTok and the rest at
+    // inputPerMTok. Output tokens are cache-independent, so we pass 0.
+    const cost = computeCost(model, tc.promptTokens, 0, pricing, tc.hitTokens);
+    if (cost !== null) {
+      inputCost += cost;
+      priced = true;
+    }
+    prev = prompt;
+  }
+
+  const promptTokens = hitTokens + missTokens;
+  return {
+    hitTokens,
+    missTokens,
+    hitRate: promptTokens > 0 ? hitTokens / promptTokens : 0,
+    inputCost: priced ? inputCost : null,
+  };
 }
 
 async function readTraceEvents(file: string): Promise<TraceEvent[]> {

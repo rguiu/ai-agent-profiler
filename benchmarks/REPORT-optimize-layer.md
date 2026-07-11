@@ -76,6 +76,8 @@ The discount is large and differs by provider:
 | DeepSeek              | $0.435 /M      | $0.0036 /M   | **~121×** |
 | Claude Opus (Bedrock) | $5.00 /M       | $0.50 /M     | **10×**   |
 
+> _Pricing verified against anthropic.com/pricing on 12 Jul 2026, model Opus 4.x (Opus 4.8 here). Rates change — re-verify before quoting._
+
 The catch: caching only applies while the prefix is **byte-stable**. Change something early
 in the pile and everything after it is billed as new. This is exactly what `pruneStale`
 does — it edits _old_ messages — so whether the cache tolerates that edit decides whether
@@ -148,6 +150,17 @@ Edge tests         50/57         54/57          54/57
   both batches.
 
 ### OpenCode / DeepSeek
+
+> **⚠️ Superseded — this is the _provider-blind_ layer.** The +491% blow-up below is what
+> happened when the Anthropic-tuned strategies (`pruneStale` et al.) ran unchanged against
+> DeepSeek's OpenAI-format prefix cache. It is **not** the current behavior. A DeepSeek
+> cache-safe profile (`profile = auto`) has since been built — it disables the prefix-editing
+> strategies and adds cache-safe ones (`stableTruncate`, `frozenCompact`, `shapeTestOutput`).
+> With it, DeepSeek runs hold a healthy 96–99% hit rate and show no cache resets. See
+> [`docs/DEEPSEEK-FINDINGS.md`](../docs/DEEPSEEK-FINDINGS.md),
+> [`docs/DEEPSEEK-CACHING.md`](../docs/DEEPSEEK-CACHING.md), and the current A/B in
+> [`benchmarks/DEEPSEEK-COMPARISON.md`](DEEPSEEK-COMPARISON.md). The table below is retained
+> as the evidence that motivated that work.
 
 ```
                  baseline      optimize      optimize-nps

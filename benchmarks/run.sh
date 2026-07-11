@@ -62,6 +62,37 @@ done
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# Verify commands may use `node --test --test-isolation=none`, which requires
+# Node >=22; an older/default `node` silently fails with `node: bad option`,
+# scoring every task fail with 0/0 tests and masking whether the agent actually
+# solved anything. But `aap` itself is linked against a specific Node ABI
+# (better-sqlite3) and breaks on a mismatched major — so we must NOT globally
+# hijack PATH. Instead resolve a separate Node >=22 just for verify subprocesses
+# and expose its bin dir as VERIFY_NODE_BIN; `aap` keeps using the ambient node.
+node_major() { "$1" -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/'; }
+VERIFY_NODE_BIN=""
+CUR_MAJOR="$(node_major node 2>/dev/null || echo 0)"
+if [ "${CUR_MAJOR:-0}" -ge 22 ] 2>/dev/null; then
+  : # ambient node already fine for verify
+else
+  BEST_NODE=""; BEST_MAJOR=0
+  for cand in \
+    "$HOME"/.nvm/versions/node/*/bin/node \
+    "$HOME"/.local/state/fnm_multishells/*/bin/node \
+    "$HOME"/Library/Caches/fnm_multishells/*/bin/node \
+    /opt/homebrew/bin/node /usr/local/bin/node; do
+    [ -x "$cand" ] || continue
+    m="$(node_major "$cand")"; [ -n "$m" ] || continue
+    if [ "$m" -ge 22 ] && [ "$m" -gt "$BEST_MAJOR" ]; then BEST_MAJOR="$m"; BEST_NODE="$cand"; fi
+  done
+  if [ -n "$BEST_NODE" ]; then
+    VERIFY_NODE_BIN="$(dirname "$BEST_NODE")"
+    echo "run.sh: verify will use Node $("$BEST_NODE" -v) from $VERIFY_NODE_BIN"
+  else
+    echo "run.sh: WARNING — no Node >=22 found; verify with --test-isolation=none will fail" >&2
+  fi
+fi
+
 # --prune deletes a previous run's directory and its tracked sessions.
 if [ "$PRUNE" = "1" ]; then
   [ -n "$TAG" ] || { echo "error: --prune requires --tag" >&2; exit 1; }
@@ -177,6 +208,36 @@ count_section() {
   ' "$1" 2>/dev/null
 }
 
+# Format a "pass/total" result for the report. When total is 0 the test suite
+# produced no TAP footer — distinguish a runner that errored/timed out (wrong
+# Node `bad option`, OOM, crash, or a hung suite SIGKILLed by the verify
+# timeout) from a genuinely empty section, so a broken harness or an infinite
+# loop in the agent's code never silently looks like "no tests".
+# $1=pass/total, $2=log, $3=section start marker, $4=section end marker.
+fmt_test_result() {
+  result="$1"; log="$2"; start="$3"; end="$4"
+  case "$result" in
+    */0)
+      # Explicit runtime failures anywhere in the log.
+      if grep -qiE "bad option|Fatal|FATAL|out of memory|heap limit|Cannot find module|MODULE_NOT_FOUND" "$log" 2>/dev/null; then
+        echo "not run (error)"
+        return
+      fi
+      # Section had content (tests started) but no footer → killed mid-run,
+      # typically a hang SIGKILLed by the verify timeout.
+      section_lines=$(awk -v s="$start" -v e="$end" '
+        index($0,s){insec=1;next} e!=""&&index($0,e){insec=0}
+        insec{c++} END{print c+0}' "$log" 2>/dev/null)
+      if [ "${section_lines:-0}" -gt 1 ]; then
+        echo "did not finish (timeout/crash)"
+      else
+        echo "—"
+      fi
+      ;;
+    *) echo "$result passed" ;;
+  esac
+}
+
 run_task() {
   id="$1"; prompt="$2"; verify="$3"
   [ -n "$verify" ] || { [ "$NOVERIFY" = "1" ] || verify="$DEFAULT_VERIFY"; }
@@ -213,7 +274,10 @@ run_task() {
   [ -n "$verify" ] || return 0
   echo ">>> verify [$id]: $verify"
   verify_log="$scratch/.verify.log"
-  if ( cd "$scratch" && eval "$verify" >"$verify_log" 2>&1 ); then
+  # Run verify with the resolved Node >=22 prepended to PATH (only for this
+  # subprocess), so `node --test --test-isolation=none` works without breaking
+  # the ambient `aap` (which is linked against a different Node ABI).
+  if ( cd "$scratch" && PATH="${VERIFY_NODE_BIN:+$VERIFY_NODE_BIN:}$PATH" eval "$verify" >"$verify_log" 2>&1 ); then
     status=pass
   else
     status=fail
@@ -307,7 +371,7 @@ if [ "$DRY" != "1" ]; then
     [ -n "$REPO" ]   && echo "| Repo | $REPO |"
     [ -n "$DIR" ]    && echo "| Dir | $DIR |"
     [ -n "$TASKS_FILE" ] && echo "| Tasks file | $TASKS_FILE |"
-    echo "| Timestamp | $(date -r "$RUN_STAMP" '+%Y-%m-%d %H:%M:%S') |"
+    echo "| Timestamp | $(date -r "$RUN_START" '+%Y-%m-%d %H:%M:%S') |"
     echo "| Elapsed | ${total_elapsed}s ($((total_elapsed/60))m$((total_elapsed%60))s) |"
     echo "| Tasks run | $TASK_N |"
     echo
@@ -324,10 +388,8 @@ if [ "$DRY" != "1" ]; then
         vlog="$RUNS_ROOT/verify/$tid.log"
         fixture=$(count_section "$vlog" "=== FIXTURE TESTS ===" "=== EDGE TESTS ===")
         edge=$(count_section "$vlog" "=== EDGE TESTS ===" "")
-        fix_str="${fixture} passed"
-        ref_str="${edge} passed"
-        [ "${fixture#0/}" = "0" ] && fix_str="—"
-        [ "${edge#0/}" = "0" ] && ref_str="—"
+        fix_str=$(fmt_test_result "$fixture" "$vlog" "=== FIXTURE TESTS ===" "=== EDGE TESTS ===")
+        ref_str=$(fmt_test_result "$edge" "$vlog" "=== EDGE TESTS ===" "")
         echo "| $n | $tid | $tagent | $tstatus | $fix_str | $ref_str |"
         n=$((n + 1))
       done < "$RESULTS"

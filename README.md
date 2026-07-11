@@ -17,6 +17,10 @@ DeepSeek — the effect is **provider-dependent**, driven by how each provider's
 reacts to editing old context. See the
 [benchmark report](benchmarks/REPORT-optimize-layer.md) for the full, honest picture.
 
+**Live demo:** explore real captured sessions in a static, read-only clone of the
+dashboard — no install required: **https://rguiu.github.io/ai-agent-profiler/**
+(sample data from two DeepSeek/opencode benchmark sessions; paths and credentials redacted).
+
 ## How it works
 
 Launch your agent through a small wrapper that points its provider base URL at the
@@ -53,7 +57,7 @@ the LLM.
   high amplification, context duplication, inefficient search→read).
 - **Export & compare** — session reports as Markdown/JSON; sessions side by side.
 - **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data for agent self-introspection.
-- **Optimize layer** — 7 request-rewriting strategies (see below).
+- **Optimize layer** — 9 request-rewriting strategies, all enabled by default (see below).
 
 See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
@@ -241,15 +245,44 @@ aap serve --optimize
 
 ### Strategies
 
-| Strategy           | Default | What it does                                                               |
-| ------------------ | ------- | -------------------------------------------------------------------------- |
-| `dedup`            | ON      | Returns a stub for identical repeated tool calls (unchanged file reads)    |
-| `truncate`         | ON      | Head+tail truncation for results exceeding `truncateThreshold` bytes       |
-| `stablePrefix`     | ON      | Canonicalises tool definitions for byte-stable prompt-cache hits           |
-| `pruneStale`       | ON      | Replaces tool results older than `pruneAfterTurns` with 1-line summaries   |
-| `suppressReread`   | ON      | Suppresses reads of files written within `suppressWithinTurns` turns       |
-| `collapseSystem`   | ON      | Collapses repeated system prompts to a hash stub                           |
-| `pruneUnusedTools` | ON      | Drops tool definitions never called after `pruneUnusedToolsAfter` requests |
+All strategies are **enabled by default** — no per-strategy configuration needed. Just
+pass `--optimize` and everything fires automatically. The profiler auto-detects your
+provider (Anthropic/Bedrock vs OpenAI-compatible) and applies the appropriate profile.
+
+> **You don't need to pick strategies.** The auto-detected profile enables the right set
+> for your provider. The table below is for understanding what each does and where it
+> applies — not for manual selection.
+
+#### High-impact (proven cost savers on Claude/Bedrock)
+
+| Strategy            | Savings | Provider            | What it does                                                                                                                                          |
+| ------------------- | ------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pruneStale`        | ~57%    | Claude/Bedrock only | Replaces old tool results with 1-line summaries. **Single biggest saver.** Harmful on DeepSeek (breaks prefix cache).                                 |
+| `collapseSystem`    | ~20%    | Claude/Bedrock only | Replaces repeated system prompt with a hash stub after the first request.                                                                             |
+| `pruneUnusedTools`  | ~23%    | Claude/Bedrock only | Drops tool definitions the model never called (after 10 turns).                                                                                       |
+| `insertBreakpoints` | —       | Claude/Bedrock only | Restores `cache_control` markers at optimal positions after other strategies edit the request. No token savings, but achieves near-zero cache misses. |
+
+#### Low-impact (safe everywhere, modest savings)
+
+| Strategy         | Savings | Provider | What it does                                                                    |
+| ---------------- | ------- | -------- | ------------------------------------------------------------------------------- |
+| `dedup`          | small   | All      | Returns a stub when the model re-reads an unchanged file.                       |
+| `truncate`       | varies  | All      | Keeps first 25 + last 30 lines of oversized results. Useful for large files.    |
+| `suppressReread` | small   | All      | Suppresses reading a file immediately after writing it (content already known). |
+
+#### Cache-preservation (no token savings, prevent cache misses)
+
+| Strategy          | Savings | Provider            | What it does                                                                                                                                 |
+| ----------------- | ------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stablePrefix`    | 0       | All                 | Sorts tool-definition JSON keys so byte order is consistent across requests.                                                                 |
+| `reorderVolatile` | 0       | Claude/Bedrock only | Moves volatile `<system-reminder>` blocks past the cache boundary. Rarely fires in practice (most messages have tool_results). Experimental. |
+
+#### Disabled on DeepSeek (automatic)
+
+DeepSeek uses **prefix caching** (automatic, no markers). Any edit to content in the
+middle of the conversation destroys the cache entirely. The profiler auto-disables
+`pruneStale`, `collapseSystem`, `pruneUnusedTools`, and `insertBreakpoints` for
+DeepSeek sessions — they would cause a **cost increase**, not savings.
 
 ### Configuration
 
@@ -340,6 +373,7 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`VISION.md`](VISION.md) — why the project exists.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
+- [`docs/OPTIMIZATION-STRATEGIES-REPORT.md`](docs/OPTIMIZATION-STRATEGIES-REPORT.md) — comprehensive guide: how the API works, how caching works, all 9 strategies explained, benchmark results.
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
 - [`benchmarks/REPORT-optimize-layer.md`](benchmarks/REPORT-optimize-layer.md) — full optimize-layer benchmark (DeepSeek vs Claude).
 

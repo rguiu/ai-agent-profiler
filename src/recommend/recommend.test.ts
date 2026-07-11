@@ -137,6 +137,76 @@ describe("recommend", () => {
     expect(recommend(detail({}))).toEqual([]);
   });
 
+  it("flags a prefix-cache reset when miss exceeds newly-added content", () => {
+    const g = (input: number, cached: number) => ({
+      id: `r${input}`,
+      started_at: null,
+      input_tokens: input,
+      cached_input_tokens: cached,
+      output_tokens: 1,
+    });
+    const recs = recommend(
+      detail({
+        growth: [
+          g(1000, 0), // cold start (skipped)
+          g(11000, 10500), // grew 10000, miss 500 — healthy
+          g(12000, 11500), // grew 1000, miss 500 — healthy
+          g(13000, 12500), // grew 1000, miss 500 — healthy
+          // grew only 500 but missed 7000 → excess ~6500 = real reset
+          g(13500, 6500),
+        ],
+      }),
+    );
+    expect(recs.some((r) => r.kind === "prefix_cache_reset")).toBe(true);
+  });
+
+  it("stays quiet when a large miss is explained by new content", () => {
+    const g = (input: number, cached: number) => ({
+      id: `r${input}`,
+      started_at: null,
+      input_tokens: input,
+      cached_input_tokens: cached,
+      output_tokens: 1,
+    });
+    // Turn adds 8000 tokens (a big file read) and misses 8000 — all new, no reset.
+    const recs = recommend(
+      detail({
+        growth: [
+          g(1000, 0),
+          g(11000, 10500),
+          g(12000, 11500),
+          g(13000, 12500),
+          g(21000, 13000), // grew 8000, miss 8000 → excess 0
+          g(21500, 21000),
+        ],
+      }),
+    );
+    expect(recs.some((r) => r.kind === "prefix_cache_reset")).toBe(false);
+  });
+
+  it("stays quiet on a healthy append-only session (steady small miss)", () => {
+    const g = (input: number, cached: number) => ({
+      id: `r${input}`,
+      started_at: null,
+      input_tokens: input,
+      cached_input_tokens: cached,
+      output_tokens: 1,
+    });
+    const recs = recommend(
+      detail({
+        growth: [
+          g(1000, 0),
+          g(11000, 10500),
+          g(12000, 11500),
+          g(13000, 12500),
+          g(14000, 13500),
+          g(15000, 14500),
+        ],
+      }),
+    );
+    expect(recs.some((r) => r.kind === "prefix_cache_reset")).toBe(false);
+  });
+
   it("flags a search→read pattern as evidence for a locate-and-read tool", () => {
     const recs = recommend(
       detail({

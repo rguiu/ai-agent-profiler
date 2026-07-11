@@ -25,6 +25,7 @@ config.toml
 config.local.*
 .env
 .env.*
+.claude
 
 # Node
 node_modules/

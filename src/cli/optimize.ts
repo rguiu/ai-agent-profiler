@@ -1,5 +1,5 @@
 import { loadConfig } from "../config/index.js";
-import { simulateOptimize } from "../optimize/index.js";
+import { simulateOptimize, overridesFor } from "../optimize/index.js";
 import { openStore } from "../store/index.js";
 
 export async function optimize(args: string[]): Promise<void> {
@@ -26,9 +26,22 @@ export async function optimize(args: string[]): Promise<void> {
       return;
     }
 
-    const result = await simulateOptimize(store, sessionId, {
-      pruneStale: enableAll,
-    });
+    // Resolve provider from the session's first request, then apply
+    // profile-based overrides (e.g. insertBreakpoints for Bedrock/Anthropic).
+    const detail = store.getSession(sessionId);
+    const provider = detail?.requests?.[0]?.provider ?? "";
+    const profileOverrides = overridesFor("auto", provider);
+    const optimizeConfig = {
+      ...(profileOverrides ?? {}),
+      ...(enableAll ? { pruneStale: true } : {}),
+    };
+
+    const result = await simulateOptimize(
+      store,
+      sessionId,
+      optimizeConfig,
+      config.pricing,
+    );
 
     console.log(`\nOptimize dry-run: ${result.sessionId}`);
     console.log(`${"─".repeat(60)}`);
@@ -46,6 +59,24 @@ export async function optimize(args: string[]): Promise<void> {
       for (const [type, data] of Object.entries(result.byType)) {
         console.log(
           `  ${type.padEnd(15)} ${String(data.count).padStart(4)} actions  ~${n(data.tokensSaved)} tokens saved`,
+        );
+      }
+      console.log();
+    }
+
+    if (result.cache) {
+      const { baseline, optimized, inputCostDelta } = result.cache;
+      console.log("DeepSeek prefix-cache cost (input side):");
+      console.log(
+        `  baseline   hit ${pct(baseline.hitRate)}  miss ${n(baseline.missTokens)} tok${money(baseline.inputCost)}`,
+      );
+      console.log(
+        `  optimized  hit ${pct(optimized.hitRate)}  miss ${n(optimized.missTokens)} tok${money(optimized.inputCost)}`,
+      );
+      if (inputCostDelta !== null) {
+        const verb = inputCostDelta > 0 ? "COSTS MORE" : "saves";
+        console.log(
+          `  → optimize layer ${verb} $${Math.abs(inputCostDelta).toFixed(4)} on input via cache effect`,
         );
       }
       console.log();
@@ -71,4 +102,12 @@ function n(value: number): string {
   return Math.round(value)
     .toString()
     .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function pct(rate: number): string {
+  return `${Math.round(rate * 100)}%`;
+}
+
+function money(cost: number | null): string {
+  return cost === null ? "" : `  $${cost.toFixed(4)}`;
 }

@@ -578,4 +578,333 @@ describe("OptimizeLayer", () => {
       expect(layer.getTotalTokensSaved()).toBeGreaterThan(0);
     });
   });
+
+  describe("stableTruncate (cache-safe)", () => {
+    const bigResult = Array.from({ length: 150 }, (_, i) => `line ${i}`).join(
+      "\n",
+    );
+    const bodyWith = (content: string): Buffer =>
+      Buffer.from(
+        JSON.stringify({
+          messages: [
+            {
+              role: "assistant",
+              tool_calls: [
+                { id: "c1", function: { name: "bash", arguments: "{}" } },
+              ],
+            },
+            { role: "tool", tool_call_id: "c1", content },
+          ],
+        }),
+      );
+
+    it("truncates large OpenAI-format tool results in the messages array", () => {
+      const layer = new OptimizeLayer({
+        stableTruncate: true,
+        truncate: false,
+        truncateThreshold: 200,
+      });
+      const out = layer.rewriteRequestBody(bodyWith(bigResult));
+      const parsed = JSON.parse(out.toString()) as {
+        messages: Array<{ content: string }>;
+      };
+      expect(parsed.messages[1]!.content).toContain("lines omitted");
+      expect(layer.getActions()[0]!.type).toBe("stable_truncate");
+    });
+
+    it("is byte-stable: the same result truncates identically every request", () => {
+      const layer = new OptimizeLayer({
+        stableTruncate: true,
+        truncate: false,
+        truncateThreshold: 200,
+      });
+      const first = layer.rewriteRequestBody(bodyWith(bigResult)).toString();
+      // Later request replays the ALREADY truncated history (agent re-sends it).
+      const replayed = JSON.parse(first) as {
+        messages: Array<{ content: string }>;
+      };
+      const second = layer
+        .rewriteRequestBody(bodyWith(replayed.messages[1]!.content))
+        .toString();
+      // The truncated content must be left untouched on replay.
+      const p1 = JSON.parse(first) as { messages: Array<{ content: string }> };
+      const p2 = JSON.parse(second) as { messages: Array<{ content: string }> };
+      expect(p2.messages[1]!.content).toBe(p1.messages[1]!.content);
+    });
+
+    it("records each distinct result only once across requests", () => {
+      const layer = new OptimizeLayer({
+        stableTruncate: true,
+        truncate: false,
+        truncateThreshold: 200,
+      });
+      layer.rewriteRequestBody(bodyWith(bigResult));
+      layer.rewriteRequestBody(bodyWith(bigResult));
+      const truncations = layer
+        .getActions()
+        .filter((a) => a.type === "stable_truncate");
+      expect(truncations).toHaveLength(1);
+    });
+
+    it("leaves small results untouched", () => {
+      const layer = new OptimizeLayer({
+        stableTruncate: true,
+        truncate: false,
+        truncateThreshold: 200,
+      });
+      const out = layer.rewriteRequestBody(bodyWith("short\noutput"));
+      const parsed = JSON.parse(out.toString()) as {
+        messages: Array<{ content: string }>;
+      };
+      expect(parsed.messages[1]!.content).toBe("short\noutput");
+      expect(layer.getActions()).toHaveLength(0);
+    });
+  });
+
+  describe("shapeTestOutput (cache-safe)", () => {
+    const passLog = [
+      "> node --test test/*.test.js",
+      "",
+      ...Array.from({ length: 40 }, (_, i) => `ok ${i + 1} - case ${i + 1}`),
+      "# tests 40",
+      "# pass 40",
+      "# fail 0",
+    ].join("\n");
+    const bodyWith = (content: string): Buffer =>
+      Buffer.from(
+        JSON.stringify({
+          messages: [
+            {
+              role: "assistant",
+              tool_calls: [
+                { id: "c1", function: { name: "bash", arguments: "{}" } },
+              ],
+            },
+            { role: "tool", tool_call_id: "c1", content },
+          ],
+        }),
+      );
+
+    it("drops passing-test spam but keeps summary lines", () => {
+      const layer = new OptimizeLayer({
+        shapeTestOutput: true,
+        stableTruncate: false,
+      });
+      const out = layer.rewriteRequestBody(bodyWith(passLog));
+      const c = (
+        JSON.parse(out.toString()) as { messages: Array<{ content: string }> }
+      ).messages[1]!.content;
+      expect(c).not.toContain("ok 20 - case 20");
+      expect(c).toContain("# fail 0");
+      expect(c).toContain("test output shaped");
+      expect(layer.getActions()[0]!.type).toBe("shape_test_output");
+    });
+
+    it("keeps failing lines", () => {
+      const failLog = passLog.replace("ok 7 - case 7", "not ok 7 - case 7");
+      const layer = new OptimizeLayer({
+        shapeTestOutput: true,
+        stableTruncate: false,
+      });
+      const out = layer.rewriteRequestBody(bodyWith(failLog));
+      const c = (
+        JSON.parse(out.toString()) as { messages: Array<{ content: string }> }
+      ).messages[1]!.content;
+      expect(c).toContain("not ok 7 - case 7");
+    });
+
+    it("is idempotent: shaped output is left untouched on replay", () => {
+      const layer = new OptimizeLayer({
+        shapeTestOutput: true,
+        stableTruncate: false,
+      });
+      const first = (
+        JSON.parse(layer.rewriteRequestBody(bodyWith(passLog)).toString()) as {
+          messages: Array<{ content: string }>;
+        }
+      ).messages[1]!.content;
+      const second = (
+        JSON.parse(layer.rewriteRequestBody(bodyWith(first)).toString()) as {
+          messages: Array<{ content: string }>;
+        }
+      ).messages[1]!.content;
+      expect(second).toBe(first);
+    });
+
+    it("ignores non-test tool output", () => {
+      const layer = new OptimizeLayer({
+        shapeTestOutput: true,
+        stableTruncate: false,
+      });
+      const prose = "Here is a summary of the file.\nIt has some content.\n";
+      const out = layer.rewriteRequestBody(bodyWith(prose));
+      const c = (
+        JSON.parse(out.toString()) as { messages: Array<{ content: string }> }
+      ).messages[1]!.content;
+      expect(c).toBe(prose);
+      expect(layer.getActions()).toHaveLength(0);
+    });
+  });
+
+  describe("prefixProbe (diagnostic)", () => {
+    const body = (msgs: unknown[], tools?: unknown[]): Buffer =>
+      Buffer.from(
+        JSON.stringify(tools ? { messages: msgs, tools } : { messages: msgs }),
+      );
+    const filler = (n: number): string =>
+      Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
+
+    it("stays quiet for append-only growth", () => {
+      const layer = new OptimizeLayer({ prefixProbe: true });
+      const msgs: unknown[] = [{ role: "user", content: filler(500) }];
+      layer.rewriteRequestBody(body(msgs));
+      msgs.push({ role: "assistant", content: filler(500) });
+      layer.rewriteRequestBody(body(msgs));
+      msgs.push({ role: "tool", content: filler(500) });
+      layer.rewriteRequestBody(body(msgs));
+      expect(
+        layer.getActions().filter((a) => a.type === "prefix_break"),
+      ).toHaveLength(0);
+    });
+
+    it("stays quiet when tool defs are unchanged but messages grow (opencode ordering)", () => {
+      const layer = new OptimizeLayer({ prefixProbe: true });
+      const tools = [{ function: { name: "bash", description: filler(200) } }];
+      const msgs: unknown[] = [{ role: "system", content: filler(300) }];
+      layer.rewriteRequestBody(body(msgs, tools));
+      msgs.push({ role: "assistant", content: "step 1" });
+      layer.rewriteRequestBody(body(msgs, tools));
+      msgs.push({ role: "assistant", content: "step 2" });
+      layer.rewriteRequestBody(body(msgs, tools));
+      expect(
+        layer.getActions().filter((a) => a.type === "prefix_break"),
+      ).toHaveLength(0);
+    });
+
+    it("flags a break when the system prompt changes", () => {
+      const layer = new OptimizeLayer({ prefixProbe: true });
+      const tail: unknown[] = [
+        { role: "assistant", content: filler(500) },
+        { role: "user", content: filler(500) },
+      ];
+      layer.rewriteRequestBody(
+        body([{ role: "system", content: "AAA" }, ...tail]),
+      );
+      layer.rewriteRequestBody(
+        body([{ role: "system", content: "BBB" }, ...tail]),
+      );
+      const breaks = layer
+        .getActions()
+        .filter((a) => a.type === "prefix_break");
+      expect(breaks).toHaveLength(1);
+      expect(breaks[0]!.detail).toContain("prefix edited");
+    });
+
+    it("flags a break when a prior message is edited (not appended)", () => {
+      const layer = new OptimizeLayer({ prefixProbe: true });
+      const msgs: unknown[] = [
+        { role: "user", content: "task" },
+        { role: "tool", content: filler(400) },
+      ];
+      layer.rewriteRequestBody(body(msgs));
+      // Edit the OLD tool result in place, then append a new turn.
+      const edited: unknown[] = [
+        { role: "user", content: "task" },
+        { role: "tool", content: filler(50) },
+        { role: "assistant", content: "next" },
+      ];
+      layer.rewriteRequestBody(body(edited));
+      const breaks = layer
+        .getActions()
+        .filter((a) => a.type === "prefix_break");
+      expect(breaks).toHaveLength(1);
+    });
+  });
+
+  describe("frozenCompact (long-session compaction)", () => {
+    // ~2000-token message so a handful blow past the threshold.
+    const bigMsg = (role: string, tag: string): Record<string, unknown> => ({
+      role,
+      content: Array.from(
+        { length: 120 },
+        (_, i) => `${tag} line ${i} lorem ipsum dolor sit amet consectetur`,
+      ).join("\n"),
+    });
+    const buildBody = (msgs: unknown[]): Buffer =>
+      Buffer.from(JSON.stringify({ messages: msgs }));
+    const cfg = {
+      frozenCompact: true,
+      stableTruncate: false,
+      shapeTestOutput: false,
+      prefixProbe: false,
+      compactThreshold: 8000,
+      compactKeepTail: 3,
+    };
+
+    // Simulate an agent that re-sends the full growing history each turn,
+    // returning the messages actually emitted upstream.
+    const runTurn = (layer: OptimizeLayer, history: unknown[]): unknown[] => {
+      const out = layer.rewriteRequestBody(buildBody(history));
+      return (JSON.parse(out.toString()) as { messages: unknown[] }).messages;
+    };
+
+    it("does not compact below the threshold", () => {
+      const layer = new OptimizeLayer(cfg);
+      const history: unknown[] = [bigMsg("system", "SYS"), bigMsg("user", "A")];
+      runTurn(layer, history);
+      expect(
+        layer.getActions().filter((a) => a.type === "frozen_compact"),
+      ).toHaveLength(0);
+    });
+
+    it("compacts once past the threshold and keeps the tail intact", () => {
+      const layer = new OptimizeLayer(cfg);
+      const history: unknown[] = [bigMsg("system", "SYS")];
+      for (let i = 0; i < 12; i++) history.push(bigMsg("user", `M${i}`));
+      const emitted = runTurn(layer, history) as Array<{
+        role: string;
+        content: string;
+      }>;
+      const compactions = layer
+        .getActions()
+        .filter((a) => a.type === "frozen_compact");
+      expect(compactions).toHaveLength(1);
+      // anchor + summary + kept tail (3)
+      expect(emitted).toHaveLength(1 + 1 + 3);
+      expect(emitted[1]!.content).toContain("compacted");
+      // the last 3 originals survive untouched
+      expect(emitted[emitted.length - 1]!.content).toContain("M11");
+    });
+
+    it("FREEZES the boundary: no new compaction on the next few turns", () => {
+      const layer = new OptimizeLayer(cfg);
+      const history: unknown[] = [bigMsg("system", "SYS")];
+      for (let i = 0; i < 12; i++) history.push(bigMsg("user", `M${i}`));
+      runTurn(layer, history); // triggers first compaction
+
+      // Agent appends 2 more turns (each still small relative to threshold).
+      history.push(bigMsg("assistant", "R12"));
+      const e1 = runTurn(layer, history) as Array<{ content: string }>;
+      history.push(bigMsg("user", "M13"));
+      const e2 = runTurn(layer, history) as Array<{ content: string }>;
+
+      // Still exactly ONE compaction action — the boundary held.
+      expect(
+        layer.getActions().filter((a) => a.type === "frozen_compact"),
+      ).toHaveLength(1);
+      // Summary text is byte-identical across turns (no reset).
+      expect(e1[1]!.content).toBe(e2[1]!.content);
+    });
+
+    it("summary is deterministic for identical folded content", () => {
+      const build = (): string => {
+        const layer = new OptimizeLayer(cfg);
+        const history: unknown[] = [bigMsg("system", "SYS")];
+        for (let i = 0; i < 12; i++) history.push(bigMsg("user", `M${i}`));
+        const e = runTurn(layer, history) as Array<{ content: string }>;
+        return e[1]!.content;
+      };
+      expect(build()).toBe(build());
+    });
+  });
 });

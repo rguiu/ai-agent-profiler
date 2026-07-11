@@ -8,7 +8,12 @@ import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
 import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
-import { OptimizeLayer, type OptimizeConfig } from "../optimize/index.js";
+import {
+  OptimizeLayer,
+  overridesFor,
+  type OptimizeConfig,
+  type OptimizeProfile,
+} from "../optimize/index.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
@@ -36,6 +41,25 @@ export interface ProxyState {
 
 export interface ProxyOptions {
   optimize?: Partial<OptimizeConfig> | boolean;
+}
+
+export type { OptimizeProfile } from "../optimize/index.js";
+export type OptimizeConfigWithProfile = Partial<OptimizeConfig> & {
+  profile?: OptimizeProfile;
+};
+
+// Resolve the effective optimize config for a provider. The provider→strategy
+// mapping now lives in the optimize profile registry (src/optimize/profiles.ts);
+// this just merges the resolved overrides (if any) onto the base config.
+// "auto" applies cache-safe overrides only to prefix-cache providers;
+// "cache-safe" forces them everywhere; "default" leaves the full layer intact.
+export function resolveOptimizeConfig(
+  base: OptimizeConfigWithProfile | undefined,
+  provider: string,
+): Partial<OptimizeConfig> | undefined {
+  const overrides = overridesFor(base?.profile ?? "auto", provider);
+  if (!overrides) return base;
+  return { ...base, ...overrides };
 }
 
 export function createProxyServer(
@@ -156,7 +180,9 @@ function handle(
   if (optimizeLayers && route.sessionId) {
     let layer = optimizeLayers.get(route.sessionId);
     if (!layer) {
-      layer = new OptimizeLayer(optimizeConfig);
+      layer = new OptimizeLayer(
+        resolveOptimizeConfig(optimizeConfig, route.provider),
+      );
       optimizeLayers.set(route.sessionId, layer);
     }
     optimizer = layer;

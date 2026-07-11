@@ -18,7 +18,13 @@ describe("PriorityQueue", () => {
     const items = [7, 3, 9, 1, 5, 8, 2, 6, 4, 10];
     items.forEach((n, i) => pq.push(`item-${n}`, n));
     const result = [];
-    while (!pq.isEmpty()) result.push(pq.pop());
+    for (let guard = 0; !pq.isEmpty(); guard++) {
+      assert.ok(
+        guard < items.length,
+        "pop() did not drain the queue (heap/pop is broken)",
+      );
+      result.push(pq.pop());
+    }
     assert.deepEqual(
       result,
       items.sort((a, b) => a - b).map((n) => `item-${n}`),
@@ -86,7 +92,11 @@ describe("PriorityQueue", () => {
     }
     priorities.forEach((p) => pq.push(`item-${p}`, p));
     let prev = -1;
-    while (!pq.isEmpty()) {
+    for (let guard = 0; !pq.isEmpty(); guard++) {
+      assert.ok(
+        guard < 100,
+        "pop() did not drain the queue (heap/pop is broken)",
+      );
       const item = pq.pop();
       const num = parseInt(item.split("-")[1]);
       assert.ok(num > prev, `Expected ${num} > ${prev}`);

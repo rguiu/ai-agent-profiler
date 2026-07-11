@@ -15,38 +15,55 @@ import { Pipeline } from "../src/pipeline.js";
 import { EventBus } from "../src/event-bus.js";
 
 // Run a scheduler scenario in a worker thread so a *synchronous* busy-loop in
-// Scheduler.run() (a real bug: spinning when a task's deps are permanently
-// unsatisfiable) can be force-terminated. An in-process setTimeout/Promise.race
-// guard cannot interrupt a synchronous loop — the event loop never yields — so
-// without this the whole `node --test` process hangs and gets SIGKILLed,
-// zeroing every test. Returns { ran, completed } where `completed` is false if
-// the scheduler had to be terminated for hanging.
-function runSchedulerInWorker(schedulerUrl, timeoutMs = 3000) {
+// Scheduler.run() (a real bug: spinning when a task's deps can never be
+// satisfied, or when a ready task is parked without progress) can be
+// force-terminated. An in-process setTimeout/Promise.race guard cannot
+// interrupt a synchronous loop — the event loop never yields — so without this
+// the whole `node --test` process hangs and gets SIGKILLed, zeroing every test.
+//
+// `tasks` is a list of serialisable specs: { id, deps?, priority?, maxRetries?,
+// failTimes? }. Each task's fn posts its id when it runs; `failTimes` makes it
+// throw the first N runs (to exercise retry). Returns { ran, started, completed }
+// where `completed` is false if the scheduler had to be terminated for hanging.
+function runSchedulerInWorker(schedulerUrl, tasks, timeoutMs = 3000) {
   const code = `
-    const { parentPort } = require("node:worker_threads");
+    const { parentPort, workerData } = require("node:worker_threads");
     import(${JSON.stringify(schedulerUrl)}).then(async ({ Scheduler }) => {
-      const post = (id) => parentPort.postMessage({ type: "ran", id });
       const s = new Scheduler({ maxConcurrency: 1 });
-      s.add({ id: "orphan", fn: () => post("orphan"), deps: ["nonexistent"], priority: 1 });
-      s.add({ id: "other", fn: () => post("other"), priority: 2 });
+      const fails = {};
+      if (s.bus && s.bus.on) s.bus.on("task:started", (e) => parentPort.postMessage({ type: "started", id: e.id }));
+      for (const t of workerData.tasks) {
+        s.add({
+          id: t.id,
+          deps: t.deps ?? [],
+          priority: t.priority,
+          maxRetries: t.maxRetries,
+          fn: () => {
+            if (t.failTimes && (fails[t.id] = (fails[t.id] || 0) + 1) <= t.failTimes) throw new Error("fail");
+            parentPort.postMessage({ type: "ran", id: t.id });
+          },
+        });
+      }
       await s.run();
       parentPort.postMessage({ type: "done" });
     }).catch((e) => parentPort.postMessage({ type: "error", message: String(e) }));
   `;
   return new Promise((resolve) => {
     const ran = [];
-    const w = new Worker(code, { eval: true });
+    const started = [];
+    const w = new Worker(code, { eval: true, workerData: { tasks } });
     let settled = false;
     const finish = (completed) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       w.terminate();
-      resolve({ ran, completed });
+      resolve({ ran, started, completed });
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
     w.on("message", (m) => {
       if (m.type === "ran") ran.push(m.id);
+      else if (m.type === "started") started.push(m.id);
       else if (m.type === "done" || m.type === "error") finish(true);
     });
     w.on("error", () => finish(true));
@@ -69,7 +86,14 @@ describe("PriorityQueue — bubbleUp edge cases", () => {
     pq.push("g", 4);
     pq.push("h", 3);
     const result = [];
-    while (!pq.isEmpty()) result.push(pq.pop());
+    // Bounded drain: a broken heap must fail here, not spin forever.
+    for (let guard = 0; !pq.isEmpty(); guard++) {
+      assert.ok(
+        guard < 8,
+        "pop() did not drain the queue (heap/pop is broken)",
+      );
+      result.push(pq.pop());
+    }
     assert.deepEqual(result, ["h", "g", "f", "e", "d", "c", "b", "a"]);
   });
 
@@ -77,7 +101,11 @@ describe("PriorityQueue — bubbleUp edge cases", () => {
     const pq = new PriorityQueue();
     for (let i = 100; i >= 1; i--) pq.push(`v${i}`, i);
     let prev = 0;
-    while (!pq.isEmpty()) {
+    for (let guard = 0; !pq.isEmpty(); guard++) {
+      assert.ok(
+        guard < 100,
+        "pop() did not drain the queue (heap/pop is broken)",
+      );
       const item = pq.pop();
       const n = parseInt(item.slice(1), 10);
       assert.ok(n >= prev, `out of order: ${n} < ${prev}`);
@@ -146,7 +174,25 @@ describe("PriorityQueue.merge — edge cases", () => {
     const pq = new PriorityQueue();
     pq.push("x", 1);
     pq.push("y", 2);
-    pq.merge(pq);
+    // A correct merge snapshots `other`'s entries first. A naive impl that
+    // iterates other.#heap while pushing into it will grow unboundedly when
+    // other === this — detect that and fail fast instead of hanging/OOMing.
+    const before = pq.size;
+    let guard = 0;
+    const origPush = pq.push.bind(pq);
+    pq.push = (item, priority) => {
+      if (++guard > before * 4) {
+        throw new Error(
+          "merge(self) grew unboundedly — must snapshot entries before pushing",
+        );
+      }
+      return origPush(item, priority);
+    };
+    try {
+      pq.merge(pq);
+    } finally {
+      pq.push = origPush;
+    }
     assert.equal(pq.size, 2);
   });
 
@@ -158,8 +204,12 @@ describe("PriorityQueue.merge — edge cases", () => {
     small.merge(large);
     assert.equal(small.size, 51);
     let prev = -1;
-    // Verify full heap order by popping all
-    while (!small.isEmpty()) {
+    // Verify full heap order by popping all (bounded so a broken merge/heap fails)
+    for (let guard = 0; !small.isEmpty(); guard++) {
+      assert.ok(
+        guard < 51,
+        "pop() did not drain the queue (merge/heap is broken)",
+      );
       const item = small.pop();
       const n = item.startsWith("s") ? 100 : parseInt(item.slice(1), 10);
       assert.ok(n >= prev, `out of order: ${n} < ${prev}`);
@@ -185,20 +235,24 @@ describe("PriorityQueue.merge — edge cases", () => {
 
 describe("Scheduler — dependency edge cases", () => {
   it("blocks task until ALL deps complete (not just one)", async () => {
-    const order = [];
-    const s = new Scheduler({ maxConcurrency: 1 });
-    s.add({ id: "a", fn: () => order.push("a"), priority: 1 });
-    s.add({ id: "b", fn: () => order.push("b"), priority: 1 });
-    s.add({
-      id: "c",
-      fn: () => order.push("c"),
-      deps: ["a", "b"],
-      priority: 2,
-    });
-    await s.run();
-    const aIdx = order.indexOf("a");
-    const bIdx = order.indexOf("b");
-    const cIdx = order.indexOf("c");
+    // Run in a worker: a buggy scheduler can synchronously busy-loop when a
+    // task's deps aren't all satisfied, which an in-process await cannot
+    // interrupt. The worker guard turns that hang into a clean failure.
+    const schedulerUrl = new URL("../src/scheduler.js", import.meta.url).href;
+    const { ran, completed } = await runSchedulerInWorker(
+      schedulerUrl,
+      [
+        { id: "a", priority: 1 },
+        { id: "b", priority: 1 },
+        { id: "c", deps: ["a", "b"], priority: 2 },
+      ],
+      3000,
+    );
+    assert.ok(completed, "scheduler busy-looped instead of draining tasks");
+    const aIdx = ran.indexOf("a");
+    const bIdx = ran.indexOf("b");
+    const cIdx = ran.indexOf("c");
+    assert.ok(cIdx !== -1, `"c" must run once its deps complete`);
     assert.ok(aIdx < cIdx, `"a" must run before "c"`);
     assert.ok(bIdx < cIdx, `"b" must run before "c"`);
   });
@@ -224,7 +278,14 @@ describe("Scheduler — dependency edge cases", () => {
     // parks orphan without busy-spinning. We run in a worker so a synchronous
     // spin-loop is force-terminated instead of hanging the whole test process.
     const schedulerUrl = new URL("../src/scheduler.js", import.meta.url).href;
-    const { ran, completed } = await runSchedulerInWorker(schedulerUrl, 3000);
+    const { ran, completed } = await runSchedulerInWorker(
+      schedulerUrl,
+      [
+        { id: "orphan", deps: ["nonexistent"], priority: 1 },
+        { id: "other", priority: 2 },
+      ],
+      3000,
+    );
     // The valid task must have run (whether or not run() ever returned).
     assert.ok(ran.includes("other"), "unblocked task 'other' should have run");
     assert.ok(!ran.includes("orphan"), "orphan task must not have run");
