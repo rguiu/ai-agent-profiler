@@ -6,7 +6,7 @@ function makeRequest(messages: unknown[], tools?: unknown[]) {
 }
 
 describe("cache-aware pruning (Idea B)", () => {
-  it("skips pruning messages at or before the last breakpoint", () => {
+  it("prunes messages at breakpoint but tags cacheRate=true for observability", () => {
     const layer = new OptimizeLayer({
       pruneStale: true,
       insertBreakpoints: true,
@@ -39,17 +39,16 @@ describe("cache-aware pruning (Idea B)", () => {
       { role: "user", content: [{ type: "text", text: "hello" }] },
     ];
 
-    // Turn 1+2+3 = 3 assistant msgs; pruneAfterTurns=1 => threshold=turn-1
-    // We call rewrite multiple times to advance the turn counter
     layer.rewriteRequestBody(makeRequest(messages));
     layer.rewriteRequestBody(makeRequest(messages));
-    const out = layer.rewriteRequestBody(makeRequest(messages));
-    const parsed = JSON.parse(out.toString());
+    layer.rewriteRequestBody(makeRequest(messages));
 
-    // Message at index 0 has cache_control so it should NOT be pruned
-    const firstMsg = parsed.messages[0];
-    const block = firstMsg.content[0];
-    expect(block.content).toBe(bigResult);
+    // Message at index 0 has cache_control — pruning now proceeds but
+    // the action is tagged cacheRate=true (was inside cached prefix)
+    const pruneActions = layer.getActions().filter((a) => a.type === "prune_stale");
+    expect(pruneActions.length).toBeGreaterThan(0);
+    const inCache = pruneActions.filter((a) => a.cacheRate === true);
+    expect(inCache.length).toBeGreaterThan(0);
   });
 
   it("prunes messages after the last breakpoint normally", () => {

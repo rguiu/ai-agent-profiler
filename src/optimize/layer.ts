@@ -614,7 +614,9 @@ export class OptimizeLayer {
     const threshold = this.turn - this.config.pruneAfterTurns;
     if (threshold <= 0) return null;
 
-    // Idea B: cache-aware pruning — don't prune messages in the cached prefix
+    // Track last breakpoint position for cacheRate attribution (observability),
+    // but do NOT block pruning — benchmark proved that aggressive pruning
+    // dominates cost savings even when it occasionally breaks cached regions.
     let lastBreakpointIdx = -1;
     if (this.config.insertBreakpoints) {
       for (let i = 0; i < messages.length; i++) {
@@ -638,7 +640,6 @@ export class OptimizeLayer {
       if (msg.role === "assistant") msgTurn++;
       if (msg.role !== "user" && msg.role !== "tool") return msg;
       if (msgTurn > threshold) return msg;
-      if (lastBreakpointIdx >= 0 && msgIdx <= lastBreakpointIdx) return msg;
 
       if (Array.isArray(msg.content)) {
         const rewritten = msg.content.map((block: ContentBlock) => {
@@ -1064,12 +1065,18 @@ export class OptimizeLayer {
     }
     if (lastUserIdx < 0) return null;
 
-    // Collect volatile blocks from all user messages EXCEPT the last
+    // Collect volatile blocks from user messages EXCEPT the last one and
+    // messages containing tool_result blocks (removing text from those breaks
+    // the tool_use→tool_result pairing constraint).
     const movedBlocks: ContentBlock[] = [];
     let movedTokens = 0;
     const result = messages.map((msg, idx) => {
       if (msg.role !== "user" || idx === lastUserIdx) return msg;
       if (!Array.isArray(msg.content)) return msg;
+      const hasToolResult = (msg.content as ContentBlock[]).some(
+        (b) => b.type === "tool_result",
+      );
+      if (hasToolResult) return msg;
 
       const kept: ContentBlock[] = [];
       let msgChanged = false;
@@ -1093,14 +1100,17 @@ export class OptimizeLayer {
 
     if (movedBlocks.length === 0) return null;
 
-    // Prepend moved blocks to the last user message
+    // Don't inject into a message that contains tool_results (breaks API constraints)
     const lastMsg = result[lastUserIdx]!;
-    const existingContent = Array.isArray(lastMsg.content)
+    const lastContent = Array.isArray(lastMsg.content)
       ? (lastMsg.content as ContentBlock[])
       : typeof lastMsg.content === "string"
         ? [{ type: "text", text: lastMsg.content } as ContentBlock]
         : [];
-    result[lastUserIdx] = { ...lastMsg, content: [...movedBlocks, ...existingContent] };
+    const lastHasToolResult = lastContent.some((b) => b.type === "tool_result");
+    if (lastHasToolResult) return null;
+
+    result[lastUserIdx] = { ...lastMsg, content: [...movedBlocks, ...lastContent] };
 
     this.actions.push({
       type: "reorder_volatile",
