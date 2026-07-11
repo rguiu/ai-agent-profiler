@@ -16,3 +16,11 @@ export {
   CACHE_BLOCK_TOKENS,
   type TurnCache,
 } from "./cache-cost.js";
+export {
+  PROVIDER_CACHE_FAMILY,
+  cacheFamilyFor,
+  appliesCacheSafe,
+  overridesFor,
+  type OptimizeProfile,
+  type CacheFamily,
+} from "./profiles.js";

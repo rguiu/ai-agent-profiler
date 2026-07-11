@@ -10,8 +10,9 @@ import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
 import {
   OptimizeLayer,
-  CACHE_SAFE_OVERRIDES,
+  overridesFor,
   type OptimizeConfig,
+  type OptimizeProfile,
 } from "../optimize/index.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
@@ -42,27 +43,23 @@ export interface ProxyOptions {
   optimize?: Partial<OptimizeConfig> | boolean;
 }
 
-// Providers with automatic prompt-prefix caching where prefix-editing
-// optimizations backfire (re-bill downstream context at the miss rate).
-const PREFIX_CACHE_PROVIDERS = new Set(["deepseek"]);
-
-export type OptimizeProfile = "auto" | "default" | "cache-safe";
+export type { OptimizeProfile } from "../optimize/index.js";
 export type OptimizeConfigWithProfile = Partial<OptimizeConfig> & {
   profile?: OptimizeProfile;
 };
 
-// Resolve the effective optimize config for a provider, applying cache-safe
-// overrides when the profile calls for it. "auto" applies them only to
-// prefix-cache providers; "cache-safe" forces them everywhere; "default"
-// leaves the full layer intact (Anthropic-style explicit breakpoints).
+// Resolve the effective optimize config for a provider. The provider→strategy
+// mapping now lives in the optimize profile registry (src/optimize/profiles.ts);
+// this just merges the resolved overrides (if any) onto the base config.
+// "auto" applies cache-safe overrides only to prefix-cache providers;
+// "cache-safe" forces them everywhere; "default" leaves the full layer intact.
 export function resolveOptimizeConfig(
   base: OptimizeConfigWithProfile | undefined,
   provider: string,
 ): Partial<OptimizeConfig> | undefined {
-  const profile = base?.profile ?? "auto";
-  if (profile === "default") return base;
-  if (profile === "auto" && !PREFIX_CACHE_PROVIDERS.has(provider)) return base;
-  return { ...base, ...CACHE_SAFE_OVERRIDES };
+  const overrides = overridesFor(base?.profile ?? "auto", provider);
+  if (!overrides) return base;
+  return { ...base, ...overrides };
 }
 
 export function createProxyServer(
