@@ -37,10 +37,24 @@ upstream = "https://bedrock-runtime.eu-west-1.amazonaws.com"
 # Enable in config or override at runtime with `aap serve --optimize`.
 [optimize]
 enabled = false               # set true to always optimise without --optimize flag
+profile = "auto"              # auto|default|cache-safe. auto disables prefix-editing
+                              # strategies (collapseSystem/pruneUnusedTools/pruneStale)
+                              # for prefix-cache providers (deepseek) where they backfire;
+                              # cache-safe forces this everywhere; default keeps full layer.
 dedup = true                  # suppress identical tool re-reads (unchanged content)
 truncate = true               # head+tail truncation for large results
 stablePrefix = true           # canonicalise tool defs for prompt-cache stability
 pruneStale = true             # replace old tool results with compact summaries
+stableTruncate = false        # cache-safe: truncate large tool results in place with a
+                              # content-only (position-independent) transform, so bytes are
+                              # identical every request. Auto-enabled for deepseek via profile.
+shapeTestOutput = false       # cache-safe: strip passing-test spam/ANSI/dup lines from test
+                              # & build output deterministically. Auto-enabled for deepseek.
+prefixProbe = false           # diagnostic: log prefix-cache stability between consecutive
+                              # requests (flags accidental prefix edits). Auto-on for deepseek.
+frozenCompact = false         # long sessions: fold old messages into ONE frozen summary once
+                              # context crosses compactThreshold, then keep those bytes stable
+                              # (rare reset, amortised over later turns). Auto-on for deepseek.
 suppressReread = true         # suppress reads of files just written
 collapseSystem = true         # collapse repeated system prompts to a hash stub
 pruneUnusedTools = true       # drop tool defs never called (after pruneUnusedToolsAfter)
@@ -48,6 +62,8 @@ truncateThreshold = 4096      # bytes above which truncation kicks in
 pruneAfterTurns = 6           # prune results older than N assistant turns
 suppressWithinTurns = 2       # suppress re-reads within N turns of a write
 pruneUnusedToolsAfter = 10    # drop never-called tool defs after this many requests
+compactThreshold = 60000      # frozenCompact: emitted-context token budget before folding
+compactKeepTail = 20          # frozenCompact: recent messages always kept full
 
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.

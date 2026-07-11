@@ -8,7 +8,11 @@ import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
 import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
-import { OptimizeLayer, type OptimizeConfig } from "../optimize/index.js";
+import {
+  OptimizeLayer,
+  CACHE_SAFE_OVERRIDES,
+  type OptimizeConfig,
+} from "../optimize/index.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
@@ -36,6 +40,29 @@ export interface ProxyState {
 
 export interface ProxyOptions {
   optimize?: Partial<OptimizeConfig> | boolean;
+}
+
+// Providers with automatic prompt-prefix caching where prefix-editing
+// optimizations backfire (re-bill downstream context at the miss rate).
+const PREFIX_CACHE_PROVIDERS = new Set(["deepseek"]);
+
+export type OptimizeProfile = "auto" | "default" | "cache-safe";
+export type OptimizeConfigWithProfile = Partial<OptimizeConfig> & {
+  profile?: OptimizeProfile;
+};
+
+// Resolve the effective optimize config for a provider, applying cache-safe
+// overrides when the profile calls for it. "auto" applies them only to
+// prefix-cache providers; "cache-safe" forces them everywhere; "default"
+// leaves the full layer intact (Anthropic-style explicit breakpoints).
+export function resolveOptimizeConfig(
+  base: OptimizeConfigWithProfile | undefined,
+  provider: string,
+): Partial<OptimizeConfig> | undefined {
+  const profile = base?.profile ?? "auto";
+  if (profile === "default") return base;
+  if (profile === "auto" && !PREFIX_CACHE_PROVIDERS.has(provider)) return base;
+  return { ...base, ...CACHE_SAFE_OVERRIDES };
 }
 
 export function createProxyServer(
@@ -156,7 +183,9 @@ function handle(
   if (optimizeLayers && route.sessionId) {
     let layer = optimizeLayers.get(route.sessionId);
     if (!layer) {
-      layer = new OptimizeLayer(optimizeConfig);
+      layer = new OptimizeLayer(
+        resolveOptimizeConfig(optimizeConfig, route.provider),
+      );
       optimizeLayers.set(route.sessionId, layer);
     }
     optimizer = layer;

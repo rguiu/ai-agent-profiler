@@ -1,4 +1,4 @@
-import type { SessionDetail } from "../store/index.js";
+import type { SessionDetail, GrowthPoint } from "../store/index.js";
 
 export interface Recommendation {
   kind: string;
@@ -14,6 +14,10 @@ const CACHE_HIT_MIN = 0.5;
 const SEARCH_COMMANDS_MIN = 3;
 const GROWTH_MIN = 10000;
 const GROWTH_FACTOR = 3;
+// Prefix-cache reconciliation: a request whose real cache-miss tokens exceed
+// the content it newly added (miss − input growth) by this many tokens
+// indicates a genuine prefix reset, not just the freshly-appended turn.
+const PREFIX_RESET_ABS_MIN = 5000;
 
 function isReadLike(name: string): boolean {
   return /read|cat|view|open/i.test(name);
@@ -123,6 +127,8 @@ export function recommend(detail: SessionDetail): Recommendation[] {
     });
   }
 
+  reconcilePrefixCache(analysis.growth, recs);
+
   const searchCommands = analysis.commands.filter(
     (c) => c.category === "search",
   );
@@ -144,4 +150,45 @@ export function recommend(detail: SessionDetail): Recommendation[] {
   }
 
   return recs;
+}
+
+// Reconcile the live prefix probe against ground truth: DeepSeek reports real
+// cache-miss tokens per request. Miss tokens are only a problem when they EXCEED
+// what the newly-added content explains: in a healthy append-only session the
+// input grows by ~the appended turn and that same amount legitimately misses.
+// A real prefix reset shows up as `miss − inputGrowth ≫ 0` — the provider
+// recomputed a span that was NOT new. This is the signal the byte-level probe
+// cannot give (it can't see the provider's response).
+function reconcilePrefixCache(
+  growth: GrowthPoint[],
+  recs: Recommendation[],
+): void {
+  const points = growth
+    .map((g) => ({
+      inp: g.input_tokens ?? 0,
+      cached: g.cached_input_tokens ?? 0,
+    }))
+    .filter((p) => p.inp > 0);
+
+  // Need enough turns to establish a baseline and skip the cold-start turn.
+  if (points.length < 5) return;
+
+  const excesses: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const miss = Math.max(0, points[i]!.inp - points[i]!.cached);
+    const growthTok = Math.max(0, points[i]!.inp - points[i - 1]!.inp);
+    // Tokens that missed cache but were NOT newly added this turn.
+    excesses.push(miss - growthTok);
+  }
+
+  const spikes = excesses.filter((e) => e >= PREFIX_RESET_ABS_MIN);
+  if (spikes.length === 0) return;
+
+  const worst = Math.max(...spikes);
+  recs.push({
+    kind: "prefix_cache_reset",
+    severity: spikes.length >= 3 ? "high" : "warn",
+    title: `${spikes.length} request(s) reset the prompt cache (~${n(worst)} tokens re-billed beyond new content)`,
+    detail: `${spikes.length} request(s) missed cache on ~${n(worst)} tokens more than the content added that turn — a prefix edit forced DeepSeek to recompute an already-sent span. Check for mid-history mutations (a re-summarised block, reordered/edited tool defs, or a volatile early field like a timestamp).`,
+  });
 }
