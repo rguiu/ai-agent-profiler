@@ -63,6 +63,8 @@ aap sessions                # List all sessions
 aap optimize <session-id>   # Simulate optimizations on an existing session
 ```
 
+**Zero configuration needed.** All 9 optimization strategies are enabled by default when you pass `--optimize`. The profiler auto-detects your provider (Anthropic/Bedrock vs OpenAI-compatible) and applies the right profile — no need to enable strategies individually or edit config files. Just `aap serve --optimize` and run your agent.
+
 The web UI at `http://localhost:8199` shows sessions, requests, costs, and cache hit rates in real time.
 
 ---

@@ -53,7 +53,7 @@ the LLM.
   high amplification, context duplication, inefficient search→read).
 - **Export & compare** — session reports as Markdown/JSON; sessions side by side.
 - **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data for agent self-introspection.
-- **Optimize layer** — 7 request-rewriting strategies (see below).
+- **Optimize layer** — 9 request-rewriting strategies, all enabled by default (see below).
 
 See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
@@ -241,15 +241,21 @@ aap serve --optimize
 
 ### Strategies
 
-| Strategy           | Default | What it does                                                               |
-| ------------------ | ------- | -------------------------------------------------------------------------- |
-| `dedup`            | ON      | Returns a stub for identical repeated tool calls (unchanged file reads)    |
-| `truncate`         | ON      | Head+tail truncation for results exceeding `truncateThreshold` bytes       |
-| `stablePrefix`     | ON      | Canonicalises tool definitions for byte-stable prompt-cache hits           |
-| `pruneStale`       | ON      | Replaces tool results older than `pruneAfterTurns` with 1-line summaries   |
-| `suppressReread`   | ON      | Suppresses reads of files written within `suppressWithinTurns` turns       |
-| `collapseSystem`   | ON      | Collapses repeated system prompts to a hash stub                           |
-| `pruneUnusedTools` | ON      | Drops tool definitions never called after `pruneUnusedToolsAfter` requests |
+All strategies are **enabled by default** — no per-strategy configuration needed. Just
+pass `--optimize` and everything fires automatically. The profiler auto-detects your
+provider (Anthropic/Bedrock vs OpenAI-compatible) and applies the appropriate profile.
+
+| Strategy             | Default | What it does                                                               |
+| -------------------- | ------- | -------------------------------------------------------------------------- |
+| `pruneStale`         | ON      | Replaces tool results older than `pruneAfterTurns` with 1-line summaries   |
+| `collapseSystem`     | ON      | Collapses repeated system prompts to a hash stub                           |
+| `pruneUnusedTools`   | ON      | Drops tool definitions never called after `pruneUnusedToolsAfter` requests |
+| `insertBreakpoints`  | ON      | Restores/adds `cache_control` markers at optimal positions after pruning   |
+| `stablePrefix`       | ON      | Canonicalises tool definitions for byte-stable prompt-cache hits           |
+| `reorderVolatile`    | ON      | Moves volatile `<system-reminder>` blocks past the cache boundary          |
+| `dedup`              | ON      | Returns a stub for identical repeated tool calls (unchanged file reads)    |
+| `truncate`           | ON      | Head+tail truncation for results exceeding `truncateThreshold` bytes       |
+| `suppressReread`     | ON      | Suppresses reads of files written within `suppressWithinTurns` turns       |
 
 ### Configuration
 
@@ -340,6 +346,7 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`VISION.md`](VISION.md) — why the project exists.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
+- [`docs/OPTIMIZATION-STRATEGIES-REPORT.md`](docs/OPTIMIZATION-STRATEGIES-REPORT.md) — comprehensive guide: how the API works, how caching works, all 9 strategies explained, benchmark results.
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
 - [`benchmarks/REPORT-optimize-layer.md`](benchmarks/REPORT-optimize-layer.md) — full optimize-layer benchmark (DeepSeek vs Claude).
 
