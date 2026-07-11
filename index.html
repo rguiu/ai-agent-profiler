@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Agent Profiler — static demo</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1><a href="#/">AI Agent Profiler</a></h1>
+      <nav>
+        <a href="#/">Dashboard</a>
+        <a href="#/sessions">Sessions</a>
+      </nav>
+      <button id="refresh" title="Reload current view">Refresh</button>
+    </header>
+    <div class="demo-note">
+      Static, read-only demo — sample data from two DeepSeek / opencode
+      benchmark sessions (an <code>iterative-fix-plus</code> baseline and its
+      optimize run). Local paths and credentials have been redacted. Run
+      <code>aap serve</code> locally for the live tool.
+    </div>
+    <main id="app"></main>
+    <footer>
+      Local-first profiler for AI coding agents.
+      <a href="https://github.com/rguiu/ai-agent-profiler">source</a>.
+    </footer>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
