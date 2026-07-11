@@ -50,9 +50,12 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
 // cache_control marker insertion. The full token-reduction layer is fine here
 // (pruneStale, collapseSystem, etc. don't hurt because the cache is
 // client-controlled), but we ADD breakpoint placement for maximum cache hits.
+// NOTE: reorderVolatile is intentionally OFF — simulation showed it degrades
+// cache hit rate by 10-14 percentage points (moves content in the prefix,
+// breaking byte-identity for subsequent tokens).
 export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
   insertBreakpoints: true,
-  reorderVolatile: true,
+  reorderVolatile: false,
 };
 
 export function cacheFamilyFor(provider: string): CacheFamily {

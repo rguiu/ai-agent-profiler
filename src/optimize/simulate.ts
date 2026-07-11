@@ -116,17 +116,20 @@ function simulateRequest(
 ): SimTurn | null {
   let turn: SimTurn | null = null;
 
-  // Find request body — this is what we'd rewrite on the request path
+  // Concatenate all request_body chunks (large bodies are split across events)
+  const bodyBuffers: Buffer[] = [];
   for (const event of events) {
     if (event.type === "request_body" && event.data) {
-      const body = Buffer.from(event.data, "base64");
-      const rewritten = layer.rewriteRequestBody(body);
-      turn = {
-        baseline: body.toString("utf8"),
-        optimized: rewritten.toString("utf8"),
-      };
-      break;
+      bodyBuffers.push(Buffer.from(event.data, "base64"));
     }
+  }
+  if (bodyBuffers.length > 0) {
+    const body = Buffer.concat(bodyBuffers);
+    const rewritten = layer.rewriteRequestBody(body);
+    turn = {
+      baseline: body.toString("utf8"),
+      optimized: rewritten.toString("utf8"),
+    };
   }
 
   // Simulate tool result rewriting for each tool call in the response
