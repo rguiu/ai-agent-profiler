@@ -72,7 +72,12 @@ export function classifyRegen(
   const excess = Math.max(0, recomputed - growth);
 
   if (excess < EXCESS_FLOOR) {
-    return { cold: false, severity: "none", excessTokens: excess, reason: null };
+    return {
+      cold: false,
+      severity: "none",
+      excessTokens: excess,
+      reason: null,
+    };
   }
 
   // Pick the most likely reason.

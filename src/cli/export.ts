@@ -84,7 +84,8 @@ export function renderMarkdown(
   }
 
   lines.push("## Recommendations", "");
-  if (recommendations.length === 0) {    lines.push("_No issues detected._", "");
+  if (recommendations.length === 0) {
+    lines.push("_No issues detected._", "");
   } else {
     for (const rec of recommendations) {
       lines.push(`- **[${rec.severity}] ${rec.title}**`);

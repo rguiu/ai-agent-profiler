@@ -261,18 +261,24 @@ function paginatedRequestsTable(requests, page, regenerations) {
 }
 
 async function sessionDetail(id) {
-  const [{ session, requests, analysis, recommendations, regenerations }, commands] =
-    await Promise.all([
-      api(`/sessions/${encodeURIComponent(id)}`),
-      api(`/commands?session=${encodeURIComponent(id)}`),
-    ]);
+  const [
+    { session, requests, analysis, recommendations, regenerations },
+    commands,
+  ] = await Promise.all([
+    api(`/sessions/${encodeURIComponent(id)}`),
+    api(`/commands?session=${encodeURIComponent(id)}`),
+  ]);
 
   let currentPage = 0;
 
   function renderPage() {
     const el = document.getElementById("requests-container");
     if (el)
-      el.innerHTML = paginatedRequestsTable(requests, currentPage, regenerations);
+      el.innerHTML = paginatedRequestsTable(
+        requests,
+        currentPage,
+        regenerations,
+      );
     bindPagination();
   }
 
