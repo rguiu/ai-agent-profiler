@@ -62,7 +62,7 @@ function ratio(s) {
 // Parse + filter into per-session records grouped by config (meta.run).
 const groups = new Map();
 for (const r of rows) {
-  let meta = {};
+  let meta;
   try {
     meta = r.meta ? JSON.parse(r.meta) : {};
   } catch {
