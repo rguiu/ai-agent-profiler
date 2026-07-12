@@ -330,6 +330,7 @@ describe("Store", () => {
         model: "m",
         inputTokens,
         cachedInputTokens: 0,
+        cacheCreationTokens: 0,
         outputTokens: 10,
         stopReason: "tool_use",
         streaming: 1,

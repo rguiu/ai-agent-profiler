@@ -43,14 +43,31 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
   ollama: "none",
 };
 
-// Overrides for explicit-breakpoint providers (Anthropic/Bedrock): enable
-// cache_control marker insertion and volatile reordering. The full
-// token-reduction layer (including pruneStale) is fine here — the cache is
-// client-controlled, and aggressive pruning dominates cost savings even if
-// it occasionally breaks cached regions.
+// For explicit-breakpoint providers (Anthropic/Bedrock): disable optimization.
+//
+// Anthropic's native cache achieves ~98-99% read rate on unmodified requests.
+// ANY modification — even deterministic transforms — causes cache misses where
+// bytes changed. The write penalty ($18.75/MTok) far exceeds any savings from
+// smaller context ($1.50/MTok read rate).
+//
+// Benchmarks (iterative-fix-plus, 70 requests, Opus 4.6 Bedrock):
+//   no optimization:      99% read, 1% write  → $7.47
+//   stableTruncate only:  95% read, 5% write  → $9.40 (+26%)
+//   prefix-editing:       34% read, 66% write → $18.78 (+151%)
+//
+// The optimal strategy: pass through untouched.
 export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
-  insertBreakpoints: true,
-  reorderVolatile: true,
+  collapseSystem: false,
+  pruneUnusedTools: false,
+  pruneStale: false,
+  pruneStabilityWindow: 0,
+  insertBreakpoints: false,
+  reorderVolatile: false,
+  frozenCompact: false,
+  stableTruncate: false,
+  shapeTestOutput: false,
+  stablePrefix: false,
+  tailTruncate: true,
 };
 
 export function cacheFamilyFor(provider: string): CacheFamily {

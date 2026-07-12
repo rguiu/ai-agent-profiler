@@ -173,6 +173,167 @@ describe("cache-aware pruning (Idea B)", () => {
   });
 });
 
+describe("pruneStabilityWindow", () => {
+  it("suppresses prune_stale for N turns after a prune event", () => {
+    const layer = new OptimizeLayer({
+      pruneStale: true,
+      pruneAfterTurns: 1,
+      pruneStabilityWindow: 3,
+      insertBreakpoints: false,
+      reorderVolatile: false,
+      collapseSystem: false,
+      pruneUnusedTools: false,
+    });
+
+    const bigResult = "x".repeat(400);
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "t1", content: bigResult },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      { role: "assistant", content: [{ type: "text", text: "ok2" }] },
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+    ];
+
+    // Turn 1: no prune (threshold not met)
+    layer.rewriteRequestBody(makeRequest(messages));
+    // Turn 2: prune fires (turn - pruneAfterTurns = 1 > 0)
+    layer.rewriteRequestBody(makeRequest(messages));
+    const prunesAfter2 = layer
+      .getActions()
+      .filter((a) => a.type === "prune_stale").length;
+    expect(prunesAfter2).toBeGreaterThan(0);
+
+    // Turns 3, 4: within stability window (lastPrune=2, window=3), suppressed
+    layer.rewriteRequestBody(makeRequest(messages));
+    layer.rewriteRequestBody(makeRequest(messages));
+    const prunesAfter4 = layer
+      .getActions()
+      .filter((a) => a.type === "prune_stale").length;
+    expect(prunesAfter4).toBe(prunesAfter2);
+
+    // Turn 5: window expired (5 - 2 = 3 >= 3), prune fires again
+    layer.rewriteRequestBody(makeRequest(messages));
+    const prunesAfter5 = layer
+      .getActions()
+      .filter((a) => a.type === "prune_stale").length;
+    expect(prunesAfter5).toBeGreaterThan(prunesAfter2);
+  });
+
+  it("prunes every turn when window is 0 (legacy behaviour)", () => {
+    const layer = new OptimizeLayer({
+      pruneStale: true,
+      pruneAfterTurns: 1,
+      pruneStabilityWindow: 0,
+      insertBreakpoints: false,
+      reorderVolatile: false,
+      collapseSystem: false,
+      pruneUnusedTools: false,
+    });
+
+    const bigResult = "x".repeat(400);
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "t1", content: bigResult },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      { role: "assistant", content: [{ type: "text", text: "ok2" }] },
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+    ];
+
+    layer.rewriteRequestBody(makeRequest(messages));
+    layer.rewriteRequestBody(makeRequest(messages));
+    const after2 = layer
+      .getActions()
+      .filter((a) => a.type === "prune_stale").length;
+
+    layer.rewriteRequestBody(makeRequest(messages));
+    const after3 = layer
+      .getActions()
+      .filter((a) => a.type === "prune_stale").length;
+    expect(after3).toBeGreaterThan(after2);
+
+    layer.rewriteRequestBody(makeRequest(messages));
+    const after4 = layer
+      .getActions()
+      .filter((a) => a.type === "prune_stale").length;
+    expect(after4).toBeGreaterThan(after3);
+  });
+});
+
+describe("tailTruncate", () => {
+  it("truncates tool results only in the last user message", () => {
+    const layer = new OptimizeLayer({
+      tailTruncate: true,
+      pruneStale: false,
+      insertBreakpoints: false,
+      reorderVolatile: false,
+      stableTruncate: false,
+      truncateThreshold: 200,
+    });
+
+    const bigResult = ("detailed line content here ".repeat(3) + "\n").repeat(
+      100,
+    );
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "t1", content: bigResult },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "t2", content: bigResult },
+        ],
+      },
+    ];
+
+    const out = layer.rewriteRequestBody(makeRequest(messages));
+    const parsed = JSON.parse(out.toString());
+
+    // First user message (not the last) should be UNTOUCHED
+    expect(parsed.messages[0].content[0].content).toBe(bigResult);
+
+    // Last user message should be truncated
+    expect(parsed.messages[2].content[0].content).not.toBe(bigResult);
+    expect(parsed.messages[2].content[0].content).toContain("lines omitted");
+  });
+
+  it("does not truncate results below threshold", () => {
+    const layer = new OptimizeLayer({
+      tailTruncate: true,
+      pruneStale: false,
+      insertBreakpoints: false,
+      reorderVolatile: false,
+      stableTruncate: false,
+      truncateThreshold: 4096,
+    });
+
+    const smallResult = "short content";
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "t1", content: smallResult },
+        ],
+      },
+    ];
+
+    const out = layer.rewriteRequestBody(makeRequest(messages));
+    const parsed = JSON.parse(out.toString());
+    expect(parsed.messages[0].content[0].content).toBe(smallResult);
+  });
+});
+
 describe("volatile content reordering (Idea D)", () => {
   it("moves system-reminder blocks from earlier user messages to last user message", () => {
     const layer = new OptimizeLayer({

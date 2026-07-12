@@ -247,7 +247,8 @@ describe("parseTrace", () => {
     });
     const result = parseTrace(traceFor("application/json", Buffer.from(body)));
     expect(result.format).toBe("openai");
-    expect(result.inputTokens).toBe(1000);
+    // inputTokens is fresh (non-cached): prompt_tokens 1000 - cache_hit 900 = 100 (= cache_miss)
+    expect(result.inputTokens).toBe(100);
     expect(result.cachedInputTokens).toBe(900);
   });
 
@@ -739,23 +740,46 @@ describe("computeCost", () => {
         cacheInputPerMTok: 0.3,
       },
     };
-    // 1M input, 500k cached, 100k output
+    // 500k fresh input, 500k cached read, 100k output
     const cost = computeCost(
       "claude-sonnet-4-20250514",
-      1_000_000,
+      500_000,
       100_000,
       withCache,
       500_000,
     );
-    // non-cached: 500k * 3/M = 1.5, cached: 500k * 0.3/M = 0.15, output: 100k * 15/M = 1.5
+    // fresh: 500k * 3/M = 1.5, cached: 500k * 0.3/M = 0.15, output: 100k * 15/M = 1.5
     expect(cost).toBeCloseTo(1.5 + 0.15 + 1.5);
   });
 
   it("falls back to inputPerMTok when cacheInputPerMTok is not set", () => {
-    // Without cacheInputPerMTok, cached tokens are charged at full rate
-    const cost = computeCost("gpt-4o", 1_000_000, 0, pricing, 500_000);
-    // All 1M tokens at 2.5/M regardless of cache
+    // Without cacheInputPerMTok, cached reads are charged at the full input rate
+    const cost = computeCost("gpt-4o", 500_000, 0, pricing, 500_000);
+    // fresh 500k + cached 500k, both at 2.5/M = 2.5
     expect(cost).toBeCloseTo(2.5);
+  });
+
+  it("prices Anthropic cache-creation (write) tokens at cacheWritePerMTok", () => {
+    const opus = {
+      "claude-opus-4": {
+        inputPerMTok: 5,
+        outputPerMTok: 25,
+        cacheInputPerMTok: 0.5,
+        cacheWritePerMTok: 6.25,
+      },
+    };
+    // 1k fresh, 10k cache read, 4k cache write, 2k output — all disjoint buckets
+    const cost = computeCost(
+      "claude-opus-4",
+      1_000,
+      2_000,
+      opus,
+      10_000,
+      4_000,
+    );
+    expect(cost).toBeCloseTo(
+      (1_000 * 5 + 10_000 * 0.5 + 4_000 * 6.25 + 2_000 * 25) / 1_000_000,
+    );
   });
 
   it("prices a DeepSeek streaming response from its terminal usage chunk", () => {

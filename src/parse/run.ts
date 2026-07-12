@@ -34,6 +34,7 @@ export async function runParse(
         result.outputTokens,
         pricing,
         result.cachedInputTokens,
+        result.cacheCreationTokens,
       );
       store.upsertMetrics({
         requestId: target.id,
@@ -41,6 +42,7 @@ export async function runParse(
         model: result.model,
         inputTokens: result.inputTokens,
         cachedInputTokens: result.cachedInputTokens,
+        cacheCreationTokens: result.cacheCreationTokens,
         outputTokens: result.outputTokens,
         stopReason: result.stopReason,
         streaming: result.streaming ? 1 : 0,

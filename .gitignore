@@ -3,6 +3,8 @@ notes/
 
 # Marketing / article drafts (LinkedIn, Slack, blog) — not part of the repo
 docs/articles/
+docs/archive/
+benchmarks/archive/
 
 # Runtime capture data
 traces/
@@ -40,3 +42,6 @@ npm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+# Local dev handoff notes
+HANDOFF.md

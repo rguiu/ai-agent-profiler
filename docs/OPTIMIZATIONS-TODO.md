@@ -161,14 +161,161 @@ Varies by session. In benchmark sessions: ~5-10K tokens per test run × N runs.
 
 ---
 
+## 7. normalizePrefix — Team-Shared Cache
+
+**Impact: High (scales with team size) | Complexity: Medium-High**
+
+On Bedrock, the cache key is the exact byte prefix. Different users on the same project
+produce different prefixes because of user-specific paths, memory, git status — so each
+developer creates (and pays for) their own cache entries.
+
+### Strategy
+
+The proxy rewrites user-specific bytes to a canonical team-wide form before forwarding
+to Bedrock, and rewrites responses back to real paths for the client.
+
+**Bidirectional path normalization:**
+
+```
+→ To Bedrock:    /Users/raulguiu/code/rmt-portfolio-service → /p/rmt-portfolio-service
+← From Bedrock:  /p/rmt-portfolio-service → /Users/raulguiu/code/rmt-portfolio-service
+```
+
+Each team member maps their project root to the same canonical prefix:
+
+```toml
+# Per-user proxy config
+[normalize]
+paths = [
+  { real = "/Users/raulguiu/code", canonical = "/p" },
+  # John: { real = "/home/john/projects", canonical = "/p" },
+  # CI:   { real = "/workspace", canonical = "/p" },
+]
+```
+
+**Why absolute paths:** The LLM generates tool calls with absolute paths (Read, Edit
+require them). We cannot use `~` or `$ENV_VAR` — the model would pass those literally
+and the tools would fail. The canonical form must be a valid-looking absolute path.
+
+### What gets rewritten
+
+| Direction  | What                                                     | Example                                                       |
+| ---------- | -------------------------------------------------------- | ------------------------------------------------------------- |
+| → request  | System blocks (working dir, CLAUDE.md paths)             | `/Users/raulguiu/code/proj` → `/p/proj`                       |
+| → request  | Tool results (file contents, command outputs with paths) | same                                                          |
+| ← response | Tool calls (Read/Edit file_path arguments)               | `/p/proj/src/foo.ts` → `/Users/raulguiu/code/proj/src/foo.ts` |
+| ← response | Text content (file references in explanations)           | same                                                          |
+
+### What stays user-specific
+
+Content after the last `cache_control` breakpoint is always a cache write anyway:
+
+- Personal memory files
+- Current git status / uncommitted changes
+- Latest user message + tool results
+
+These do NOT need normalization — they don't benefit from cross-user cache sharing.
+
+### How it interacts with Bedrock's cache
+
+```
+User A (first today): system[normalized] + tools → WRITE ($18.75/MTok on ~24K tokens = $0.45)
+User B (same minute):  system[normalized] + tools → READ ($1.50/MTok on ~24K tokens = $0.04)
+User C (same minute):  system[normalized] + tools → READ ($0.04)
+User D (same minute):  system[normalized] + tools → READ ($0.04)
+User E (same minute):  system[normalized] + tools → READ ($0.04)
+```
+
+### Estimated savings
+
+System + tools prefix: ~24K tokens.
+
+- Cold write: 24K × $18.75/MTok = $0.45
+- Warm read: 24K × $1.50/MTok  = $0.04
+
+Per cold window (5-min TTL), savings = (N-1 users) × ($0.45 - $0.04):
+
+- 5-person team: ~$1.64 saved per cold window
+- 10-person team: ~$3.69 saved per cold window
+
+Over a workday (~50 cold windows assuming 5-min TTL with activity gaps):
+
+- 5-person team: **~$82/day** potential savings
+- Depends on concurrent usage within TTL windows
+
+### Challenges
+
+1. **Correctness** — Path rewriting must be exact and bidirectional. A missed rewrite
+   breaks tool execution. Needs thorough regex coverage of all path formats.
+2. **Non-path user specifics** — Username in git config, user-specific memory content.
+   These appear in system blocks and break prefix sharing. May need to extract and move
+   after the last breakpoint.
+3. **Project alignment** — Team members must agree on which projects map to which
+   canonical paths. Configuration overhead.
+4. **Partial matches** — If system prompts differ for other reasons (different Claude
+   Code versions, plugins, skills loaded), the prefix still diverges.
+
+### Prerequisites
+
+- Team uses the same Claude Code version and plugin set
+- Shared CLAUDE.md per project (already committed to git)
+- Proxy deployed as a shared team service (not per-machine)
+- Each user configures their path mappings
+
+---
+
+## 8. optimizeOnCold — Full Optimization After Cache Expiry
+
+**Impact: Medium | Complexity: Low**
+
+When a user returns after the cache TTL has expired, the next request pays full cache-write
+cost regardless. This is the optimal moment to apply aggressive optimizations — the prefix
+is being rewritten anyway, so making it smaller costs nothing extra.
+
+### Strategy
+
+Track `lastRequestAt` per session. On incoming request:
+
+```
+if (now - lastRequestAt > CACHE_TTL_MS) {
+  // Cache is dead — apply full optimization (dedup, prune, collapse, truncate)
+  // The write is happening anyway, make it smaller
+} else {
+  // Cache is warm — pass through unchanged
+}
+```
+
+After the optimized write, the session continues with a **smaller** cached prefix,
+making every subsequent read cheaper for the rest of the TTL window.
+
+### Estimated savings
+
+A 200K-token session returning after cache expiry:
+
+- Without: writes 200K tokens at $18.75/MTok = $3.75
+- With pruning/dedup: writes 150K tokens at $18.75/MTok = $2.81
+- Saves: ~$0.94 per cold return, plus cheaper reads for all subsequent turns
+
+### Configuration
+
+```toml
+[optimize]
+cacheTtlMs = 300000  # 5 minutes (match Anthropic's documented minimum)
+optimizeOnCold = true
+```
+
+---
+
 ## Priority Order
 
 1. **IASH** — highest ROI, prevents waste at source
-2. **Adaptive pruneAfter** — trivial to implement, immediate savings
-3. **Search-result dedup** — low-hanging fruit on top of existing dedup
-4. **Fuzzy system collapse** — high savings but more complex
-5. **Diff-based Read** — medium savings, needs careful correctness
-6. **Test output compression** — nice-to-have, pattern-specific
+2. **optimizeOnCold** — trivial to implement, free gains on cache-expired returns
+3. **normalizePrefix** — high savings that scale with team size (needs shared proxy)
+4. **Adaptive pruneAfter** — trivial to implement, immediate savings
+5. **Search-result dedup** — low-hanging fruit on top of existing dedup
+6. **Fuzzy system collapse** — high savings but more complex
+7. **Diff-based Read** — medium savings, needs careful correctness
+8. **Test output compression** — nice-to-have, pattern-specific
 
 ## Data backing these estimates
 

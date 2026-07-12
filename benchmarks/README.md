@@ -143,10 +143,10 @@ Use `--dry-run` to print the exact commands (including the verify step) without 
 
 ## Example: A/B comparison (baseline vs optimize)
 
-> **Results:** the consolidated findings from these A/B runs (DeepSeek vs Claude, the
-> `pruneStale` cache story, and caveats) live in
-> [`REPORT-optimize-layer.md`](REPORT-optimize-layer.md). Raw per-run reports and superseded
-> history are under [`archive/`](archive/).
+> **Results:** the consolidated, honest findings from these A/B runs (why in-flight
+> optimization mostly doesn't beat the provider's prompt cache, and the caveats) live in
+> [`../docs/OPTIMIZATION-FINDINGS.md`](../docs/OPTIMIZATION-FINDINGS.md). Earlier
+> per-run reports (with pre-cache-write-fix numbers) are retained locally only.
 
 ### One-shot: `iterative-fix-ab.sh`
 

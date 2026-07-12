@@ -37,6 +37,12 @@ export const optimizeSchema = z.object({
   pruneUnusedTools: z.boolean().default(true),
   insertBreakpoints: z.boolean().default(false),
   reorderVolatile: z.boolean().default(false),
+  // Tool names to strip from every request. Stripped from turn 1 so the prefix
+  // remains stable and the cache is never invalidated. Use for tools that are
+  // defined by the client but never (or rarely) used in your workload.
+  stripTools: z
+    .array(z.string())
+    .default(["Workflow", "Agent", "ReportFindings"]),
   truncateThreshold: z.number().int().positive().default(4096),
   pruneAfterTurns: z.number().int().positive().default(6),
   suppressWithinTurns: z.number().int().positive().default(2),
@@ -49,6 +55,7 @@ export const modelPricingSchema = z.object({
   inputPerMTok: z.number().nonnegative(),
   outputPerMTok: z.number().nonnegative(),
   cacheInputPerMTok: z.number().nonnegative().optional(),
+  cacheWritePerMTok: z.number().nonnegative().optional(),
 });
 
 export const throttleSchema = z.object({

@@ -67,12 +67,16 @@ compactKeepTail = 20          # frozenCompact: recent messages always kept full
 
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.
-# cacheInputPerMTok is optional — if set, cached tokens are charged at this
-# rate instead of inputPerMTok (e.g. Anthropic charges 90% less for cache reads).
+# cacheInputPerMTok is optional — if set, cache READS are charged at this rate
+# instead of inputPerMTok (e.g. Anthropic charges 90% less for cache reads).
+# cacheWritePerMTok is optional — cache WRITES (Anthropic cache_creation /
+# Bedrock cacheWriteInputTokens) are charged at this rate (Anthropic = 1.25x
+# input). If unset, writes fall back to inputPerMTok.
 # [pricing."claude-sonnet-4-20250514"]
 # inputPerMTok = 3.0
 # outputPerMTok = 15.0
 # cacheInputPerMTok = 0.30
+# cacheWritePerMTok = 3.75
 # [pricing."deepseek-chat"]
 # inputPerMTok = 0.27
 # outputPerMTok = 1.10
@@ -87,3 +91,4 @@ compactKeepTail = 20          # frozenCompact: recent messages always kept full
 # inputPerMTok = 3.0
 # outputPerMTok = 15.0
 # cacheInputPerMTok = 0.30
+# cacheWritePerMTok = 3.75
