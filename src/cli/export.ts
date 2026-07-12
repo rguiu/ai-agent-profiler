@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/index.js";
 import { recommend, type Recommendation } from "../recommend/index.js";
+import { detectRegenerations } from "../analyze/index.js";
 import { openStore, type SessionDetail } from "../store/index.js";
 
 function num(value: number | null | undefined): string {
@@ -54,9 +55,36 @@ export function renderMarkdown(
     lines.push("");
   }
 
+  const regen = detectRegenerations(
+    requests.map((r) => ({
+      id: r.id,
+      startedAt: r.started_at,
+      inputTokens: r.input_tokens,
+      cachedInputTokens: r.cached_input_tokens,
+      cacheCreationInputTokens: r.cache_creation_input_tokens,
+      outputTokens: r.output_tokens,
+    })),
+  );
+  if (regen.size > 0) {
+    lines.push("## Cache regenerations", "");
+    lines.push(
+      `- ${regen.size} turn(s) recomputed a large prompt span the cache should have served.`,
+      "",
+    );
+    lines.push("| Request | Severity | Excess tokens | Likely reason |");
+    lines.push("| --- | --- | ---: | --- |");
+    let i = 0;
+    for (const [id, r] of regen) {
+      lines.push(
+        `| ${id} | ${r.severity} | ~${num(r.excessTokens)} | ${r.reason ?? "—"} |`,
+      );
+      if (++i >= 20) break;
+    }
+    lines.push("");
+  }
+
   lines.push("## Recommendations", "");
-  if (recommendations.length === 0) {
-    lines.push("_No issues detected._", "");
+  if (recommendations.length === 0) {    lines.push("_No issues detected._", "");
   } else {
     for (const rec of recommendations) {
       lines.push(`- **[${rec.severity}] ${rec.title}**`);

@@ -410,3 +410,34 @@ svg.chart circle {
   color: var(--bg);
   border-color: var(--accent);
 }
+
+/* Cold-cache regeneration highlighting in the request timeline. */
+tr.regen td {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+tr.regen.regen-high td {
+  background: color-mix(in srgb, var(--bad) 16%, transparent);
+}
+tr.regen-warn td:first-child {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+tr.regen-high td:first-child {
+  box-shadow: inset 3px 0 0 var(--bad);
+}
+.regen-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: help;
+  font-family: var(--mono);
+}
+.regen-badge.regen-warn {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--warn);
+}
+.regen-badge.regen-high {
+  background: color-mix(in srgb, var(--bad) 22%, transparent);
+  color: var(--bad);
+}

@@ -163,6 +163,7 @@ export interface SessionRequest {
   model: string | null;
   input_tokens: number | null;
   cached_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
   output_tokens: number | null;
   stop_reason: string | null;
   cost: number | null;
@@ -413,7 +414,8 @@ export class Store {
       SELECT r.id, r.provider, r.method, r.path, r.status, r.latency_ms,
              r.started_at, r.ended_at, r.request_bytes, r.response_bytes, r.error,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
-             m.cost, m.tool_call_count, m.cached_input_tokens
+             m.cost, m.tool_call_count, m.cached_input_tokens,
+             m.cache_creation_input_tokens
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
