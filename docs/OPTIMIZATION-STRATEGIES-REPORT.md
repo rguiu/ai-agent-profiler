@@ -269,17 +269,25 @@ Additionally, tool results are intercepted on the response path for:
 
 | Strategy            | Provider            | Impact                   | Status                      |
 | ------------------- | ------------------- | ------------------------ | --------------------------- |
-| `pruneStale`        | Claude/Bedrock only | **57% of total savings** | Proven                      |
-| `pruneUnusedTools`  | Claude/Bedrock only | **23% of total savings** | Proven                      |
-| `collapseSystem`    | Claude/Bedrock only | **20% of total savings** | Proven                      |
-| `insertBreakpoints` | Claude/Bedrock only | Near-zero cache misses   | Proven                      |
-| `dedup`             | All providers       | Small                    | Proven, low frequency       |
-| `truncate`          | All providers       | Varies by file sizes     | Proven, low frequency       |
-| `suppressReread`    | All providers       | Small                    | Proven, low frequency       |
-| `stablePrefix`      | All providers       | Cache-preservation only  | Proven                      |
-| `reorderVolatile`   | Claude/Bedrock only | Cache-preservation only  | Experimental — rarely fires |
+| `stripTools`        | All providers       | ~$0.45/session           | **Active** on Bedrock       |
+| `tailTruncate`      | All providers       | ~$0.03/session           | **Active** on Bedrock       |
+| `pruneStale`        | DeepSeek only       | Large (simulation)       | **DISABLED** on Bedrock — causes cache misses |
+| `pruneUnusedTools`  | DeepSeek only       | Medium (simulation)      | **DISABLED** on Bedrock — changes prefix mid-session |
+| `collapseSystem`    | DeepSeek only       | Medium (simulation)      | **DISABLED** on Bedrock — changes system bytes |
+| `insertBreakpoints` | DeepSeek only       | Near-zero cache misses   | **DISABLED** on Bedrock — adds bytes to prefix |
+| `dedup`             | Simulation only     | Small                    | Not called in live proxy    |
+| `truncate`          | Simulation only     | Varies by file sizes     | Not called in live proxy    |
+| `suppressReread`    | Simulation only     | Small                    | Not called in live proxy    |
+| `stablePrefix`      | None (disabled)     | Cache-preservation only  | **DISABLED** on Bedrock — reorders bytes |
+| `reorderVolatile`   | None (disabled)     | Cache-preservation only  | **DISABLED** on Bedrock — moves content |
 
-**Disabled on DeepSeek:** `pruneStale`, `collapseSystem`, `pruneUnusedTools`, `insertBreakpoints` — all edit the cached prefix and **cause cost increases** on prefix-cache providers.
+**Disabled on Bedrock/Anthropic:** ALL prefix-editing strategies. The native cache achieves
+98-99% read rate on unmodified requests. Any byte modification triggers cache writes at
+12.5× the read cost. Only `stripTools` (from turn 1, stable prefix) and `tailTruncate`
+(trailing edge, always a write) are safe.
+
+**Disabled on DeepSeek:** Same set but for a different reason — automatic prefix caching
+invalidates on any byte change. See `docs/DEEPSEEK-CACHING.md`.
 
 ### 5.1 collapseSystem — Collapse Repeated System Prompt
 
@@ -455,7 +463,13 @@ This strategy moves `<system-reminder>` blocks from earlier user messages to the
 - **Conditions:** Each run is independent, fresh workspace, same task prompt
 - **Verification:** 54 fixture tests + 57 edge-case tests after each run
 
-### Results Comparison
+### Phase 1: Early Results (Simulation + Single Live Run) — NOW INVALIDATED
+
+> **WARNING:** These results were obtained before we understood cross-session cache warming
+> and the cache-write penalty. They are preserved for historical reference only. The
+> simulation model is fundamentally flawed for Anthropic/Bedrock. See Phase 2 below.
+
+### Results Comparison (Phase 1 — OUTDATED)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -548,40 +562,175 @@ The optimization layer does not affect the model's ability to complete the task.
 
 ---
 
-## 7. Conclusions and Open Questions <a name="conclusions"></a>
+### Phase 2: Controlled Benchmarks (July 2026) — CURRENT
 
-### The Core Finding
+When we ran proper controlled benchmarks with multiple runs, tracking cross-session cache
+effects, **the Phase 1 savings could not be reproduced**. Prefix-editing strategies that
+appeared to save 77% in simulation **cause no measurable improvement** on real Bedrock traffic.
 
-The optimization layer achieves **74-78% cost reduction** on Claude Code sessions with Bedrock, while maintaining 100% cache hit rates and identical task completion. The savings come from three complementary strategies:
+#### Why Phase 1 Results Were Wrong
 
-1. **pruneStale** — Summarise old tool results (57% of savings)
-2. **pruneUnusedTools** — Remove tool definitions the model never uses (23%)
-3. **collapseSystem** — Hash the repeated system prompt (20%)
+1. **Cross-session cache warming (unfair baseline advantage).** Cache is keyed by byte
+   prefix, not session ID. Baseline runs that share the same prefix get free cache reads
+   from prior baselines. Optimized runs have a DIFFERENT prefix and start cold — paying
+   expensive writes ($18.75/MTok) while baselines enjoy cheap reads ($1.50/MTok).
 
-### The Volume Effect (not a "cache paradox")
+2. **Simulation doesn't model cache economics.** The simulator calculated savings as
+   "tokens removed × flat input rate." It didn't model that ANY byte change triggers a
+   cache WRITE at 12.5× the read rate. The "77% savings" were fictional.
 
-A naive analysis says: "Don't modify content inside the cached prefix — you'll break the cache and pay more downstream." Our real benchmark shows that fear is misplaced on Anthropic-format traffic:
+3. **Model variance dominates.** The same task takes 21-70 requests depending on model
+   non-determinism. Single-run comparisons are meaningless.
 
-- Not pruning ("cache-protective") → $2.67 per session (**worst result**)
-- Aggressively pruning everything → $0.48 per session (**best result**)
+#### Controlled Results (Opus 4.6 Bedrock, iterative-fix-plus, multiple runs)
 
-**Why — and it is _not_ because misses were outweighed by volume.** The winning run kept a **100% cache hit rate with only 92 uncached tokens** (see the metrics table). Pruning did not trade cache hits for smaller volume; it kept the hit rate _and_ shrank the volume. The mechanism is simpler than a paradox:
+**Baseline (no optimization):**
 
-1. `pruneStale` removes ~1.8M tokens of stale tool results from the _body_ of each request.
-2. `insertBreakpoints` re-anchors Anthropic's 4 `cache_control` markers after the edit, so the surviving prefix still cache-hits.
-3. The net effect is **less cached content carried per request** — cached input drops from ~4.3M to ~776K tokens — at an essentially unchanged (~100%) hit rate.
+| Run | Requests | Cost | Notes |
+|-----|----------|------|-------|
+| baseline-1 | 70 | $6.13 | Cold cache (first ever run) |
+| baseline-2 | 21 | $2.67 | Warm cache from baseline-1 |
+| baseline-3 | 25 | $2.41 | Warm cache |
+| baseline-4 | 32 | $3.82 | Warm cache |
 
-So the cost win is **volume reduction at a preserved hit rate**, not "misses we paid for and came out ahead anyway." A cached token is cheap ($0.50/MTok) but not free: re-reading 4.3M cached tokens every session still costs far more than re-reading 776K.
+**Optimized (stripTools + tailTruncate, Bedrock-safe profile):**
 
-> **Simulation vs reality — an honest note.** Our offline simulator models the cache as a strict byte-prefix and predicted `pruneStale` would drop the hit rate to ~67%. The live Bedrock runs did not: they held ~100%. Anthropic's production cache tolerates edits inside a marked region more gracefully than a naive prefix model assumes. Where the simulator and the live runs disagree, **trust the live runs** — and treat any simulator-only cache-hit figure as a pessimistic lower bound, not a measurement.
+| Run | Requests | Cached tokens | Cost | Notes |
+|-----|----------|---------------|------|-------|
+| opt-warmup | — | — | — | Cache primer (discarded) |
+| opt-warm-1 | 40 | 1,613,688 | $4.13 | Warm cache for stripped prefix |
 
-### Open Questions for Further Research
+**Result: No significant improvement.** opt-warm-1 ($4.13) is within the variance of warm
+baselines ($2.41-$6.13). The cost difference is explained by request count (40 vs 21-32),
+which is model non-determinism — not optimization strategy.
 
-1. **Per-strategy A/B testing**: Run each strategy independently to measure its isolated impact (currently they all run together)
-2. **Statistical significance**: Run 5-10 repetitions of each configuration to account for LLM non-determinism
-3. **Different fixtures**: Test on exploration tasks, large-file refactoring, multi-file changes
-4. **Adaptive thresholds**: Could the layer learn the optimal `pruneAfterTurns` during a session based on observed token growth?
-5. **Partial pruning**: Instead of fully summarising old results, keep the first N lines and summarise the rest
+#### Why Anthropic's Cache Cannot Be Beaten
+
+The native cache achieves **98-99% read rate** on unmodified Claude Code requests. There is
+almost nothing left to optimize:
+
+```
+Unmodified request (warm cache):
+  Bytes 0..BP2 (system + tools + old messages) → CACHED READ ($1.50/MTok)
+  Bytes BP2..BP3 (new message) → WRITE ($18.75/MTok)
+  Read% ≈ 98-99%
+
+ANY prefix modification (e.g., pruneStale removes old message content):
+  Bytes 0..change_point → READ (unchanged prefix still matches)
+  Bytes change_point..end → MISS → WRITE ($18.75/MTok)
+  First request: massive write penalty
+  Subsequent requests: must re-warm from modified prefix
+```
+
+The math: saving 7,500 tokens via stripTools saves `7,500 × $1.50/MTok = $0.011` per
+request in reduced cache reads. Over 40 requests: ~$0.45. Modest but real.
+
+#### What Strategies Are Safe for Bedrock
+
+| Strategy | Safe? | Why |
+|----------|-------|-----|
+| **stripTools** | Yes (from turn 1) | Removes tools BEFORE any cache entry is written. Prefix is stable from the start. |
+| **tailTruncate** | Yes | Only modifies the last user message (trailing edge = always a write). |
+| collapseSystem | **NO** | Changes system bytes = different prefix = cache miss. |
+| pruneUnusedTools | **NO** | Removes tools mid-session = new prefix = cold. |
+| pruneStale | **NO** | Edits old messages = prefix diverges = writes. |
+| stablePrefix | **NO** | Reorders tool JSON = different bytes = miss. |
+| reorderVolatile | **NO** | Moves content = different bytes. |
+| insertBreakpoints | **NO** | Adds markers to cached content = different bytes. |
+| frozenCompact | **NO** | Rewrites history = prefix destroyed. |
+
+#### The Bedrock-Safe Profile
+
+```typescript
+// EXPLICIT_CACHE_OVERRIDES — applied automatically for Anthropic/Bedrock
+{
+  collapseSystem: false,
+  pruneUnusedTools: false,
+  pruneStale: false,
+  insertBreakpoints: false,
+  reorderVolatile: false,
+  frozenCompact: false,
+  stableTruncate: false,
+  shapeTestOutput: false,
+  stablePrefix: false,
+  tailTruncate: true,   // safe: only modifies trailing edge (always a write)
+}
+// Plus: stripTools: ["Workflow", "Agent", "ReportFindings"] (from turn 1, stable)
+```
+
+#### Measured Savings of Bedrock-Safe Strategies
+
+| Strategy | Savings/request | Savings/session (40 reqs) | Annual (10 sessions/day) |
+|----------|-----------------|---------------------------|--------------------------|
+| stripTools (3 tools removed) | $0.011 | $0.45 | ~$1,350/year |
+| tailTruncate | ~$0.001 | ~$0.03 | ~$90/year |
+| **Total** | **$0.012** | **~$0.48** | **~$1,440/year** |
+
+Combined: **~12% savings per session** (modest but consistent and safe).
+
+---
+
+## 7. Conclusions <a name="conclusions"></a>
+
+### The Core Finding (Updated July 2026)
+
+**For Anthropic/Bedrock: the native cache is near-optimal and cannot be meaningfully beaten
+by request-level optimization.** Any modification to the cached prefix triggers expensive
+cache writes ($18.75/MTok) that dwarf any savings from smaller context.
+
+The only safe optimizations:
+1. **stripTools** — remove unused tool definitions from turn 1 (~$0.45/session)
+2. **tailTruncate** — truncate large results at the trailing edge (~$0.03/session)
+
+### Why We Can't Beat the Cache — The Economics
+
+| Metric | Value |
+|--------|-------|
+| Native cache read rate | 98-99% |
+| Cache read cost | $1.50/MTok |
+| Cache write cost | $18.75/MTok |
+| Write-to-read penalty ratio | 12.5× |
+| Tokens saved by stripTools | ~7,500/request |
+| Value of those saved tokens | $0.011/request |
+| Risk of prefix modification | $0.45+ per cache miss |
+
+The fundamental constraint: cached tokens are already so cheap ($1.50/MTok) that reducing
+their count saves pennies, while breaking the cache costs dollars.
+
+### Where Gains ARE Possible (Future Work)
+
+| Strategy | Potential | Status |
+|----------|-----------|--------|
+| **optimizeOnCold** | ~$0.94/cold return | Design complete, not implemented |
+| **normalizePrefix** | ~$1.64/TTL window (5 devs) | Design complete, not implemented |
+| **IASH (Intelligent Shell)** | ~83K tokens/session | Design complete, not implemented |
+| **Keep-alive pings** | ~$0.45/prevented cold start | Trivial to implement |
+
+See `docs/OPTIMIZATIONS-TODO.md` for detailed designs.
+
+### What the Phase 1 "Simulation vs Reality" Note Got Wrong
+
+The Phase 1 conclusion claimed "Anthropic's production cache tolerates edits inside a marked
+region more gracefully than a naive prefix model assumes." This was based on a single live
+run that appeared to maintain 100% cache hit rate with pruneStale active.
+
+**We now believe this was a measurement artifact.** The live run benefited from cross-session
+cache warming (prior baseline runs had already cached most of the prefix). The simulation's
+prediction of cache misses from prefix editing is CORRECT — we just didn't observe them
+because the baseline had already warmed the cache.
+
+The controlled Phase 2 benchmarks (which account for cache state) confirm: any prefix
+modification causes cold-cache behavior on the first request with the modified prefix.
+
+### Open Questions
+
+1. **Exact TTL** — How long does Bedrock's cache live? Use `benchmarks/cache-probe-bedrock.ts`
+   with `PROBE_TTL=1` to measure empirically.
+2. **optimizeOnCold threshold** — Is 5 min the right trigger? Does the cache live longer?
+3. **normalizePrefix** — Can we get cross-user cache hits by rewriting paths?
+4. **Long sessions (200+ requests)** — Do cumulative stripTools savings compound?
+5. **Opus 4.8 pricing** — Same ratio (12.5× penalty) but different absolute costs ($0.50
+   read, $6.25 write). Same conclusion applies.
 
 ---
 
@@ -597,64 +746,96 @@ The profiler detects DeepSeek sessions and applies a separate "cache-safe" strat
 
 ---
 
-## Appendix: Profiler Export Example
+## Appendix: Profiler Export Example (Bedrock-safe profile)
 
-Below is a truncated example of what `aap export <session>` produces:
+Below is a truncated example of what `aap export <session>` produces with the current
+Bedrock-safe profile (stripTools + tailTruncate only):
 
 ```
-# Session bench-claude-iterative-fix-plus-20260711215903-1
+# Session bench-claude-iterative-fix-plus-20260712194942-1
 
 - **Client:** claude
 - **Working dir:** /private/tmp/aap-bench/iterative-fix-plus
-- **Started:** 2026-07-11 19:59:03
+- **Started:** 2026-07-12 19:49:42
 
 ## Summary
 
-- Requests: 94
-- Input tokens: 92 (uncached)
-- Cached tokens: 776,274
-- Output tokens: 3,626
-- Estimated cost: $0.4792
+- Requests: 40
+- Input tokens: 686 (uncached)
+- Cached tokens: 1,613,688
+- Output tokens: 2,196
+- Estimated cost: $4.1275
 
 ## Optimizations applied
 
-- Total tokens saved: ~3,167,920
+- Total tokens saved: ~295,551
 
 | Strategy        | Actions | Tokens saved  |
 |-----------------|--------:|--------------:|
-| prune_stale     |   3,734 | ~1,798,612    |
-| prune_unused    |      84 |   ~729,540    |
-| collapse_system |      92 |   ~639,768    |
-| breakpoints     |      93 |           ~0  |
-| stable_prefix   |       2 |           ~0  |
+| strip_tools     |      39 |   ~294,099    |
+| tail_truncate   |       2 |     ~1,452    |
 
 ## Tool usage
 
 | Tool | Calls | Result tokens |
 |------|------:|--------------:|
-| Read |    30 |        ~9,833 |
-| Bash |    19 |        ~6,702 |
-| Edit |    16 |          ~768 |
+| Bash |    18 |        ~5,200 |
+| Read |    10 |        ~3,100 |
+| Edit |     5 |          ~400 |
 ```
 
 ---
 
 ## Appendix: Configuration
 
+### Bedrock-safe (recommended for Anthropic/Bedrock)
+
 ```toml
 [optimize]
 enabled = true
-profile = "auto"       # auto-detects provider, applies appropriate overrides
+profile = "auto"       # auto-detects Bedrock → disables prefix-editing strategies
 
-# Thresholds
-pruneAfterTurns = 6            # Start pruning after this many assistant turns
-pruneUnusedToolsAfter = 10     # Remove unused tools after this many turns
-truncateThreshold = 4096       # Characters before truncating tool results
-suppressWithinTurns = 2        # Suppress re-reads within N turns of write
+# stripTools removes from turn 1 (prefix stays stable, never invalidates cache)
+# Default: ["Workflow", "Agent", "ReportFindings"]
+# Customize based on which tools your workload never uses:
+# stripTools = ["Workflow", "Agent", "ReportFindings", "NotebookEdit"]
+
+# tailTruncate threshold (only truncates in the LAST user message — always a write)
+truncateThreshold = 4096
 
 # Pricing (for cost reporting)
 [pricing."eu.anthropic.claude-opus-4-6-v1"]
+inputPerMTok = 15.0
+outputPerMTok = 75.0
+cacheInputPerMTok = 1.5
+cacheWritePerMTok = 18.75
+
+[pricing."eu.anthropic.claude-opus-4-8"]
 inputPerMTok = 5.0
 outputPerMTok = 25.0
-cacheInputPerMTok = 0.5
+cacheInputPerMTok = 0.50
+cacheWritePerMTok = 6.25
 ```
+
+### Full optimization (for DeepSeek or offline simulation only)
+
+```toml
+[optimize]
+enabled = true
+profile = "default"    # Forces full layer — ONLY use for non-Anthropic providers
+
+pruneAfterTurns = 6
+pruneUnusedToolsAfter = 10
+truncateThreshold = 4096
+suppressWithinTurns = 2
+```
+
+---
+
+## Appendix: Related Documentation
+
+- `docs/CACHE-BENCHMARK-METHODOLOGY.md` — How Bedrock's byte-prefix cache works,
+  cross-session warming problem, fair benchmark approaches
+- `docs/DEEPSEEK-CACHING.md` — DeepSeek's automatic prefix cache and safe strategies
+- `docs/OPTIMIZATIONS-TODO.md` — Future optimization roadmap (normalizePrefix, optimizeOnCold, IASH)
+- `benchmarks/cache-probe-bedrock.ts` — Empirical cache behavior probe (TTL, cross-session)

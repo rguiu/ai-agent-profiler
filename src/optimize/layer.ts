@@ -12,17 +12,26 @@ export interface OptimizeConfig {
   pruneUnusedTools: boolean;
   insertBreakpoints: boolean;
   reorderVolatile: boolean;
+  // Truncate tool results only in the last user message (the growing edge).
+  // Safe for explicit-cache providers: the tail is always cache-written anyway,
+  // and on subsequent turns the truncated version is what's already cached.
+  tailTruncate: boolean;
   truncateThreshold: number;
   pruneAfterTurns: number;
   suppressWithinTurns: number;
   pruneUnusedToolsAfter: number;
   compactThreshold: number;
   compactKeepTail: number;
-  // Batch-prune: after a prune event, suppress further pruning for N turns to
-  // let the cache stabilise. 0 = prune every turn (old behaviour). On
-  // explicit-cache providers cache-write costs $6.25/MTok so frequent prefix
-  // edits are expensive — the window amortises one write over many cheap reads.
+  // Batch-prune: suppress further pruning for N turns after a prune event.
+  // 0 = prune every turn (old behaviour). Only relevant for prefix-cache
+  // providers (DeepSeek) where pruneStale is enabled under cache-safe mode.
+  // For explicit-cache providers (Anthropic/Bedrock), pruneStale is disabled
+  // entirely — the native cache already achieves ~98% read rate and any prefix
+  // editing triggers expensive cache-writes.
   pruneStabilityWindow: number;
+  // Tool names to strip from every request from turn 1 onwards.
+  // Keeps the prefix stable (no mid-session cache invalidation).
+  stripTools: string[];
 }
 
 export const DEFAULT_CONFIG: OptimizeConfig = {
@@ -39,6 +48,7 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   pruneUnusedTools: true,
   insertBreakpoints: false,
   reorderVolatile: false,
+  tailTruncate: false,
   truncateThreshold: 4096,
   pruneAfterTurns: 6,
   suppressWithinTurns: 2,
@@ -46,6 +56,7 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   compactThreshold: 60000,
   compactKeepTail: 20,
   pruneStabilityWindow: 0,
+  stripTools: [],
 };
 
 // Cache-safe overrides for providers with automatic prefix caching (DeepSeek).
@@ -79,6 +90,8 @@ export type OptimizeActionType =
   | "suppress_reread"
   | "collapse_system"
   | "prune_unused_tools"
+  | "strip_tools"
+  | "tail_truncate"
   | "insert_breakpoints"
   | "reorder_volatile";
 
@@ -384,6 +397,15 @@ export class OptimizeLayer {
       }
     }
 
+    // Strip configured tools from every request (stable from turn 1)
+    if (this.config.stripTools.length > 0 && Array.isArray(parsed.tools)) {
+      const stripped = this.stripConfiguredTools(parsed.tools as ToolDef[]);
+      if (stripped) {
+        parsed.tools = stripped;
+        changed = true;
+      }
+    }
+
     // Track tool usage from assistant messages and prune unused tool definitions
     if (
       (this.config.pruneUnusedTools || this.config.stablePrefix) &&
@@ -433,6 +455,16 @@ export class OptimizeLayer {
 
     if (this.config.stableTruncate && Array.isArray(parsed.messages)) {
       const truncated = this.stableTruncateResults(
+        parsed.messages as Message[],
+      );
+      if (truncated) {
+        parsed.messages = truncated;
+        changed = true;
+      }
+    }
+
+    if (this.config.tailTruncate && Array.isArray(parsed.messages)) {
+      const truncated = this.tailTruncateResults(
         parsed.messages as Message[],
       );
       if (truncated) {
@@ -619,6 +651,35 @@ export class OptimizeLayer {
       turn: this.turn,
       tokensSaved: savedTokens,
       detail: `pruned ${pruned.length} unused tool definition(s): ${pruned.slice(0, 5).join(", ")}${pruned.length > 5 ? ` (+${pruned.length - 5} more)` : ""} (~${savedTokens} tokens)`,
+    });
+
+    return kept;
+  }
+
+  private stripConfiguredTools(tools: ToolDef[]): ToolDef[] | null {
+    const stripSet = new Set(this.config.stripTools);
+    const kept: ToolDef[] = [];
+    const stripped: string[] = [];
+
+    for (const tool of tools) {
+      if (tool.name && stripSet.has(tool.name)) {
+        stripped.push(tool.name);
+      } else {
+        kept.push(tool);
+      }
+    }
+
+    if (stripped.length === 0) return null;
+
+    const savedTokens =
+      estimateTokens(JSON.stringify(tools)) -
+      estimateTokens(JSON.stringify(kept));
+
+    this.actions.push({
+      type: "strip_tools",
+      turn: this.turn,
+      tokensSaved: savedTokens,
+      detail: `stripped ${stripped.length} tool(s): ${stripped.join(", ")} (~${savedTokens} tokens)`,
     });
 
     return kept;
@@ -861,6 +922,49 @@ export class OptimizeLayer {
       }
       return shaped.text;
     });
+  }
+
+  // Truncate tool results only in the last user message (growing edge).
+  // The tail is always a cache-write anyway, so truncating it doesn't cause
+  // cache misses. On subsequent turns the truncated bytes are what's cached.
+  private tailTruncateResults(messages: Message[]): Message[] | null {
+    let lastUserIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]!.role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return null;
+
+    const msg = messages[lastUserIdx]!;
+    if (!Array.isArray(msg.content)) return null;
+
+    let blockChanged = false;
+    const rewritten = msg.content.map((block: ContentBlock) => {
+      if (block.type !== "tool_result") return block;
+      if (typeof block.content !== "string") return block;
+      if (block.content.length <= this.config.truncateThreshold) return block;
+      if (block.content.includes(TRUNCATION_MARKER)) return block;
+      const t = headTailTruncate(block.content);
+      if (!t || t.savedTokens <= 50) return block;
+      const toolName =
+        this.resolveToolName(messages, block.tool_use_id) ?? "tool";
+      this.actions.push({
+        type: "tail_truncate",
+        turn: this.turn,
+        tool: toolName,
+        tokensSaved: t.savedTokens,
+        detail: `${toolName} tail-truncated: ${block.content.split("\n").length} lines → 55 (saved ~${t.savedTokens} tokens, edge-only)`,
+      });
+      blockChanged = true;
+      return { ...block, content: t.text };
+    });
+
+    if (!blockChanged) return null;
+    const result = [...messages];
+    result[lastUserIdx] = { ...msg, content: rewritten } as Message;
+    return result;
   }
 
   // Walk the messages array applying a content transform to every tool result

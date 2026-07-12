@@ -54,8 +54,13 @@ describe("overridesFor", () => {
   it("returns explicit-cache overrides for explicit providers on auto", () => {
     expect(overridesFor("auto", "anthropic")).toBe(EXPLICIT_CACHE_OVERRIDES);
     expect(overridesFor("auto", "bedrock")).toBe(EXPLICIT_CACHE_OVERRIDES);
+    // Explicit-cache overrides disable everything to preserve native cache
     expect(overridesFor("auto", "bedrock")).toHaveProperty(
-      "insertBreakpoints",
+      "pruneStale",
+      false,
+    );
+    expect(overridesFor("auto", "bedrock")).toHaveProperty(
+      "tailTruncate",
       true,
     );
   });

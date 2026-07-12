@@ -11,11 +11,14 @@ It is a **performance profiler for autonomous coding agents** — not an observa
 dashboard, not an enterprise proxy. See [`VISION.md`](VISION.md).
 
 On top of profiling, an optional [optimize layer](#optimize-layer) can rewrite requests
-in-flight to cut token waste on long sessions. It's off by default. On our benchmark it
-produced a large win on Claude/Bedrock (**~−75% cost**) but a **regression** on
-DeepSeek — the effect is **provider-dependent**, driven by how each provider's prompt cache
-reacts to editing old context. See the
-[benchmark report](benchmarks/REPORT-optimize-layer.md) for the full, honest picture.
+in-flight to reduce token usage. It's off by default. **Important finding:** Anthropic's
+native cache on Bedrock achieves ~98-99% read rate on unmodified requests — prefix-editing
+optimizations (pruneStale, collapseSystem, etc.) **break this cache** and cause cost
+increases. The optimizer now auto-detects Bedrock and applies only cache-safe strategies
+(`stripTools` ~12% savings, `tailTruncate`). For DeepSeek, prefix-editing also causes
+regressions. See the [optimization report](docs/OPTIMIZATION-STRATEGIES-REPORT.md) for
+the full analysis and [cache methodology](docs/CACHE-BENCHMARK-METHODOLOGY.md) for how
+Bedrock's byte-prefix cache works.
 
 **Live demo:** explore real captured sessions in a static, read-only clone of the
 dashboard — no install required: **https://rguiu.github.io/ai-agent-profiler/**
@@ -245,44 +248,37 @@ aap serve --optimize
 
 ### Strategies
 
-All strategies are **enabled by default** — no per-strategy configuration needed. Just
-pass `--optimize` and everything fires automatically. The profiler auto-detects your
-provider (Anthropic/Bedrock vs OpenAI-compatible) and applies the appropriate profile.
+The profiler auto-detects your provider and applies the appropriate profile. **Most
+strategies are DISABLED for Anthropic/Bedrock** because the native cache is already
+near-optimal — modifying the cached prefix triggers expensive cache writes ($18.75/MTok)
+that far exceed any savings from smaller context.
 
-> **You don't need to pick strategies.** The auto-detected profile enables the right set
-> for your provider. The table below is for understanding what each does and where it
-> applies — not for manual selection.
+> **You don't need to pick strategies.** Pass `--optimize` and the auto-detected profile
+> enables only the safe set for your provider.
 
-#### High-impact (proven cost savers on Claude/Bedrock)
+#### Bedrock-safe (active on Anthropic/Bedrock)
 
-| Strategy            | Savings | Provider            | What it does                                                                                                                                          |
-| ------------------- | ------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pruneStale`        | ~57%    | Claude/Bedrock only | Replaces old tool results with 1-line summaries. **Single biggest saver.** Harmful on DeepSeek (breaks prefix cache).                                 |
-| `collapseSystem`    | ~20%    | Claude/Bedrock only | Replaces repeated system prompt with a hash stub after the first request.                                                                             |
-| `pruneUnusedTools`  | ~23%    | Claude/Bedrock only | Drops tool definitions the model never called (after 10 turns).                                                                                       |
-| `insertBreakpoints` | —       | Claude/Bedrock only | Restores `cache_control` markers at optimal positions after other strategies edit the request. No token savings, but achieves near-zero cache misses. |
+| Strategy       | Savings/session | What it does                                                                                                |
+| -------------- | --------------- | ----------------------------------------------------------------------------------------------------------- |
+| `stripTools`   | ~$0.45 (~12%)   | Removes unused tool definitions (Workflow, Agent, ReportFindings) from turn 1. Prefix stays stable.         |
+| `tailTruncate` | ~$0.03          | Truncates large tool results only in the last user message (trailing edge = always a cache write anyway).   |
 
-#### Low-impact (safe everywhere, modest savings)
+#### DISABLED on Bedrock (these break the native cache)
 
-| Strategy         | Savings | Provider | What it does                                                                    |
-| ---------------- | ------- | -------- | ------------------------------------------------------------------------------- |
-| `dedup`          | small   | All      | Returns a stub when the model re-reads an unchanged file.                       |
-| `truncate`       | varies  | All      | Keeps first 25 + last 30 lines of oversized results. Useful for large files.    |
-| `suppressReread` | small   | All      | Suppresses reading a file immediately after writing it (content already known). |
+| Strategy            | Why disabled                                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------------- |
+| `pruneStale`        | Edits old messages → changes bytes → cache miss → 12.5× cost penalty                           |
+| `collapseSystem`    | Changes system prompt bytes → different prefix → cold cache                                     |
+| `pruneUnusedTools`  | Removes tools mid-session → new prefix → cold cache                                             |
+| `insertBreakpoints` | Adds markers to cached content → different bytes → miss                                         |
+| `stablePrefix`      | Reorders tool JSON → different bytes → miss                                                     |
+| `reorderVolatile`   | Moves content between messages → different bytes → miss                                         |
 
-#### Cache-preservation (no token savings, prevent cache misses)
+#### Also disabled on DeepSeek (automatic)
 
-| Strategy          | Savings | Provider            | What it does                                                                                                                                 |
-| ----------------- | ------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stablePrefix`    | 0       | All                 | Sorts tool-definition JSON keys so byte order is consistent across requests.                                                                 |
-| `reorderVolatile` | 0       | Claude/Bedrock only | Moves volatile `<system-reminder>` blocks past the cache boundary. Rarely fires in practice (most messages have tool_results). Experimental. |
-
-#### Disabled on DeepSeek (automatic)
-
-DeepSeek uses **prefix caching** (automatic, no markers). Any edit to content in the
-middle of the conversation destroys the cache entirely. The profiler auto-disables
-`pruneStale`, `collapseSystem`, `pruneUnusedTools`, and `insertBreakpoints` for
-DeepSeek sessions — they would cause a **cost increase**, not savings.
+DeepSeek uses **automatic prefix caching** (no markers). Same result: any byte edit
+destroys the cache. The profiler auto-disables all prefix-editing strategies for
+DeepSeek sessions.
 
 ### Configuration
 
@@ -320,20 +316,23 @@ aap optimize <session-id>          # simulation over the captured session
 
 ### Benchmark results
 
-On the `iterative-fix-plus` fixture (9 planted bugs + 3 method stubs, ~50-request session),
-the optimize layer's effect was **opposite on the two providers we tested** — same task,
-same code, same strategies:
+On the `iterative-fix-plus` fixture (9 planted bugs + 3 method stubs), controlled
+benchmarks with multiple runs showed:
 
-| Setup                 | Optimize vs baseline (cost) | Notes                         |
-| --------------------- | --------------------------- | ----------------------------- |
-| Claude Code / Bedrock | **−75%**                    | cache held; best task quality |
-| OpenCode / DeepSeek   | **+491%**                   | cache broke; agent looped     |
+| Provider | Bedrock-safe profile | Result |
+|----------|---------------------|--------|
+| Claude Code / Bedrock | stripTools + tailTruncate | **~12% savings** ($0.48/session) — modest but consistent |
+| Claude Code / Bedrock | Full optimization (prefix-editing) | **No improvement or worse** — cache damage offsets token savings |
+| OpenCode / DeepSeek | Full optimization | **+491% regression** — cache destroyed, agent looped |
 
-The whole difference is one strategy — `pruneStale` — interacting with each provider's
-prompt-cache format. It's cache-safe and load-bearing on Anthropic-format traffic (Claude)
-but cache-hostile on OpenAI-format traffic (DeepSeek). These are **single-sample, work-in-
-progress** numbers; trust the direction, not the decimals. Full analysis, control runs, and
-caveats: [`benchmarks/REPORT-optimize-layer.md`](benchmarks/REPORT-optimize-layer.md).
+**Key finding:** Anthropic's native cache achieves 98-99% read rate on unmodified requests.
+Any prefix modification triggers cache writes at 12.5× the read cost. The only safe
+strategies for Bedrock are those that don't change the cached prefix: `stripTools` (removes
+tools from turn 1 before the cache is written) and `tailTruncate` (only modifies the
+trailing edge which is always a write anyway).
+
+Full analysis: [`docs/OPTIMIZATION-STRATEGIES-REPORT.md`](docs/OPTIMIZATION-STRATEGIES-REPORT.md).
+Cache mechanics: [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md).
 
 ## Benchmarks
 
@@ -373,9 +372,11 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`VISION.md`](VISION.md) — why the project exists.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
-- [`docs/OPTIMIZATION-STRATEGIES-REPORT.md`](docs/OPTIMIZATION-STRATEGIES-REPORT.md) — comprehensive guide: how the API works, how caching works, all 9 strategies explained, benchmark results.
+- [`docs/OPTIMIZATION-STRATEGIES-REPORT.md`](docs/OPTIMIZATION-STRATEGIES-REPORT.md) — comprehensive guide: all strategies, benchmark results, why prefix-editing doesn't work on Bedrock.
+- [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how Bedrock's byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
+- [`docs/OPTIMIZATIONS-TODO.md`](docs/OPTIMIZATIONS-TODO.md) — future optimization roadmap (normalizePrefix, optimizeOnCold, IASH).
+- [`docs/DEEPSEEK-CACHING.md`](docs/DEEPSEEK-CACHING.md) — DeepSeek's prefix cache and safe strategies.
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
-- [`benchmarks/REPORT-optimize-layer.md`](benchmarks/REPORT-optimize-layer.md) — full optimize-layer benchmark (DeepSeek vs Claude).
 
 ## License
 

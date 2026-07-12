@@ -14,9 +14,11 @@ describe("resolveOptimizeConfig", () => {
     expect(out?.dedup).toBe(true);
   });
 
-  it("leaves non-prefix-cache providers untouched under auto", () => {
+  it("applies explicit-cache overrides for anthropic under auto", () => {
     const out = resolveOptimizeConfig(base, "anthropic");
-    expect(out?.collapseSystem).toBe(true);
+    expect(out?.collapseSystem).toBe(false);
+    expect(out?.tailTruncate).toBe(true);
+    expect(out?.pruneStale).toBe(false);
   });
 
   it("forces cache-safe for all providers under cache-safe profile", () => {

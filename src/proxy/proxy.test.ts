@@ -92,6 +92,7 @@ function buildConfig(upstreamPort: number): Config {
       pruneUnusedToolsAfter: 10,
       compactThreshold: 60000,
       compactKeepTail: 20,
+      stripTools: [],
     },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},

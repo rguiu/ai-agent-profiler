@@ -11,6 +11,9 @@ const SHUTDOWN_TIMEOUT_MS = 5000;
 export function serve(args?: string[]): void {
   const cliOptimize = args?.includes("--optimize") ?? false;
   const cliNoOptimize = args?.includes("--no-optimize") ?? false;
+  const portIdx = args?.indexOf("--port") ?? -1;
+  const portArg = portIdx >= 0 ? args?.[portIdx + 1] : undefined;
+  const cliPort = portArg ? parseInt(portArg, 10) : undefined;
   const config = loadConfig();
   const optimize = cliNoOptimize
     ? false
@@ -46,9 +49,10 @@ export function serve(args?: string[]): void {
     optimize ? { optimize: config.optimize } : undefined,
   );
 
-  server.listen(config.server.port, config.server.host, () => {
+  const port = cliPort ?? config.server.port;
+  server.listen(port, config.server.host, () => {
     console.log(
-      `aap proxy listening on http://${config.server.host}:${config.server.port}`,
+      `aap proxy listening on http://${config.server.host}:${port}`,
     );
     console.log(`providers: ${Object.keys(config.providers).join(", ")}`);
     console.log(`storage: ${config.storage.dir}`);
