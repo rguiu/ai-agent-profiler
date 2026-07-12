@@ -37,7 +37,11 @@ function esc(s) {
 
 const num = (n) => (n ?? 0).toLocaleString();
 const cost = (c) => (c ? `$${Number(c).toFixed(4)}` : "$0");
-const shortId = (id) => (id ? esc(String(id).slice(0, 8)) : "—");
+const shortId = (id) => {
+  if (!id) return "—";
+  const s = String(id);
+  return esc(s.length <= 16 ? s : `${s.slice(0, 8)}…${s.slice(-6)}`);
+};
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const shortPath = (p) => {
