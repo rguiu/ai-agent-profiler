@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { commandBreakdown } from "../analyze/index.js";
+import { commandBreakdown, detectRegenerations } from "../analyze/index.js";
 import { summarizeMessages, type TraceEvent } from "../parse/index.js";
 import { recommend } from "../recommend/index.js";
 import type { Store } from "../store/index.js";
@@ -28,7 +28,22 @@ export function handleApi(
       writeError(res, 404, `session "${id}" not found`);
       return true;
     }
-    writeJson(res, 200, { ...detail, recommendations: recommend(detail) });
+    const regenMap = detectRegenerations(
+      detail.requests.map((r) => ({
+        id: r.id,
+        startedAt: r.started_at,
+        inputTokens: r.input_tokens,
+        cachedInputTokens: r.cached_input_tokens,
+        cacheCreationInputTokens: r.cache_creation_input_tokens,
+        outputTokens: r.output_tokens,
+      })),
+    );
+    const regenerations = Object.fromEntries(regenMap);
+    writeJson(res, 200, {
+      ...detail,
+      recommendations: recommend(detail),
+      regenerations,
+    });
     return true;
   }
 

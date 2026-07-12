@@ -214,8 +214,9 @@ async function sessions() {
 
 const PAGE_SIZE = 100;
 
-function paginatedRequestsTable(requests, page) {
+function paginatedRequestsTable(requests, page, regenerations) {
   if (!requests.length) return `<p class="empty">No requests.</p>`;
+  const regen = regenerations || {};
   const totalPages = Math.ceil(requests.length / PAGE_SIZE);
   const start = page * PAGE_SIZE;
   const pageItems = requests.slice(start, start + PAGE_SIZE);
@@ -226,7 +227,12 @@ function paginatedRequestsTable(requests, page) {
         totalIn > 0
           ? `${num(totalIn)}${r.cached_input_tokens ? ` <span class="muted">(${num(r.cached_input_tokens)} cached)</span>` : ""}`
           : "—";
-      return `<tr>
+      const rg = regen[r.id];
+      const rowCls = rg ? ` class="regen regen-${esc(rg.severity)}"` : "";
+      const regenCell = rg
+        ? `<span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
+        : "";
+      return `<tr${rowCls}>
       <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a></td>
       <td class="mono muted">${dt(r.started_at)}</td>
       <td>${esc(r.provider)}</td>
@@ -237,7 +243,7 @@ function paginatedRequestsTable(requests, page) {
       <td class="mono">${esc(r.model) || "—"}</td>
       <td class="num">${inDisplay}</td>
       <td class="num">${r.output_tokens == null ? "—" : num(r.output_tokens)}</td>
-      <td>${esc(r.stop_reason) || "—"}</td>
+      <td>${esc(r.stop_reason) || "—"}${regenCell ? ` ${regenCell}` : ""}</td>
       <td class="num">${num(r.tool_call_count)}</td>
       <td class="num">${cost(r.cost)}</td>
     </tr>`;
@@ -255,17 +261,24 @@ function paginatedRequestsTable(requests, page) {
 }
 
 async function sessionDetail(id) {
-  const [{ session, requests, analysis, recommendations }, commands] =
-    await Promise.all([
-      api(`/sessions/${encodeURIComponent(id)}`),
-      api(`/commands?session=${encodeURIComponent(id)}`),
-    ]);
+  const [
+    { session, requests, analysis, recommendations, regenerations },
+    commands,
+  ] = await Promise.all([
+    api(`/sessions/${encodeURIComponent(id)}`),
+    api(`/commands?session=${encodeURIComponent(id)}`),
+  ]);
 
   let currentPage = 0;
 
   function renderPage() {
     const el = document.getElementById("requests-container");
-    if (el) el.innerHTML = paginatedRequestsTable(requests, currentPage);
+    if (el)
+      el.innerHTML = paginatedRequestsTable(
+        requests,
+        currentPage,
+        regenerations,
+      );
     bindPagination();
   }
 
@@ -304,7 +317,7 @@ async function sessionDetail(id) {
     <h2>Recommendations</h2>
     ${recommendationsHtml(recommendations)}
     <h2>Requests (${requests.length})</h2>
-    <div id="requests-container">${paginatedRequestsTable(requests, currentPage)}</div>
+    <div id="requests-container">${paginatedRequestsTable(requests, currentPage, regenerations)}</div>
     <h2>Context growth</h2>
     ${growthChart(analysis.growth)}
     <h2>Context cost</h2>

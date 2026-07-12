@@ -32,6 +32,7 @@ function makeDetail(): SessionDetail {
         model: "deepseek-chat",
         input_tokens: 100,
         cached_input_tokens: null,
+        cache_creation_input_tokens: null,
         output_tokens: 50,
         stop_reason: "tool_use",
         cost: 0.001,
