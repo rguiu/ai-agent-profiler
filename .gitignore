@@ -42,3 +42,6 @@ npm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+# Local dev handoff notes
+HANDOFF.md

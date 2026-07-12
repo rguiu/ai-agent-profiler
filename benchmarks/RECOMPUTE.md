@@ -51,7 +51,8 @@ against the cost stored at capture time. Read the output like this:
 
 **The corrected savings** = compare the recomputed **new $** of your baseline
 config vs your optimize config (not the old $). e.g. if baseline new-$ = X and
-optimize new-$ = Y, the true saving is `(X − Y) / X`. That replaces the old 77%.
+optimize new-$ = Y, the true saving is `(X − Y) / X`. That replaces the earlier,
+overstated figure (which was computed before cache writes were priced).
 
 ## Step 2 — persist the corrected costs + get confidence intervals (optional)
 

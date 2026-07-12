@@ -88,6 +88,7 @@ comparison arms — the standard the early numbers failed to meet.
 - [`CACHE-BENCHMARK-METHODOLOGY.md`](CACHE-BENCHMARK-METHODOLOGY.md) — how the caches work and how to benchmark them fairly.
 - [`agents/anthropic.md`](agents/anthropic.md), [`agents/deepseek.md`](agents/deepseek.md) — per-provider notes.
 - [`OPTIMIZATIONS-TODO.md`](OPTIMIZATIONS-TODO.md) — future directions in detail.
-- [`archive/`](archive/) — earlier reports and articles, retained for history. Their
-savings figures predate the cache-write cost fix and should not be relied on.
-</content>
+
+> Earlier reports whose savings figures predate the cache-write cost fix have been
+> retired; the numbers there were overstated and should not be relied on.
+> </content>

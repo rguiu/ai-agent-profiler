@@ -8,8 +8,7 @@ optimizations backfire on it, and what remains open.
 > transforms that keep the byte-prefix stable are allowed. In practice the layer is
 > off by default. See [`../OPTIMIZATION-FINDINGS.md`](../OPTIMIZATION-FINDINGS.md).
 
-This document folds in the earlier `DEEPSEEK-CACHING.md` and `DEEPSEEK-FINDINGS.md`
-(now under [`../archive/`](../archive/)).
+This document consolidates our earlier DeepSeek caching and findings notes.
 
 ---
 
