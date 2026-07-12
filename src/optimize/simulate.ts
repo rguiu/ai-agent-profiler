@@ -187,9 +187,16 @@ function scoreStream(
     const tc = turnCache(prev, prompt);
     hitTokens += tc.hitTokens;
     missTokens += tc.missTokens;
-    // computeCost prices cached tokens at cacheInputPerMTok and the rest at
-    // inputPerMTok. Output tokens are cache-independent, so we pass 0.
-    const cost = computeCost(model, tc.promptTokens, 0, pricing, tc.hitTokens);
+    // computeCost prices fresh (non-cached) input at inputPerMTok and cache
+    // reads at cacheInputPerMTok. Pass fresh = prompt - hits; output is
+    // cache-independent so we pass 0.
+    const cost = computeCost(
+      model,
+      tc.promptTokens - tc.hitTokens,
+      0,
+      pricing,
+      tc.hitTokens,
+    );
     if (cost !== null) {
       inputCost += cost;
       priced = true;

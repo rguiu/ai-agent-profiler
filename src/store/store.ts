@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS metrics (
   system_tokens   INTEGER,
   tools_defined   INTEGER,
   tools_tokens    INTEGER,
-  cached_input_tokens INTEGER
+  cached_input_tokens INTEGER,
+  cache_creation_input_tokens INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -105,6 +106,7 @@ export interface MetricsRow {
   model: string | null;
   inputTokens: number | null;
   cachedInputTokens: number | null;
+  cacheCreationTokens: number | null;
   outputTokens: number | null;
   stopReason: string | null;
   streaming: number;
@@ -345,11 +347,11 @@ export class Store {
       INSERT INTO metrics (request_id, format, model, input_tokens, output_tokens,
                            stop_reason, streaming, tool_call_count, cost, parsed_at,
                            message_count, system_tokens, tools_defined, tools_tokens,
-                           cached_input_tokens)
+                           cached_input_tokens, cache_creation_input_tokens)
       VALUES (@request_id, @format, @model, @input_tokens, @output_tokens,
               @stop_reason, @streaming, @tool_call_count, @cost, @parsed_at,
               @message_count, @system_tokens, @tools_defined, @tools_tokens,
-              @cached_input_tokens)
+              @cached_input_tokens, @cache_creation_input_tokens)
       ON CONFLICT(request_id) DO UPDATE SET
         format          = excluded.format,
         model           = excluded.model,
@@ -364,7 +366,8 @@ export class Store {
         system_tokens   = excluded.system_tokens,
         tools_defined   = excluded.tools_defined,
         tools_tokens    = excluded.tools_tokens,
-        cached_input_tokens = excluded.cached_input_tokens
+        cached_input_tokens = excluded.cached_input_tokens,
+        cache_creation_input_tokens = excluded.cache_creation_input_tokens
     `);
     this.deleteToolCallsStmt = db.prepare(
       `DELETE FROM tool_calls WHERE request_id = ?`,
@@ -566,6 +569,7 @@ export class Store {
       tools_defined: row.toolsDefined,
       tools_tokens: row.toolsTokens,
       cached_input_tokens: row.cachedInputTokens,
+      cache_creation_input_tokens: row.cacheCreationTokens,
     });
   }
 
@@ -777,6 +781,7 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "tools_defined", "INTEGER");
   ensureColumn(db, "metrics", "tools_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cached_input_tokens", "INTEGER");
+  ensureColumn(db, "metrics", "cache_creation_input_tokens", "INTEGER");
   ensureColumn(db, "sessions", "meta", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,
   // otherwise pre-existing databases fail before ensureColumn can run.

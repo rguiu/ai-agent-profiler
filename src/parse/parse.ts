@@ -32,6 +32,7 @@ export interface ParsedTrace {
   model: string | null;
   inputTokens: number | null;
   cachedInputTokens: number | null;
+  cacheCreationTokens: number | null;
   outputTokens: number | null;
   stopReason: string | null;
   toolCalls: ParsedToolCall[];
@@ -44,12 +45,14 @@ interface ModelPricing {
   inputPerMTok: number;
   outputPerMTok: number;
   cacheInputPerMTok?: number;
+  cacheWritePerMTok?: number;
 }
 
 interface Extract {
   model: string | null;
   inputTokens: number | null;
   cachedInputTokens: number | null;
+  cacheCreationTokens: number | null;
   outputTokens: number | null;
   stopReason: string | null;
   toolCalls: ParsedToolCall[];
@@ -60,6 +63,7 @@ function emptyExtract(): Extract {
     model: null,
     inputTokens: null,
     cachedInputTokens: null,
+    cacheCreationTokens: null,
     outputTokens: null,
     stopReason: null,
     toolCalls: [],
@@ -272,6 +276,8 @@ function applyAnthropicMessage(
     if (output !== null) acc.outputTokens = output;
     const cached = asNumber(usage.cache_read_input_tokens);
     if (cached !== null) acc.cachedInputTokens = cached;
+    const creation = asNumber(usage.cache_creation_input_tokens);
+    if (creation !== null) acc.cacheCreationTokens = creation;
   }
   const stop = asString(message.stop_reason);
   if (stop) acc.stopReason = stop;
@@ -389,6 +395,7 @@ function parseBedrock(objects: unknown[]): Extract {
         acc.inputTokens = asNumber(usage.inputTokens);
         acc.outputTokens = asNumber(usage.outputTokens);
         acc.cachedInputTokens = asNumber(usage.cacheReadInputTokens);
+        acc.cacheCreationTokens = asNumber(usage.cacheWriteInputTokens);
       }
       continue;
     }
@@ -439,6 +446,7 @@ function parseBedrock(objects: unknown[]): Extract {
         acc.inputTokens = asNumber(usage.inputTokens);
         acc.outputTokens = asNumber(usage.outputTokens);
         acc.cachedInputTokens = asNumber(usage.cacheReadInputTokens);
+        acc.cacheCreationTokens = asNumber(usage.cacheWriteInputTokens);
       }
       continue;
     }
@@ -476,12 +484,15 @@ function parseOpenAI(objects: unknown[]): Extract {
     if (model) acc.model = model;
     const usage = asRecord(record.usage);
     if (usage) {
-      const input = asNumber(usage.prompt_tokens);
-      if (input !== null) acc.inputTokens = input;
       const output = asNumber(usage.completion_tokens);
       if (output !== null) acc.outputTokens = output;
       const cached = openAICachedTokens(usage);
       if (cached !== null) acc.cachedInputTokens = cached;
+      // OpenAI/DeepSeek report prompt_tokens as the TOTAL prompt (cached
+      // included). Normalise to fresh (non-cached) so the stored input_tokens
+      // means the same thing across providers and computeCost needs no subtraction.
+      const promptTotal = asNumber(usage.prompt_tokens);
+      if (promptTotal !== null) acc.inputTokens = promptTotal - (cached ?? 0);
     }
     for (const choice of asArray(record.choices)) {
       const choiceRecord = asRecord(choice);
@@ -822,6 +833,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
     model: null,
     inputTokens: null,
     cachedInputTokens: null,
+    cacheCreationTokens: null,
     outputTokens: null,
     stopReason: null,
     toolCalls: [],
@@ -929,17 +941,23 @@ export function computeCost(
   outputTokens: number | null,
   pricing: Record<string, ModelPricing>,
   cachedInputTokens?: number | null,
+  cacheCreationTokens?: number | null,
 ): number | null {
   if (!model) return null;
   const rates = resolvePricing(model, pricing);
   if (!rates) return null;
-  const totalInput = inputTokens ?? 0;
-  const cached = cachedInputTokens ?? 0;
-  const cacheRate = rates.cacheInputPerMTok ?? rates.inputPerMTok;
-  const nonCachedInput = Math.max(0, totalInput - cached);
+  // Disjoint token buckets (no overlap): fresh input billed at full rate,
+  // cache reads at the read rate, cache writes at the write rate (1.25x on
+  // Anthropic). inputTokens is the FRESH (non-cached) count for every provider.
+  const fresh = Math.max(0, inputTokens ?? 0);
+  const read = cachedInputTokens ?? 0;
+  const creation = cacheCreationTokens ?? 0;
+  const readRate = rates.cacheInputPerMTok ?? rates.inputPerMTok;
+  const writeRate = rates.cacheWritePerMTok ?? rates.inputPerMTok;
   return (
-    (nonCachedInput / 1_000_000) * rates.inputPerMTok +
-    (cached / 1_000_000) * cacheRate +
+    (fresh / 1_000_000) * rates.inputPerMTok +
+    (read / 1_000_000) * readRate +
+    (creation / 1_000_000) * writeRate +
     ((outputTokens ?? 0) / 1_000_000) * rates.outputPerMTok
   );
 }

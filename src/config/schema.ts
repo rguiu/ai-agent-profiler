@@ -49,6 +49,7 @@ export const modelPricingSchema = z.object({
   inputPerMTok: z.number().nonnegative(),
   outputPerMTok: z.number().nonnegative(),
   cacheInputPerMTok: z.number().nonnegative().optional(),
+  cacheWritePerMTok: z.number().nonnegative().optional(),
 });
 
 export const throttleSchema = z.object({
