@@ -18,6 +18,11 @@ export interface OptimizeConfig {
   pruneUnusedToolsAfter: number;
   compactThreshold: number;
   compactKeepTail: number;
+  // Batch-prune: after a prune event, suppress further pruning for N turns to
+  // let the cache stabilise. 0 = prune every turn (old behaviour). On
+  // explicit-cache providers cache-write costs $6.25/MTok so frequent prefix
+  // edits are expensive — the window amortises one write over many cheap reads.
+  pruneStabilityWindow: number;
 }
 
 export const DEFAULT_CONFIG: OptimizeConfig = {
@@ -40,6 +45,7 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   pruneUnusedToolsAfter: 10,
   compactThreshold: 60000,
   compactKeepTail: 20,
+  pruneStabilityWindow: 0,
 };
 
 // Cache-safe overrides for providers with automatic prefix caching (DeepSeek).
@@ -300,6 +306,10 @@ export class OptimizeLayer {
   private frozenSummary: string | null = null;
   private markersBeforeOpt = 0;
   private toolDefTokensResent = 0;
+  // Batch-prune state: the turn on which the last prune fired. While
+  // `turn - lastPruneTurn < pruneStabilityWindow`, pruneStale is suppressed.
+  // When pruneStabilityWindow === Infinity, prune fires once then never again.
+  private lastPruneTurn = 0;
 
   constructor(config: Partial<OptimizeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -618,6 +628,16 @@ export class OptimizeLayer {
     const threshold = this.turn - this.config.pruneAfterTurns;
     if (threshold <= 0) return null;
 
+    // Batch-prune: if within the stability window after a previous prune,
+    // suppress further pruning so the cache prefix stays byte-stable.
+    if (
+      this.config.pruneStabilityWindow > 0 &&
+      this.lastPruneTurn > 0 &&
+      this.turn - this.lastPruneTurn < this.config.pruneStabilityWindow
+    ) {
+      return null;
+    }
+
     // Track last breakpoint position for cacheRate attribution (observability),
     // but do NOT block pruning — benchmark proved that aggressive pruning
     // dominates cost savings even when it occasionally breaks cached regions.
@@ -697,6 +717,7 @@ export class OptimizeLayer {
       }
       return msg;
     });
+    if (changed) this.lastPruneTurn = this.turn;
     return changed ? result : null;
   }
 

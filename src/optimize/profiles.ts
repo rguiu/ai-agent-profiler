@@ -46,11 +46,16 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
 // Overrides for explicit-breakpoint providers (Anthropic/Bedrock): enable
 // cache_control marker insertion and volatile reordering. The full
 // token-reduction layer (including pruneStale) is fine here — the cache is
-// client-controlled, and aggressive pruning dominates cost savings even if
-// it occasionally breaks cached regions.
+// client-controlled. Cache-write costs ($6.25/MTok on Opus) mean prefix edits
+// must be infrequent — batch prune once then let the cache amortise over many
+// cheap reads ($0.50/MTok). The stability window controls how many turns pass
+// between prune events. frozenCompact provides a complementary one-shot fold
+// for very long sessions.
 export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
   insertBreakpoints: true,
   reorderVolatile: true,
+  pruneStabilityWindow: 25,
+  frozenCompact: true,
 };
 
 export function cacheFamilyFor(provider: string): CacheFamily {
