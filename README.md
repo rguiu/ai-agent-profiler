@@ -1,7 +1,8 @@
 # AI Agent Profiler
 
-A **local-first profiler and optimizer for AI coding agents** — read-only by default,
-with an optional in-flight optimize layer that cuts token waste.
+A **local-first profiler for AI coding agents** — read-only by default, with an
+optional in-flight optimize layer (which, we found, mostly can't beat the provider's
+own prompt cache — see [findings](docs/OPTIMIZATION-FINDINGS.md)).
 
 It sits as a transparent proxy between a coding agent (Claude Code, opencode) and an
 LLM provider (Anthropic, OpenAI-compatible) and records high-fidelity traces of every
@@ -10,15 +11,14 @@ interaction — so you can measure how the agent uses tools, files, context, and
 It is a **performance profiler for autonomous coding agents** — not an observability
 dashboard, not an enterprise proxy. See [`VISION.md`](VISION.md).
 
-On top of profiling, an optional [optimize layer](#optimize-layer) can rewrite requests
-in-flight to reduce token usage. It's off by default. **Important finding:** Anthropic's
-native cache on Bedrock achieves ~98-99% read rate on unmodified requests — prefix-editing
-optimizations (pruneStale, collapseSystem, etc.) **break this cache** and cause cost
-increases. The optimizer now auto-detects Bedrock and applies only cache-safe strategies
-(`stripTools` ~12% savings, `tailTruncate`). For DeepSeek, prefix-editing also causes
-regressions. See the [optimization report](docs/OPTIMIZATION-STRATEGIES-REPORT.md) for
-the full analysis and [cache methodology](docs/CACHE-BENCHMARK-METHODOLOGY.md) for how
-Bedrock's byte-prefix cache works.
+On top of profiling, there's an optional [optimize layer](#optimize-layer) that can
+rewrite requests in-flight to cut token waste. We tried it and it mostly **doesn't beat
+the provider's own prompt cache**: on both Anthropic/Bedrock and DeepSeek, the high-impact
+ideas all edit the cached prefix, and editing the prefix costs more (cache writes / misses)
+than the tokens it saves. So the layer is **off by default** and passes cached traffic
+through. See [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) for the full
+story, what remains safe, and future directions (e.g. rewriting only idle/cold sessions,
+where the cache has expired anyway).
 
 **Live demo:** explore real captured sessions in a static, read-only clone of the
 dashboard — no install required: **https://rguiu.github.io/ai-agent-profiler/**
@@ -60,7 +60,7 @@ the LLM.
   high amplification, context duplication, inefficient search→read).
 - **Export & compare** — session reports as Markdown/JSON; sessions side by side.
 - **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data for agent self-introspection.
-- **Optimize layer** — 9 request-rewriting strategies, all enabled by default (see below).
+- **Optimize layer** — 9 request-rewriting strategies, **off by default**; on cached providers it deliberately does very little (see below).
 
 See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
@@ -239,100 +239,45 @@ works — and its caveats — differ per provider:
 
 ## Optimize Layer
 
-An optional layer that rewrites request bodies in-flight to reduce token waste in long
-sessions. Enable it with `--optimize` or in config:
+An optional layer that can rewrite request bodies in-flight. Enable it with `--optimize`
+or in config:
 
 ```
 aap serve --optimize
 ```
 
-### Strategies
+**It is off by default, and on cached providers it deliberately does very little.** We
+built a range of prompt-shrinking strategies (summarising old results, dropping the
+system prompt, pruning tools, compacting history) and found they don't beat the provider's
+own prompt cache: on Anthropic/Bedrock and DeepSeek alike, the high-impact ideas edit the
+_cached prefix_, and editing the prefix costs more (cache writes / misses) than the tokens
+it saves. So the layer auto-detects the provider and keeps only the edits that don't touch
+the cached prefix; everything that rewrites the middle of the prompt is disabled.
 
-The profiler auto-detects your provider and applies the appropriate profile. **Most
-strategies are DISABLED for Anthropic/Bedrock** because the native cache is already
-near-optimal — modifying the cached prefix triggers expensive cache writes ($18.75/MTok)
-that far exceed any savings from smaller context.
+The full story — what we tried, why it failed, what's still safe, and where real gains
+might exist (e.g. rewriting only idle/cold sessions where the cache has expired) — is in:
+
+- [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) — the narrative.
+- [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue + safety table.
+- [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the caches work and how to benchmark them fairly.
+- [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider notes.
 
 > **You don't need to pick strategies.** Pass `--optimize` and the auto-detected profile
 > enables only the safe set for your provider.
 
-#### Bedrock-safe (active on Anthropic/Bedrock)
-
-| Strategy       | Savings/session | What it does                                                                                                |
-| -------------- | --------------- | ----------------------------------------------------------------------------------------------------------- |
-| `stripTools`   | ~$0.45 (~12%)   | Removes unused tool definitions (Workflow, Agent, ReportFindings) from turn 1. Prefix stays stable.         |
-| `tailTruncate` | ~$0.03          | Truncates large tool results only in the last user message (trailing edge = always a cache write anyway).   |
-
-#### DISABLED on Bedrock (these break the native cache)
-
-| Strategy            | Why disabled                                                                                    |
-| ------------------- | ----------------------------------------------------------------------------------------------- |
-| `pruneStale`        | Edits old messages → changes bytes → cache miss → 12.5× cost penalty                           |
-| `collapseSystem`    | Changes system prompt bytes → different prefix → cold cache                                     |
-| `pruneUnusedTools`  | Removes tools mid-session → new prefix → cold cache                                             |
-| `insertBreakpoints` | Adds markers to cached content → different bytes → miss                                         |
-| `stablePrefix`      | Reorders tool JSON → different bytes → miss                                                     |
-| `reorderVolatile`   | Moves content between messages → different bytes → miss                                         |
-
-#### Also disabled on DeepSeek (automatic)
-
-DeepSeek uses **automatic prefix caching** (no markers). Same result: any byte edit
-destroys the cache. The profiler auto-disables all prefix-editing strategies for
-DeepSeek sessions.
-
-### Configuration
-
-All settings live under `[optimize]` in `config.toml`:
-
-```toml
-[optimize]
-enabled = true              # always optimize (or use --optimize flag)
-truncateThreshold = 4096    # bytes above which truncation kicks in
-pruneAfterTurns = 6         # prune results older than N assistant turns
-suppressWithinTurns = 2     # suppress re-reads within N turns of a write
-```
-
-The sweet spot is sessions with 20+ requests involving repeated file reads and iterative
-fix/verify cycles. For short sessions (<10 requests) the optimizer has minimal effect.
-
 ### Inspecting what fired
 
-A live optimized run records **which strategies fired** and how many tokens each saved,
-per session. View them in the session report or the JSON/dashboard:
+A live optimized run records **which strategies fired** and how many tokens each removed,
+per session:
 
 ```
 aap export <session-id>            # Markdown report — "Optimizations applied" table
 aap export <session-id> --json     # machine-readable: the `optimize` array
+aap optimize <session-id>          # dry-run simulation over an already-captured session
 ```
 
-The recorded totals reflect the strategies that actually ran on the live request path.
-To explore what _would_ fire on an already-captured session — a what-if that replays the
-captured (pre-optimization) requests without re-running the agent — use the dry-run
-simulator:
-
-```
-aap optimize <session-id>          # simulation over the captured session
-```
-
-### Benchmark results
-
-On the `iterative-fix-plus` fixture (9 planted bugs + 3 method stubs), controlled
-benchmarks with multiple runs showed:
-
-| Provider | Bedrock-safe profile | Result |
-|----------|---------------------|--------|
-| Claude Code / Bedrock | stripTools + tailTruncate | **~12% savings** ($0.48/session) — modest but consistent |
-| Claude Code / Bedrock | Full optimization (prefix-editing) | **No improvement or worse** — cache damage offsets token savings |
-| OpenCode / DeepSeek | Full optimization | **+491% regression** — cache destroyed, agent looped |
-
-**Key finding:** Anthropic's native cache achieves 98-99% read rate on unmodified requests.
-Any prefix modification triggers cache writes at 12.5× the read cost. The only safe
-strategies for Bedrock are those that don't change the cached prefix: `stripTools` (removes
-tools from turn 1 before the cache is written) and `tailTruncate` (only modifies the
-trailing edge which is always a write anyway).
-
-Full analysis: [`docs/OPTIMIZATION-STRATEGIES-REPORT.md`](docs/OPTIMIZATION-STRATEGIES-REPORT.md).
-Cache mechanics: [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md).
+(Recorded "tokens removed" is prompt shrinkage, not a guaranteed cost saving — see the
+findings doc for why the two differ on cached providers.)
 
 ## Benchmarks
 
@@ -372,10 +317,11 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`VISION.md`](VISION.md) — why the project exists.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
-- [`docs/OPTIMIZATION-STRATEGIES-REPORT.md`](docs/OPTIMIZATION-STRATEGIES-REPORT.md) — comprehensive guide: all strategies, benchmark results, why prefix-editing doesn't work on Bedrock.
-- [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how Bedrock's byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
+- [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) — what we tried to optimize, why it doesn't beat the cache, and where gains might still exist.
+- [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue and cache-safety table.
+- [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
+- [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider caching and optimizer notes.
 - [`docs/OPTIMIZATIONS-TODO.md`](docs/OPTIMIZATIONS-TODO.md) — future optimization roadmap (normalizePrefix, optimizeOnCold, IASH).
-- [`docs/DEEPSEEK-CACHING.md`](docs/DEEPSEEK-CACHING.md) — DeepSeek's prefix cache and safe strategies.
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
 
 ## License

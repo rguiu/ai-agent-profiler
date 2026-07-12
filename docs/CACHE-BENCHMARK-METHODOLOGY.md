@@ -37,6 +37,7 @@ the breakpoint. This includes:
 3. The `messages` array (all messages up to the breakpoint, byte-for-byte)
 
 **Any change to ANY byte before a breakpoint invalidates that cache entry.** This includes:
+
 - Reordering tools or messages
 - Adding/removing whitespace
 - Changing a single character in a tool description
@@ -71,17 +72,18 @@ Claude Code places exactly 3 `cache_control: {"type": "ephemeral"}` markers:
 3. **Last user message** — on the most recent tool_result block (the "trailing edge")
 
 This means:
+
 - System prompt + tools are cached after the first request
 - The full conversation prefix (all past messages) is cached after each turn
 - Only the new content (after the last breakpoint) is written each turn
 
 ### Pricing
 
-| Token type | Cost per MTok | When |
-|---|---|---|
-| Cache read | $1.50 | Bytes match a previously cached prefix |
-| Cache write | $18.75 | New content up to a breakpoint (1.25× input) |
-| Regular input | $15.00 | Content not covered by any breakpoint |
+| Token type    | Cost per MTok | When                                         |
+| ------------- | ------------- | -------------------------------------------- |
+| Cache read    | $1.50         | Bytes match a previously cached prefix       |
+| Cache write   | $18.75        | New content up to a breakpoint (1.25× input) |
+| Regular input | $15.00        | Content not covered by any breakpoint        |
 
 Cache write is 12.5× more expensive than cache read. A cache miss that converts reads to
 writes is devastating — converting 100K tokens from read to write costs an extra $1.73.
@@ -150,6 +152,7 @@ strip-2 (cold): [system + 6 tools + msg1] → no prior cache → expensive first
 ### Leaving and coming back
 
 If you leave for longer than the cache TTL:
+
 - Your system prompt + tools prefix expires
 - Your full conversation history prefix expires
 - First request back pays cache-write on the ENTIRE context ($18.75/MTok on potentially
@@ -159,6 +162,7 @@ If you leave for longer than the cache TTL:
 ### Session resume (`/resume` in Claude Code)
 
 When you resume a killed session, the conversation history is restored client-side. But:
+
 - If cache is still warm (within TTL): immediate cache hits, cheap
 - If cache expired: first request pays full write cost on entire history
 
@@ -199,6 +203,7 @@ penalty = P × ($18.75 - $1.50) / 1M = P × $17.25 / 1M
 ```
 
 For our benchmark:
+
 - Full prefix (9 tools): ~24K tokens → cold penalty ≈ $0.41
 - Stripped prefix (6 tools): ~16K tokens → cold penalty ≈ $0.28
 

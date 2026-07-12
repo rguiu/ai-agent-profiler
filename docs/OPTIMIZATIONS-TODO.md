@@ -199,16 +199,17 @@ and the tools would fail. The canonical form must be a valid-looking absolute pa
 
 ### What gets rewritten
 
-| Direction | What | Example |
-|-----------|------|---------|
-| → request | System blocks (working dir, CLAUDE.md paths) | `/Users/raulguiu/code/proj` → `/p/proj` |
-| → request | Tool results (file contents, command outputs with paths) | same |
-| ← response | Tool calls (Read/Edit file_path arguments) | `/p/proj/src/foo.ts` → `/Users/raulguiu/code/proj/src/foo.ts` |
-| ← response | Text content (file references in explanations) | same |
+| Direction  | What                                                     | Example                                                       |
+| ---------- | -------------------------------------------------------- | ------------------------------------------------------------- |
+| → request  | System blocks (working dir, CLAUDE.md paths)             | `/Users/raulguiu/code/proj` → `/p/proj`                       |
+| → request  | Tool results (file contents, command outputs with paths) | same                                                          |
+| ← response | Tool calls (Read/Edit file_path arguments)               | `/p/proj/src/foo.ts` → `/Users/raulguiu/code/proj/src/foo.ts` |
+| ← response | Text content (file references in explanations)           | same                                                          |
 
 ### What stays user-specific
 
 Content after the last `cache_control` breakpoint is always a cache write anyway:
+
 - Personal memory files
 - Current git status / uncommitted changes
 - Latest user message + tool results
@@ -228,14 +229,17 @@ User E (same minute):  system[normalized] + tools → READ ($0.04)
 ### Estimated savings
 
 System + tools prefix: ~24K tokens.
+
 - Cold write: 24K × $18.75/MTok = $0.45
-- Warm read:  24K × $1.50/MTok  = $0.04
+- Warm read: 24K × $1.50/MTok  = $0.04
 
 Per cold window (5-min TTL), savings = (N-1 users) × ($0.45 - $0.04):
+
 - 5-person team: ~$1.64 saved per cold window
 - 10-person team: ~$3.69 saved per cold window
 
 Over a workday (~50 cold windows assuming 5-min TTL with activity gaps):
+
 - 5-person team: **~$82/day** potential savings
 - Depends on concurrent usage within TTL windows
 
@@ -287,6 +291,7 @@ making every subsequent read cheaper for the rest of the TTL window.
 ### Estimated savings
 
 A 200K-token session returning after cache expiry:
+
 - Without: writes 200K tokens at $18.75/MTok = $3.75
 - With pruning/dedup: writes 150K tokens at $18.75/MTok = $2.81
 - Saves: ~$0.94 per cold return, plus cheaper reads for all subsequent turns

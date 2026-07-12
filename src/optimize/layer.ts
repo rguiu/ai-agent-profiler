@@ -464,9 +464,7 @@ export class OptimizeLayer {
     }
 
     if (this.config.tailTruncate && Array.isArray(parsed.messages)) {
-      const truncated = this.tailTruncateResults(
-        parsed.messages as Message[],
-      );
+      const truncated = this.tailTruncateResults(parsed.messages as Message[]);
       if (truncated) {
         parsed.messages = truncated;
         changed = true;

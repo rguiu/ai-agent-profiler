@@ -75,8 +75,8 @@ Notes:
 ## What to do with the result
 
 1. Record the corrected baseline→optimize saving (with CIs from Step 2).
-2. Update the headline number wherever the old 77% appears:
-   `docs/OPTIMIZATION-STRATEGIES-REPORT.md` and the article draft.
+2. Update the numbers wherever they appear: `docs/OPTIMIZATION-FINDINGS.md`
+   (and `docs/agents/anthropic.md`) and any article draft.
 3. If the corrected saving is materially different, say so plainly — a public
    correction ("re-measured with cache-write costs included; the real figure is
    N%") is the credibility-building move, same as the earlier DeepSeek fix.

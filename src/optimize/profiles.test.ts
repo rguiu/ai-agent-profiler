@@ -55,10 +55,7 @@ describe("overridesFor", () => {
     expect(overridesFor("auto", "anthropic")).toBe(EXPLICIT_CACHE_OVERRIDES);
     expect(overridesFor("auto", "bedrock")).toBe(EXPLICIT_CACHE_OVERRIDES);
     // Explicit-cache overrides disable everything to preserve native cache
-    expect(overridesFor("auto", "bedrock")).toHaveProperty(
-      "pruneStale",
-      false,
-    );
+    expect(overridesFor("auto", "bedrock")).toHaveProperty("pruneStale", false);
     expect(overridesFor("auto", "bedrock")).toHaveProperty(
       "tailTruncate",
       true,

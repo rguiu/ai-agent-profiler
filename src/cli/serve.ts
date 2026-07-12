@@ -51,9 +51,7 @@ export function serve(args?: string[]): void {
 
   const port = cliPort ?? config.server.port;
   server.listen(port, config.server.host, () => {
-    console.log(
-      `aap proxy listening on http://${config.server.host}:${port}`,
-    );
+    console.log(`aap proxy listening on http://${config.server.host}:${port}`);
     console.log(`providers: ${Object.keys(config.providers).join(", ")}`);
     console.log(`storage: ${config.storage.dir}`);
     if (optimize) {

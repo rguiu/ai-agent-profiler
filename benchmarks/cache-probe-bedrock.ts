@@ -37,7 +37,10 @@ const TOOLS_FULL: Tool[] = [
   {
     name: "Bash",
     description: "Execute shell commands. " + "x".repeat(500),
-    input_schema: { type: "object", properties: { command: { type: "string" } } },
+    input_schema: {
+      type: "object",
+      properties: { command: { type: "string" } },
+    },
   },
   {
     name: "Read",
@@ -47,12 +50,18 @@ const TOOLS_FULL: Tool[] = [
   {
     name: "Workflow",
     description: "Multi-agent orchestration. " + "x".repeat(2000),
-    input_schema: { type: "object", properties: { script: { type: "string" } } },
+    input_schema: {
+      type: "object",
+      properties: { script: { type: "string" } },
+    },
   },
   {
     name: "Agent",
     description: "Spawn sub-agents. " + "x".repeat(800),
-    input_schema: { type: "object", properties: { prompt: { type: "string" } } },
+    input_schema: {
+      type: "object",
+      properties: { prompt: { type: "string" } },
+    },
   },
 ];
 
@@ -71,7 +80,8 @@ const SYSTEM = [
   { type: "text", text: "You are a calculator." },
   {
     type: "text",
-    text: "Respond with just the number, nothing else. No explanation. " + PADDING,
+    text:
+      "Respond with just the number, nothing else. No explanation. " + PADDING,
     cache_control: { type: "ephemeral" },
   },
   {
@@ -100,7 +110,12 @@ let sessionCounter = 0;
 
 async function call(
   label: string,
-  opts: { tools?: Tool[]; sessionId?: string; system?: unknown; messages?: unknown } = {},
+  opts: {
+    tools?: Tool[];
+    sessionId?: string;
+    system?: unknown;
+    messages?: unknown;
+  } = {},
 ): Promise<Usage> {
   const sid =
     opts.sessionId ?? `probe-bedrock-${Date.now()}-${++sessionCounter}`;
@@ -145,9 +160,7 @@ async function call(
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main(): Promise<void> {
-  console.log(
-    `\nBedrock cache probe (${MODEL})\n${"─".repeat(72)}`,
-  );
+  console.log(`\nBedrock cache probe (${MODEL})\n${"─".repeat(72)}`);
   console.log(`Proxy: ${BASE_URL}  TTL probe: ${PROBE_TTL}\n`);
 
   // Use a fixed session for the warm-up pair
@@ -194,7 +207,10 @@ async function main(): Promise<void> {
   if (PROBE_TTL) {
     console.log("\n── Test 5: TTL probe (waiting for cache expiry) ──");
     const ttlSession = `probe-ttl-${Date.now()}`;
-    await call("5a. warm the cache", { tools: TOOLS_FULL, sessionId: ttlSession });
+    await call("5a. warm the cache", {
+      tools: TOOLS_FULL,
+      sessionId: ttlSession,
+    });
 
     for (const waitSec of [60, 120, 180, 300, 600]) {
       console.log(`    ... waiting ${waitSec}s ...`);
@@ -215,7 +231,9 @@ async function main(): Promise<void> {
   console.log("Interpretation:");
   console.log("  1b cached > 0   → same-session cache works");
   console.log("  2  cached > 0   → cross-session cache works (same prefix)");
-  console.log("  3a cached = 0   → different prefix = cold start (strip effect)");
+  console.log(
+    "  3a cached = 0   → different prefix = cold start (strip effect)",
+  );
   console.log("  3b cached > 0   → strip prefix warms after first request");
   console.log("  4  cached > 0   → minimal prefix also caches");
   if (PROBE_TTL) {

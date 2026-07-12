@@ -278,7 +278,9 @@ describe("tailTruncate", () => {
       truncateThreshold: 200,
     });
 
-    const bigResult = ("detailed line content here ".repeat(3) + "\n").repeat(100);
+    const bigResult = ("detailed line content here ".repeat(3) + "\n").repeat(
+      100,
+    );
     const messages = [
       {
         role: "user",
