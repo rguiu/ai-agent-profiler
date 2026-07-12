@@ -411,15 +411,33 @@ svg.chart circle {
   border-color: var(--accent);
 }
 
-.demo-note {
-  margin: 0 1rem 1rem;
-  padding: 0.6rem 0.8rem;
-  border: 1px solid #d0d7de;
-  border-left: 3px solid #0969da;
-  border-radius: 6px;
-  background: #f6f8fa;
-  font-size: 0.85rem;
-  line-height: 1.4;
-  color: #444;
+/* Cold-cache regeneration highlighting in the request timeline. */
+tr.regen td {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
-.demo-note code { background: #eaeef2; padding: 0 3px; border-radius: 3px; }
+tr.regen.regen-high td {
+  background: color-mix(in srgb, var(--bad) 16%, transparent);
+}
+tr.regen-warn td:first-child {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+tr.regen-high td:first-child {
+  box-shadow: inset 3px 0 0 var(--bad);
+}
+.regen-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: help;
+  font-family: var(--mono);
+}
+.regen-badge.regen-warn {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--warn);
+}
+.regen-badge.regen-high {
+  background: color-mix(in srgb, var(--bad) 22%, transparent);
+  color: var(--bad);
+}
