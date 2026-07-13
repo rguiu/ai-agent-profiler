@@ -4,6 +4,7 @@ import { analyzeClaude } from "./analyze-claude.js";
 import { commands } from "./commands.js";
 import { compareSessions } from "./compare.js";
 import { exportSession } from "./export.js";
+import { hook } from "./hook.js";
 import { mcp } from "./mcp.js";
 import { optimize } from "./optimize.js";
 import { parse } from "./parse.js";
@@ -64,6 +65,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "analyze-claude":
       analyzeClaude(argv.slice(1));
+      return;
+    case "hook":
+      hook(argv.slice(1));
       return;
     case "mcp":
       await mcp();

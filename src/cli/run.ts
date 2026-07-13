@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { loadConfig, type Config } from "../config/index.js";
+import { ensureHooksInstalled, hooksPath } from "../hook/install.js";
 import type { SessionInfo } from "../session/index.js";
 
 const PROVIDER_ENV: Readonly<Record<string, string>> = {
@@ -161,6 +162,9 @@ export async function run(args: string[]): Promise<void> {
       );
     }
   }
+
+  ensureHooksInstalled();
+  env.PATH = `${hooksPath()}:${env.PATH || "/usr/local/bin:/usr/bin:/bin"}`;
 
   const child = spawn(agent, agentArgs, { stdio: "inherit", env });
 
