@@ -18,22 +18,24 @@ fi
 output=$("$REAL_NODE" "$@" 2>&1)
 rc=$?
 
-# Filter: drop passing tests + YAML blocks, keep failures + summary lines
 if [ "$HOOK_MODE" = "aggressive" ]; then
+  # Aggressive: failures + summary, strip YAML diagnostic blocks
   echo "$output" | awk '
-    /^ *# fail [0-9]/ { print; next }
+    BEGIN { skip=0 }
+    /^ *---/ { skip=1; next }
+    /^ *\.\.\./ { skip=0; next }
+    skip { next }
     /^ *not ok/ { print; next }
+    /^ *# fail [0-9]/ { print; next }
     /^[0-9]+\.\.[0-9]+/ { counts=$0; next }
     END { if (counts) print counts }
   '
 else
+  # Normal: skip passing individual tests, keep failure details (including diagnostics)
   echo "$output" | awk '
     BEGIN { skip=0; tests=0; fail=0 }
-    /^ *---/ { skip=1; next }
-    /^ *\.\.\./ { skip=0; next }
-    skip { next }
     /^ *ok [0-9]/ { tests++; next }
-    /^ *not ok [0-9]/ { tests++; fail++; print; next }
+    /^ *not ok [0-9]/ { tests++; fail++; print; skip=0; next }
     /^ *# fail/ { print; next }
     /^ *# pass/ { next }
     /^ *# tests/ { next }

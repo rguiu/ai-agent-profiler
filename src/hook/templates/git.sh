@@ -8,13 +8,13 @@ HOOK_MODE="normal"
 
 case "$1" in
   status)
-    __REAL_BIN__ status --short --branch 2>&1 | head -40
+    __REAL_BIN__ status --short --branch 2>&1 | tail -40
     ;;
   diff)
     if [ "$HOOK_MODE" = "aggressive" ]; then
       __REAL_BIN__ diff --stat "$@" 2>&1
     else
-      __REAL_BIN__ diff "$@" 2>&1 | head -80
+      __REAL_BIN__ diff "$@" 2>&1 | tail -80
     fi
     ;;
   log)

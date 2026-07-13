@@ -35,9 +35,12 @@ export function ensureHooksInstalled(): boolean {
 
   const wrappers: [string, string, string][] = [
     ["git", readTemplate("git.sh"), resolveBin("git")],
-    ["cargo", readTemplate("cargo.sh"), resolveBin("cargo")],
     ["ls", readTemplate("ls.sh"), resolveBin("ls")],
     ["grep", readTemplate("grep.sh"), resolveBin("rg")],
+    ["node", readTemplate("node.sh"), resolveBin("node")],
+    ["find", readTemplate("find.sh"), resolveBin("find")],
+    ["cat", readTemplate("cat.sh"), resolveBin("cat")],
+    ["npm", readTemplate("npm.sh"), resolveBin("npm")],
   ];
 
   for (const [name, template, binPath] of wrappers) {

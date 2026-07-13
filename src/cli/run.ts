@@ -66,9 +66,11 @@ export function parseRunArgs(
   agent?: string;
   agentArgs: string[];
   cacheTtl?: "1h";
+  hooks?: boolean;
 } {
   const meta: Record<string, string> = {};
   let cacheTtl: "1h" | undefined;
+  let hooks: boolean | undefined;
   for (const [key, value] of Object.entries(env)) {
     if (key.startsWith("AAP_META_") && value) {
       meta[key.slice("AAP_META_".length).toLowerCase()] = value;
@@ -76,6 +78,8 @@ export function parseRunArgs(
   }
   if (env.ARMADA_NODE_NAME) meta.armada_node = env.ARMADA_NODE_NAME;
   if (env.AAP_CACHE_TTL === "1h") cacheTtl = "1h";
+  if (env.AAP_HOOK_MODE === "off") hooks = false;
+  if (env.AAP_HOOK_MODE && env.AAP_HOOK_MODE !== "off") hooks = true;
 
   let i = 0;
   while (i < args.length) {
@@ -89,17 +93,23 @@ export function parseRunArgs(
     } else if (args[i] === "--cache-1h") {
       cacheTtl = "1h";
       i += 1;
+    } else if (args[i] === "--hooks") {
+      hooks = true;
+      i += 1;
+    } else if (args[i] === "--no-hooks") {
+      hooks = false;
+      i += 1;
     } else {
       break;
     }
   }
-  return { meta, agent: args[i], agentArgs: args.slice(i + 1), cacheTtl };
+  return { meta, agent: args[i], agentArgs: args.slice(i + 1), cacheTtl, hooks };
 }
 
 export async function run(args: string[]): Promise<void> {
-  const { meta, agent, agentArgs, cacheTtl } = parseRunArgs(args, process.env);
+  const { meta, agent, agentArgs, cacheTtl, hooks } = parseRunArgs(args, process.env);
   if (!agent) {
-    console.error("Usage: aap run [--cache-1h] [--meta key=value ...] <agent> [args...]");
+    console.error("Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]");
     process.exitCode = 1;
     return;
   }
@@ -164,7 +174,10 @@ export async function run(args: string[]): Promise<void> {
   }
 
   ensureHooksInstalled();
-  env.PATH = `${hooksPath()}:${env.PATH || "/usr/local/bin:/usr/bin:/bin"}`;
+  if (hooks) {
+    env.PATH = `${hooksPath()}:${env.PATH || "/usr/local/bin:/usr/bin:/bin"}`;
+    console.error("aap: shell hooks active (PATH: ~/.aap/bin)");
+  }
 
   const child = spawn(agent, agentArgs, { stdio: "inherit", env });
 

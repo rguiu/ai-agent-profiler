@@ -5,7 +5,7 @@ HOOK_MODE="normal"
 [ "$HOOK_MODE" = "off" ] && { exec __REAL_BIN__ "$@"; }
 
 if [ "$HOOK_MODE" = "aggressive" ]; then
-  __REAL_BIN__ "$@" 2>/dev/null | head -20
-else
   __REAL_BIN__ "$@" 2>/dev/null | awk -F: '{print $1}' | sort | uniq -c | sort -rn | head -15
+else
+  __REAL_BIN__ "$@" 2>/dev/null | tail -40
 fi

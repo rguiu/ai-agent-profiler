@@ -80,16 +80,15 @@ start_serve() { # $1 = extra serve args
   echo "serve did not become healthy on $BASE — see $LOGDIR" >&2; exit 1
 }
 
-run_phase() { # $1 = scenario tag, $2 = hook mode, $3 = run args, $4 = serve args
-  printf '\n\033[1m=== phase: %s (hook=%s serve=%s) ===\033[0m\n' "$1" "${2:-off}" "${4:-<none>}"
-  start_serve "$4"
+run_phase() { # $1 = scenario tag, $2 = hook env, $3 = serve args
+  printf '\n\033[1m=== phase: %s (hooks=%s) ===\033[0m\n' "$1" "${2:-off}"
+  start_serve "$3"
 
-  aap hook mode "${2:-off}" >/dev/null 2>&1 || true
+  export AAP_HOOK_MODE="${2:-off}"
 
   "$HERE/run.sh" "$AGENT" \
     --fixture "$FIXTURE" \
-    --tag "$1" \
-    $3
+    --tag "$1"
 
   stop_serve
 }
@@ -98,10 +97,10 @@ run_phase() { # $1 = scenario tag, $2 = hook mode, $3 = run args, $4 = serve arg
 IFS=','; for scenario in $SCENARIOS; do
   case "$scenario" in
     baseline)
-      run_phase baseline off "" "--no-optimize"
+      run_phase baseline ""
       ;;
     hooks)
-      run_phase hooks aggressive "" "--no-optimize"
+      run_phase hooks aggressive
       ;;
     *)
       echo "unknown scenario: $scenario (valid: baseline, hooks)" >&2

@@ -26,6 +26,7 @@ if [ "$rc" -eq 0 ]; then
   exit 0
 fi
 
-echo "$output" | grep -E -i "(error|fail|FAIL|ERROR|✗|✘|×)" | head -20
-echo "$output" | tail -2
+echo "$output" | grep -E -i "(error|fail|FAIL|ERROR|✗|✘|×)" | tail -20
+echo "---"
+echo "$output" | tail -10
 exit $rc
