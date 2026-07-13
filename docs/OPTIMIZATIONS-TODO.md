@@ -271,14 +271,20 @@ likely. The higher write cost is amortised across many more reads.
 
 ---
 
-## 8. optimizeOnCold — Full Optimization After Cache Expiry ✅ IMPLEMENTED
+## 8. optimizeOnCold — Full Optimization After Cache Expiry ❌ BUILT, DEFAULTED OFF
 
-**Impact: Medium | Complexity: Low | Status: shipped (on by default)**
+**Status: built, found flawed, default OFF. Not recommended.**
 
-Implemented in `src/optimize/layer.ts` (`COLD_START_CONFIG`, cold-start detection in
-`rewriteRequestBody`). Config keys `optimizeOnCold` / `cacheTtlMs` in `[optimize]`. When
-the idle gap exceeds `cacheTtlMs`, the layer emits a `cold_start` action and applies the
-full strategy set for that one request, then reverts. Original design notes below.
+> **Why it doesn't work.** Implemented in `src/optimize/layer.ts` (`COLD_START_CONFIG`,
+> cold-start detection in `rewriteRequestBody`), then defaulted off. The premise ("the write
+> is happening anyway, so shrink it for free") ignores the reproducibility rule: the layer
+> applies the aggressive edits only on the cold turn, then reverts. The **next** turn the
+> client re-sends the pristine full prefix (it never learns we edited it), which diverges
+> from the shrunk prefix we just cached → the whole prefix rebuilds → **two writes instead
+> of one**, strictly worse than doing nothing. Only deterministic edits could be sustained
+> across the following turns, and those are safe to run always — so gating them on "cold"
+> adds nothing. See docs/OPTIMIZATION-STRATEGIES.md ("Attempts that did not pay off").
+> Original (now-invalidated) design notes preserved below for reference.
 
 When a user returns after the cache TTL has expired, the next request pays full cache-write
 cost regardless. This is the optimal moment to apply aggressive optimizations — the prefix
@@ -312,15 +318,15 @@ A 200K-token session returning after cache expiry (Opus 4.x, 5m write $6.25/MTok
 
 ```toml
 [optimize]
-cacheTtlMs = 1800000  # 30 min (conservative; lower once real TTL is observed)
-optimizeOnCold = true
+cacheTtlMs = 1800000   # 30 min (only relevant if you re-enable optimizeOnCold)
+optimizeOnCold = false # OFF by default — causes a double write (see above)
 ```
 
 ---
 
 ## Priority Order
 
-- ✅ **optimizeOnCold** — DONE. Free gains on cache-expired returns (shipped, on by default).
+- ❌ **optimizeOnCold** — built, found to cause a double cache write, defaulted OFF. Not recommended.
 1. **IASH** — highest ROI, prevents waste at source
 2. **normalizePrefix** — high savings that scale with team size (needs shared proxy)
 3. **Adaptive pruneAfter** — trivial to implement, immediate savings

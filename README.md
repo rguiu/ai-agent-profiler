@@ -262,14 +262,14 @@ disabled in steady state.
 > cache rebuild. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
 > The genuinely safe deterministic truncator is `stableTruncate`.
 
-**`optimizeOnCold` (on by default).** There is exactly one moment when editing the prefix
-is free: after the cache has already expired. If the gap since the previous request exceeds
-`cacheTtlMs` (default 30 min — deliberately conservative, since firing on a still-warm cache
-would turn a cheap read into an expensive write), the next request pays a full cache-write
-regardless — so for that single request the layer re-enables the full strategy set, shrinking
-the prefix before it is written. Every subsequent read in the new TTL window is then cheaper.
-It reverts to the safe set automatically on the next warm request. Watch the cache-regen
-diagnostics to learn your real TTL, then lower `cacheTtlMs` accordingly.
+**`optimizeOnCold` (off by default — known flaw).** The intended idea: when the cache has
+already expired, the next write is unavoidable, so shrink the prefix on that one turn "for
+free." In practice it causes a **double write** — the cold turn writes a shrunk prefix, then
+the next turn reverts to the steady-state set and the client re-sends the pristine full
+prefix (it never learns the proxy edited it), so the whole prefix rebuilds. Net worse than
+doing nothing. Only *deterministic* edits can be sustained across turns, and those are safe
+to run always — so gating them on "cold" adds nothing. Left configurable for experiments,
+default off. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
 
 **`upgradeCacheTtl` (off by default).** Claude Code always requests the **5-minute** cache
 (verified across captured Bedrock traces: every `cache_control` marker is bare
@@ -347,7 +347,7 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue and cache-safety table.
 - [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
 - [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider caching and optimizer notes.
-- [`docs/OPTIMIZATIONS-TODO.md`](docs/OPTIMIZATIONS-TODO.md) — future optimization roadmap (normalizePrefix, optimizeOnCold, IASH).
+- [`docs/OPTIMIZATIONS-TODO.md`](docs/OPTIMIZATIONS-TODO.md) — future optimization roadmap (normalizePrefix, keep-alive, IASH; and why optimizeOnCold was abandoned).
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
 
 ## License

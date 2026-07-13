@@ -61,18 +61,28 @@ disabled automatically per provider (via the cache-family mapping in
 
 ## Where gains might still exist
 
-The one situation where shrinking the prompt is genuinely free is when the cache has
-**expired** — the next request re-writes the whole prefix regardless, so making it smaller
-costs nothing extra. That points at a few unexplored directions:
+It's tempting to think shrinking the prompt is "free" once the cache has **expired** — the
+next request re-writes the whole prefix regardless. We built exactly that (`optimizeOnCold`)
+and it **backfires**: shrinking only the cold turn isn't sustained, so the *following* turn
+(client re-sends the pristine full prefix, layer has reverted) diverges from what we cached
+and rebuilds it — two writes, not one. It is defaulted OFF. The lesson generalises: an edit
+only helps if the proxy reproduces it **identically on every subsequent turn**, which rules
+out one-shot cold rewrites and position-scoped edits (`tailTruncate`) alike.
 
-- **Cold/idle-session rewrite (`optimizeOnCold`).** Detect that the cache TTL has lapsed
-  and apply aggressive shrinking only on that first "write anyway" request.
-- **Keep-alive / prefix normalization.** Keep a shared prefix warm, or normalize
-  per-user paths so a team shares cache reads.
+Directions that respect that rule:
+
+- **`upgradeCacheTtl` (5m→1h).** Don't shrink the prompt — extend the cache lifetime by
+  rewriting `cache_control` markers to a 1h TTL. One-time 2× write cost, no per-turn edits,
+  fully reproducible. Shipped, off by default.
+- **Keep-alive pings.** Interesting only atop the 1h cache (break-even ~12h idle); phantom
+  traffic + transparency caveats keep it a future idea.
+- **Prefix normalization.** Rewrite per-user paths to a canonical form so a team shares
+  cache reads — a deterministic, every-turn transform, so it *is* reproducible.
 - **IASH and result-shaping at the source** — reduce what enters the context in the first
   place rather than editing it afterward.
 
-These are designed but not implemented; see [`OPTIMIZATIONS-TODO.md`](OPTIMIZATIONS-TODO.md).
+These are designed but not implemented (except `upgradeCacheTtl`); see
+[`OPTIMIZATIONS-TODO.md`](OPTIMIZATIONS-TODO.md).
 
 We explored cold-vs-warm cache behaviour on **Claude** (see
 [`agents/anthropic.md`](agents/anthropic.md)); the equivalent for **DeepSeek is not yet

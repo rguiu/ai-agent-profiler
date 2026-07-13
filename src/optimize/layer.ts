@@ -75,11 +75,15 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   compactKeepTail: 20,
   pruneStabilityWindow: 0,
   stripTools: [],
-  optimizeOnCold: true,
-  // Conservative default: 30 min. Anthropic documents a 5-min *minimum* TTL, but
-  // the real expiry is often longer — firing too early would rewrite a still-warm
-  // prefix and turn a cheap read into an expensive write. Start high and tighten
-  // once real idle-gap/cache-write data (see cache-regen) shows the true TTL.
+  // DEFAULT OFF — known flaw: applying prefix edits on the cold turn is not
+  // sustained (the next turn reverts and the client re-sends the pristine full
+  // prefix), so it causes a SECOND cache write and is a net loss. Only edits that
+  // are already deterministic-and-reproducible can be sustained — and those are
+  // safe to run always, so gating them on "cold" adds nothing. Kept configurable
+  // for experiments. See docs/OPTIMIZATION-STRATEGIES.md (optimizeOnCold note).
+  optimizeOnCold: false,
+  // If ever enabled: 30 min. Anthropic documents a 5-min *minimum* TTL, but the
+  // real expiry is often longer; firing too early rewrites a still-warm prefix.
   cacheTtlMs: 1_800_000, // 30 minutes
   upgradeCacheTtl: "off",
 };

@@ -129,6 +129,23 @@ prefix costs more than the tokens saved:
   on healthy append-only traffic because it diffed raw bytes and was fooled by the
   `messages…tools` ordering. Replaced by a structural / real-`usage`-based check.
 
+- **`optimizeOnCold` (built, then defaulted OFF).** The idea: when the cache has already
+  expired (idle > `cacheTtlMs`), the next request pays a full write regardless, so apply
+  the full prefix-editing set for that one turn to shrink what gets written. The flaw is
+  the same reproducibility rule as `tailTruncate`:
+
+  - **Cold turn N:** collapses system `S→S'`, prunes history `M→M'`, writes `S' T M'`.
+  - **Turn N+1:** the layer reverts to the steady-state set, so `collapseSystem`/`pruneStale`
+    are OFF. The client re-sends the pristine full `S T M …` (it never knew we edited it).
+    Cache holds `S'`; request sends `S` → divergence at the *first bytes* → the **entire
+    prefix rebuilds**.
+
+  Net result is **two writes instead of one** — strictly worse than doing nothing. The only
+  edits that could be *sustained* across the following turns are the deterministic ones
+  (`stableTruncate`, `shapeTestOutput`, `stripTools`) — and those are safe to run *always*,
+  so gating them on "cold" adds nothing. So `optimizeOnCold` is either redundant or harmful,
+  with no configuration where it's a clear win. Left in the code, configurable, default OFF.
+
 ---
 
 ## Configuration
@@ -143,9 +160,35 @@ provider automatically — no manual tuning needed.
 ## Future directions
 
 Ideas designed but not implemented (or not yet validated) live in
-[`OPTIMIZATIONS-TODO.md`](OPTIMIZATIONS-TODO.md): `optimizeOnCold` (rewrite only when the
-cache has expired, so the write happens anyway), prefix normalization for team-shared
-caches, keep-alive pings, and IASH (intelligent agent shell). The most promising is the
-cold/idle-session rewrite, since it is the one moment where shrinking the prompt does not
-sacrifice a cache hit.
+[`OPTIMIZATIONS-TODO.md`](OPTIMIZATIONS-TODO.md): prefix normalization for team-shared
+caches, IASH (intelligent agent shell), and the two cache-lifetime levers below.
+
+### `upgradeCacheTtl` — 5m → 1h (shipped, off by default)
+
+Claude Code always requests the 5-minute cache (verified: every captured `cache_control`
+marker is bare `{"type":"ephemeral"}`). The proxy can rewrite those markers to a 1-hour TTL
+before forwarding. A 1h write costs 2× input ($10/MTok on Opus 4.x) vs 1.25× for 5m
+($6.25); reads are identical ($0.50). Worth it when idle gaps often fall in the 5m–1h range
+(fewer re-writes) and it widens the window for cross-user cache sharing 12×.
+
+### keep-alive pings — interesting *only atop the 1h cache*
+
+Proactively replay the last request (`max_tokens: 1`) during idle so a cache *read* keeps
+resetting the TTL instead of letting it expire. The economics hinge on the write/read
+ratio (12.5× on 5m):
+
+- **On the 5m cache:** ping every ~4.5 min; ~12.5 pings ≈ 56 min before keep-alive costs
+  as much as one rebuild. Barely breaks even — not worth it.
+- **On the 1h cache:** ping ~once/hour (~$0.10/hr for a 200K prefix) vs ~$1.25 per rebuild.
+  Break-even ≈ **12 hours** of idle. Dramatically cheaper.
+
+Caveats that keep it a *future* idea, not a default: it's a **bet the user returns** (wasted
+if they don't), it originates **phantom API calls** the user never issued (real cost, quota,
+billing "activity"), it **breaks the proxy's transparency** (no longer a passive pipe), and
+it needs the **real TTL** (unmeasured) to time the ping. Sequencing: gather TTL data →
+confirm `upgradeCacheTtl` helps → *then* consider keep-alive as an opt-in 1h-cache add-on.
+
+> **Note:** `optimizeOnCold` used to be listed here as "the most promising." It was built,
+> found to cause a double cache write (see *Attempts that did not pay off*), and defaulted
+> OFF. It is not a recommended direction.
 </content>

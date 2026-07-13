@@ -68,8 +68,10 @@ suppressWithinTurns = 2       # suppress re-reads within N turns of a write
 pruneUnusedToolsAfter = 10    # drop never-called tool defs after this many requests
 compactThreshold = 60000      # frozenCompact: emitted-context token budget before folding
 compactKeepTail = 20          # frozenCompact: recent messages always kept full
-optimizeOnCold = true         # when idle > cacheTtlMs, apply full optimization for the one
-                              # inevitable cold write (shrinks prefix for the new TTL window)
+optimizeOnCold = false        # OFF by default — known flaw: cold-turn prefix edits aren't
+                              # sustained (next turn reverts + client re-sends the pristine
+                              # prefix) -> a SECOND cache write = net loss. Left configurable
+                              # for experiments only. See docs/OPTIMIZATION-STRATEGIES.md.
 cacheTtlMs = 1800000          # idle gap (ms) before a request is treated as cache-cold.
                               # Conservative 30-min default: Anthropic documents a 5-min
                               # *minimum* TTL but real expiry is often longer; firing too

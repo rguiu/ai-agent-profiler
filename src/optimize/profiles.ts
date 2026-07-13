@@ -58,9 +58,8 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
 //   stableTruncate only:  95% read, 5% write  → $9.40 (+26%)
 //   prefix-editing:       34% read, 66% write → $18.78 (+151%)
 //
-// The exception is a cold start: once the cache has expired the write is
-// unavoidable, so the layer's optimizeOnCold logic re-enables the full set for
-// that single request regardless of this profile.
+// (optimizeOnCold once re-enabled the full set on a cold turn regardless of this
+// profile, but that caused a double write and is defaulted OFF — see layer.ts.)
 export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
   dedup: false,
   truncate: false,

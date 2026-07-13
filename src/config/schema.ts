@@ -53,11 +53,10 @@ export const optimizeSchema = z.object({
   pruneUnusedToolsAfter: z.number().int().positive().default(10),
   compactThreshold: z.number().int().positive().default(60000),
   compactKeepTail: z.number().int().positive().default(20),
-  // When cache is expired (idle > cacheTtlMs), apply full optimization for the
-  // one inevitable cold write, shrinking the prefix for the new TTL window.
-  // Default 30 min: conservative, since firing on a still-warm cache would turn
-  // a cheap read into an expensive write. Lower it once real data confirms TTL.
-  optimizeOnCold: z.boolean().default(true),
+  // DEFAULT OFF — known flaw: cold-turn prefix edits aren't sustained (next turn
+  // reverts + client re-sends the pristine prefix), causing a second cache write
+  // = net loss. Configurable for experiments. See OPTIMIZATION-STRATEGIES.md.
+  optimizeOnCold: z.boolean().default(false),
   cacheTtlMs: z.number().int().positive().default(1_800_000),
   // Rewrite Claude Code's cache_control markers to a 1-hour TTL before
   // forwarding. "off" = passthrough (5m, what the client sends). "1h" writes at
