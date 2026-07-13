@@ -12,6 +12,7 @@ import { handleApi } from "../api/index.js";
 import {
   OptimizeLayer,
   overridesFor,
+  applyCacheTtlUpgrade,
   type OptimizeConfig,
   type OptimizeProfile,
 } from "../optimize/index.js";
@@ -92,7 +93,7 @@ export function createProxyServer(
     typeof options?.optimize === "object" ? options.optimize : undefined;
 
   const throttle = new Throttle(config.throttle);
-  const prevBodies = new Map<string, string>();
+  const prevBodies = new Map<string, { body: string; path: string }>();
 
   return http.createServer((req, res) => {
     handle(
@@ -126,7 +127,7 @@ function handle(
   optimizeLayers?: Map<string, OptimizeLayer> | null,
   optimizeConfig?: Partial<OptimizeConfig>,
   throttle?: Throttle,
-  prevBodies?: Map<string, string>,
+  prevBodies?: Map<string, { body: string; path: string }>,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
@@ -174,10 +175,14 @@ function handle(
   }
 
   const extraHeaders: Record<string, string> = {};
+  let cacheTtlUpgrade = false;
   if (route.sessionId) {
     const session = registry.get(route.sessionId);
     if (session?.meta?.armada_node) {
       extraHeaders["x-armada-node"] = session.meta.armada_node;
+    }
+    if (session?.meta?.cache_ttl === "1h") {
+      cacheTtlUpgrade = true;
     }
   }
 
@@ -257,6 +262,7 @@ function handle(
       timeoutMs: route.provider === "ollama" ? 120_000 : undefined,
       sessionId: route.sessionId,
       prevBodies,
+      cacheTtlUpgrade,
       meta: {
         sessionId: route.sessionId,
         provider: route.provider,
@@ -284,7 +290,7 @@ function handleControl(
   registry: SessionRegistry,
   state: ProxyState,
   capture?: Capture,
-  prevBodies?: Map<string, string>,
+  prevBodies?: Map<string, { body: string; path: string }>,
 ): boolean {
   if (pathname === "/health") {
     sendJson(res, 200, { status: "ok" });
@@ -305,8 +311,12 @@ function handleControl(
   );
   if (lastBodyMatch && req.method === "GET") {
     const sid = decodeURIComponent(lastBodyMatch[1] ?? "");
-    const body = prevBodies?.get(sid) ?? null;
-    sendJson(res, 200, { sessionId: sid, body });
+    const entry = prevBodies?.get(sid) ?? null;
+    sendJson(res, 200, {
+      sessionId: sid,
+      body: entry?.body ?? null,
+      path: entry?.path ?? null,
+    });
     return true;
   }
   return false;
@@ -374,7 +384,8 @@ interface ForwardObs {
   throttle?: Throttle;
   timeoutMs?: number;
   sessionId?: string | null;
-  prevBodies?: Map<string, string>;
+  prevBodies?: Map<string, { body: string; path: string }>;
+  cacheTtlUpgrade?: boolean;
   meta: Omit<
     RequestLogEntry,
     "status" | "latencyMs" | "responseBytes" | "error"
@@ -398,6 +409,7 @@ function forward(
     timeoutMs,
     sessionId,
     prevBodies,
+    cacheTtlUpgrade,
     meta,
   } = obs;
   const startedAt = Date.now();
@@ -511,7 +523,7 @@ function forward(
   // accuracy) or the optimizer (--optimize only) needs to rewrite it. Shaper
   // runs first, then the optimizer.
   const willShape = needsShaping(meta.provider, req.method ?? "GET", meta.path);
-  if (willShape || optimizer) {
+  if (willShape || optimizer || cacheTtlUpgrade) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
@@ -524,6 +536,19 @@ function forward(
           meta.path,
         );
       }
+      if (cacheTtlUpgrade) {
+        try {
+          const parsed = JSON.parse(body.toString("utf8")) as Record<
+            string,
+            unknown
+          >;
+          if (applyCacheTtlUpgrade(parsed)) {
+            body = Buffer.from(JSON.stringify(parsed), "utf8");
+          }
+        } catch {
+          // not JSON — skip TTL upgrade
+        }
+      }
       if (optimizer) body = optimizer.rewriteRequestBody(body);
       recordOptimize?.();
 
@@ -531,7 +556,7 @@ function forward(
         const currentBody = body.toString("utf8");
         const prev = prevBodies.get(sessionId);
         if (prev) {
-          const hitTokens = commonPrefixTokens(prev, currentBody);
+          const hitTokens = commonPrefixTokens(prev.body, currentBody);
           const totalTokens = estimateTokens(currentBody);
           const missTokens = totalTokens - hitTokens;
           const hitPct = totalTokens > 0 ? Math.round((hitTokens / totalTokens) * 100) : 0;
@@ -539,7 +564,7 @@ function forward(
             `[cache] ${sessionId.slice(0, 8)} hit=${hitPct}% hitT=${hitTokens} missT=${missTokens} totalT=${totalTokens}\n`,
           );
         }
-        prevBodies.set(sessionId, currentBody);
+        prevBodies.set(sessionId, { body: currentBody, path: pathWithQuery });
       }
 
       sendUpstream(body);

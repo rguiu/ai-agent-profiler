@@ -2,7 +2,7 @@ export {
   OptimizeLayer,
   DEFAULT_CONFIG,
   CACHE_SAFE_OVERRIDES,
-  COLD_START_CONFIG,
+  applyCacheTtlUpgrade,
   type OptimizeConfig,
   type OptimizeAction,
   type OptimizeActionType,

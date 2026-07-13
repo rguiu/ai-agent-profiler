@@ -60,31 +60,45 @@ export function resolveSessionId(env: NodeJS.ProcessEnv): string {
 export function parseRunArgs(
   args: string[],
   env: NodeJS.ProcessEnv,
-): { meta: Record<string, string>; agent?: string; agentArgs: string[] } {
+): {
+  meta: Record<string, string>;
+  agent?: string;
+  agentArgs: string[];
+  cacheTtl?: "1h";
+} {
   const meta: Record<string, string> = {};
+  let cacheTtl: "1h" | undefined;
   for (const [key, value] of Object.entries(env)) {
     if (key.startsWith("AAP_META_") && value) {
       meta[key.slice("AAP_META_".length).toLowerCase()] = value;
     }
   }
   if (env.ARMADA_NODE_NAME) meta.armada_node = env.ARMADA_NODE_NAME;
+  if (env.AAP_CACHE_TTL === "1h") cacheTtl = "1h";
 
   let i = 0;
-  while (i < args.length && args[i] === "--meta") {
-    const pair = args[i + 1];
-    if (pair !== undefined) {
-      const eq = pair.indexOf("=");
-      if (eq > 0) meta[pair.slice(0, eq)] = pair.slice(eq + 1);
+  while (i < args.length) {
+    if (args[i] === "--meta") {
+      const pair = args[i + 1];
+      if (pair !== undefined) {
+        const eq = pair.indexOf("=");
+        if (eq > 0) meta[pair.slice(0, eq)] = pair.slice(eq + 1);
+      }
+      i += 2;
+    } else if (args[i] === "--cache-1h") {
+      cacheTtl = "1h";
+      i += 1;
+    } else {
+      break;
     }
-    i += 2;
   }
-  return { meta, agent: args[i], agentArgs: args.slice(i + 1) };
+  return { meta, agent: args[i], agentArgs: args.slice(i + 1), cacheTtl };
 }
 
 export async function run(args: string[]): Promise<void> {
-  const { meta, agent, agentArgs } = parseRunArgs(args, process.env);
+  const { meta, agent, agentArgs, cacheTtl } = parseRunArgs(args, process.env);
   if (!agent) {
-    console.error("Usage: aap run [--meta key=value ...] <agent> [args...]");
+    console.error("Usage: aap run [--cache-1h] [--meta key=value ...] <agent> [args...]");
     process.exitCode = 1;
     return;
   }
@@ -107,6 +121,10 @@ export async function run(args: string[]): Promise<void> {
   }
   if (overrides.OLLAMA_HOST) {
     meta.ollama = "1";
+  }
+  if (cacheTtl === "1h") {
+    meta.cache_ttl = "1h";
+    console.error(`aap: cache TTL upgraded to 1h (from 5m)`);
   }
 
   const session: SessionInfo = {
@@ -150,10 +168,11 @@ export async function run(args: string[]): Promise<void> {
   let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   if (keepAlive) {
-    const intervalMs = config.optimize.cacheTtlMs * 0.8;
+    const ttlMs = cacheTtl === "1h" ? 3_600_000 : config.optimize.cacheTtlMs;
+    const intervalMs = ttlMs * 0.8;
     const primaryProvider = resolvePrimaryProvider(config, agent);
     console.error(
-      `aap: keep-alive active (interval ${Math.round(intervalMs / 1000)}s, provider ${primaryProvider})`,
+      `aap: keep-alive active (interval ${Math.round(intervalMs / 1000)}s, provider ${primaryProvider}, cache ${cacheTtl === "1h" ? "1h" : "5m"})`,
     );
     keepAliveTimer = setInterval(() => {
       sendKeepAlivePing(origin, sessionId, primaryProvider).catch(() => {});
@@ -197,11 +216,14 @@ async function sendKeepAlivePing(
       `${origin}/_control/sessions/${encodeURIComponent(sessionId)}/last-body`,
     );
     if (!bodyRes.ok) return;
-    const { body } = (await bodyRes.json()) as { body: string | null };
-    if (!body) return;
+    const { body, path } = (await bodyRes.json()) as {
+      body: string | null;
+      path: string | null;
+    };
+    if (!body || !path) return;
 
     const res = await fetch(
-      `${origin}/${sessionId}/${provider}/v1/chat/completions`,
+      `${origin}/${sessionId}/${provider}${path}`,
       {
         method: "POST",
         headers: {

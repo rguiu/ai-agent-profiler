@@ -331,6 +331,33 @@ function tokensAfter(s: PrefixSnapshot, from: number): number {
   return sum;
 }
 
+export function applyCacheTtlUpgrade(parsed: Record<string, unknown>): boolean {
+  let changed = false;
+  const bump = (holder: Record<string, unknown> | undefined): void => {
+    if (!holder) return;
+    const cc = holder.cache_control as Record<string, unknown> | undefined;
+    if (cc && cc.type === "ephemeral" && cc.ttl !== "1h") {
+      cc.ttl = "1h";
+      changed = true;
+    }
+  };
+  if (Array.isArray(parsed.system)) {
+    for (const b of parsed.system as Record<string, unknown>[]) bump(b);
+  }
+  if (Array.isArray(parsed.tools)) {
+    for (const t of parsed.tools as Record<string, unknown>[]) bump(t);
+  }
+  if (Array.isArray(parsed.messages)) {
+    for (const msg of parsed.messages as unknown[]) {
+      const m = msg as { content?: unknown };
+      if (Array.isArray(m.content)) {
+        for (const b of m.content) bump(b as Record<string, unknown>);
+      }
+    }
+  }
+  return changed;
+}
+
 export class OptimizeLayer {
   private readonly baseConfig: OptimizeConfig;
   private config: OptimizeConfig;
@@ -533,29 +560,7 @@ export class OptimizeLayer {
   // time it runs, so enable it from turn 1 (before the first write) — flipping
   // it mid-session forces one cache miss.
   private upgradeCacheControlTtl(parsed: Record<string, unknown>): boolean {
-    let changed = false;
-    const bump = (holder: Record<string, unknown> | undefined): void => {
-      if (!holder) return;
-      const cc = holder.cache_control as Record<string, unknown> | undefined;
-      if (cc && cc.type === "ephemeral" && cc.ttl !== "1h") {
-        cc.ttl = "1h";
-        changed = true;
-      }
-    };
-    if (Array.isArray(parsed.system)) {
-      for (const b of parsed.system as Record<string, unknown>[]) bump(b);
-    }
-    if (Array.isArray(parsed.tools)) {
-      for (const t of parsed.tools as Record<string, unknown>[]) bump(t);
-    }
-    if (Array.isArray(parsed.messages)) {
-      for (const msg of parsed.messages as Message[]) {
-        if (Array.isArray(msg.content)) {
-          for (const b of msg.content as Record<string, unknown>[]) bump(b);
-        }
-      }
-    }
-    return changed;
+    return applyCacheTtlUpgrade(parsed);
   }
 
   /** Expose action count for debugging. */
