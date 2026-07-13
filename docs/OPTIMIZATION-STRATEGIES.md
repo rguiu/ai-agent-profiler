@@ -37,13 +37,13 @@ returns only the new assistant message, never the conversation. **Claude Code ne
 that the proxy changed anything.** So:
 
 - The client re-sends the **pristine, unmodified** history every turn (plus the new reply).
-- A proxy edit on turn N is *not* remembered by anyone — if the layer doesn't re-apply the
+- A proxy edit on turn N is _not_ remembered by anyone — if the layer doesn't re-apply the
   exact same edit on turn N+1, the emitted bytes diverge from what was cached and the cache
   rebuilds from the divergence point.
 
 This is the whole reason `OptimizeLayer` is stateful and re-runs every transform on every
 request. It also means a "safe" edit must be **reproducible byte-for-byte regardless of
-where the content now sits in the message list** — an edit that only fires for the *newest*
+where the content now sits in the message list** — an edit that only fires for the _newest_
 message (like `tailTruncate`) fails this, because the content it edited moves into the
 middle of history next turn and is then re-sent in full. See the `tailTruncate` note below.
 
@@ -83,7 +83,7 @@ They are enabled under DeepSeek's cache-safe profile but disabled on Anthropic (
 native cache already handles the unmodified prefix and any change forces a write).
 
 † **`tailTruncate` is NOT prefix-safe — this reclassifies it from earlier docs.** It
-truncates a large result *only in the last user message*. That looks safe (the tail is
+truncates a large result _only in the last user message_. That looks safe (the tail is
 always a write anyway), but it ignores what the client does next turn:
 
 - **Turn N**: `[…prefix…][big result R]` — `R` is the tail; the proxy truncates it to `T`
@@ -91,7 +91,7 @@ always a write anyway), but it ignores what the client does next turn:
 - **Turn N+1**: Claude Code does **not** know we edited anything (see
   [the client re-sends the full history every turn](#why-edits-must-be-reproduced)). It
   re-sends the pristine `[…prefix…][full R][assistant reply][new tail]`. Now `R` sits
-  *mid-history*, so `tailTruncate` (which only touches the newest message) leaves it
+  _mid-history_, so `tailTruncate` (which only touches the newest message) leaves it
   **full**. The cache had `…T` but the request sends `…full R` → **divergence at R →
   everything from R onward is re-billed as a cache write.**
 
@@ -102,7 +102,7 @@ the old benchmark suggested (that figure was within noise). `stableTruncate` avo
 precisely because it re-truncates `R` on every turn, keeping the bytes stable.
 
 **Status:** analytically established; pending empirical confirmation against captured
-sessions (look for a `cache_creation` spike on the turn *after* a `tail_truncate` action).
+sessions (look for a `cache_creation` spike on the turn _after_ a `tail_truncate` action).
 The Bedrock default should move from `tailTruncate` to `stableTruncate` if confirmed.
 
 The response-path strategies (`dedup`, `truncate`, `suppressReread`) act on tool-result
@@ -137,12 +137,12 @@ prefix costs more than the tokens saved:
   - **Cold turn N:** collapses system `S→S'`, prunes history `M→M'`, writes `S' T M'`.
   - **Turn N+1:** the layer reverts to the steady-state set, so `collapseSystem`/`pruneStale`
     are OFF. The client re-sends the pristine full `S T M …` (it never knew we edited it).
-    Cache holds `S'`; request sends `S` → divergence at the *first bytes* → the **entire
+    Cache holds `S'`; request sends `S` → divergence at the _first bytes_ → the **entire
     prefix rebuilds**.
 
   Net result is **two writes instead of one** — strictly worse than doing nothing. The only
-  edits that could be *sustained* across the following turns are the deterministic ones
-  (`stableTruncate`, `shapeTestOutput`, `stripTools`) — and those are safe to run *always*,
+  edits that could be _sustained_ across the following turns are the deterministic ones
+  (`stableTruncate`, `shapeTestOutput`, `stripTools`) — and those are safe to run _always_,
   so gating them on "cold" adds nothing. So `optimizeOnCold` is either redundant or harmful,
   with no configuration where it's a clear win. Left in the code, configurable, default OFF.
 
@@ -171,24 +171,24 @@ before forwarding. A 1h write costs 2× input ($10/MTok on Opus 4.x) vs 1.25× f
 ($6.25); reads are identical ($0.50). Worth it when idle gaps often fall in the 5m–1h range
 (fewer re-writes) and it widens the window for cross-user cache sharing 12×.
 
-### keep-alive pings — interesting *only atop the 1h cache*
+### keep-alive pings — interesting _only atop the 1h cache_
 
-Proactively replay the last request (`max_tokens: 1`) during idle so a cache *read* keeps
+Proactively replay the last request (`max_tokens: 1`) during idle so a cache _read_ keeps
 resetting the TTL instead of letting it expire. The economics hinge on the write/read
 ratio (12.5× on 5m):
 
 - **On the 5m cache:** ping every ~4.5 min; ~12.5 pings ≈ 56 min before keep-alive costs
   as much as one rebuild. Barely breaks even — not worth it.
-- **On the 1h cache:** ping ~once/hour (~$0.10/hr for a 200K prefix) vs ~$1.25 per rebuild.
+- **On the 1h cache:** ping ~~once/hour (~~$0.10/hr for a 200K prefix) vs ~$1.25 per rebuild.
   Break-even ≈ **12 hours** of idle. Dramatically cheaper.
 
-Caveats that keep it a *future* idea, not a default: it's a **bet the user returns** (wasted
+Caveats that keep it a _future_ idea, not a default: it's a **bet the user returns** (wasted
 if they don't), it originates **phantom API calls** the user never issued (real cost, quota,
 billing "activity"), it **breaks the proxy's transparency** (no longer a passive pipe), and
 it needs the **real TTL** (unmeasured) to time the ping. Sequencing: gather TTL data →
-confirm `upgradeCacheTtl` helps → *then* consider keep-alive as an opt-in 1h-cache add-on.
+confirm `upgradeCacheTtl` helps → _then_ consider keep-alive as an opt-in 1h-cache add-on.
 
 > **Note:** `optimizeOnCold` used to be listed here as "the most promising." It was built,
-> found to cause a double cache write (see *Attempts that did not pay off*), and defaulted
+> found to cause a double cache write (see _Attempts that did not pay off_), and defaulted
 > OFF. It is not a recommended direction.
-</content>
+> </content>

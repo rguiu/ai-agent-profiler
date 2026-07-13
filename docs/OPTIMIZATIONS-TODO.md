@@ -248,6 +248,7 @@ Note: with the 5m cache these windows are short, so cross-user overlap is
 rarer than it looks — rewriting Claude Code's markers to a **1h TTL** (write
 $10/MTok, 2× input) widens each window 12×, making shared warm reads far more
 likely. The higher write cost is amortised across many more reads.
+
 - Depends on concurrent usage within TTL windows
 
 ### Challenges
@@ -329,25 +330,25 @@ optimizeOnCold = false # OFF by default — causes a double write (see above)
 **Impact: Uncertain (likely small) | Complexity: Medium | Status: idea only**
 
 This is the salvageable core of the abandoned `optimizeOnCold` (§8). That one failed because
-the proxy shrank the prefix on a turn the *client didn't know about*, so the client re-sent
+the proxy shrank the prefix on a turn the _client didn't know about_, so the client re-sent
 the full prefix next turn and forced a second write. The one moment that failure mode does
 NOT apply is when **the client itself rewrites its history** — i.e. Claude Code's Compact.
 
 When Compact fires, Claude Code summarises older turns and replaces them in its own local
-state, then re-sends the *compacted* history every subsequent turn. So:
+state, then re-sends the _compacted_ history every subsequent turn. So:
 
 - A prefix rebuild is happening **anyway** (client-initiated), and
 - The new shorter prefix is now the client's source of truth, so it **is** reproduced every
-  turn — the reproducibility rule is satisfied *by the client*, not by us.
+  turn — the reproducibility rule is satisfied _by the client_, not by us.
 
 The idea: **detect a client-side compaction** (the prefix legitimately shrank / diverged
 early without an idle gap — distinguishable from a cache expiry via the cache-regen signals)
-and piggyback additional *deterministic* shrinking (stableTruncate, shapeTestOutput) onto
+and piggyback additional _deterministic_ shrinking (stableTruncate, shapeTestOutput) onto
 that same unavoidable write. No double write, because the client keeps sending the new form.
 
 ### Why it's probably NOT significant
 
-- The extra shrink rides on top of Compact, which has *already* removed the bulk of the
+- The extra shrink rides on top of Compact, which has _already_ removed the bulk of the
   history — the marginal tokens left to trim are small.
 - The deterministic strategies we'd apply are safe to run **every turn anyway**, so most of
   their benefit is already captured without special cold/compaction handling.
@@ -364,6 +365,7 @@ Needs data first: how often does Compact fire, and how big are those writes?
 
 - ❌ **optimizeOnCold** — built, found to cause a double cache write, defaulted OFF. Not recommended.
 - ❓ **optimizeOnCompaction** — speculative salvage of the above; likely small upside, needs data first.
+
 1. **IASH** — highest ROI, prevents waste at source
 2. **normalizePrefix** — high savings that scale with team size (needs shared proxy)
 3. **Adaptive pruneAfter** — trivial to implement, immediate savings

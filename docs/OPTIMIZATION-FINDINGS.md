@@ -63,7 +63,7 @@ disabled automatically per provider (via the cache-family mapping in
 
 It's tempting to think shrinking the prompt is "free" once the cache has **expired** — the
 next request re-writes the whole prefix regardless. We built exactly that (`optimizeOnCold`)
-and it **backfires**: shrinking only the cold turn isn't sustained, so the *following* turn
+and it **backfires**: shrinking only the cold turn isn't sustained, so the _following_ turn
 (client re-sends the pristine full prefix, layer has reverted) diverges from what we cached
 and rebuilds it — two writes, not one. It is defaulted OFF. The lesson generalises: an edit
 only helps if the proxy reproduces it **identically on every subsequent turn**, which rules
@@ -77,7 +77,7 @@ Directions that respect that rule:
 - **Keep-alive pings.** Interesting only atop the 1h cache (break-even ~12h idle); phantom
   traffic + transparency caveats keep it a future idea.
 - **Prefix normalization.** Rewrite per-user paths to a canonical form so a team shares
-  cache reads — a deterministic, every-turn transform, so it *is* reproducible.
+  cache reads — a deterministic, every-turn transform, so it _is_ reproducible.
 - **IASH and result-shaping at the source** — reduce what enters the context in the first
   place rather than editing it afterward.
 

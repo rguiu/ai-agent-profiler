@@ -998,12 +998,17 @@ describe("OptimizeLayer", () => {
         cacheTtlMs: 100,
       });
       const body = Buffer.from(
-        JSON.stringify({ system: "s", messages: [{ role: "user", content: "hi" }] }),
+        JSON.stringify({
+          system: "s",
+          messages: [{ role: "user", content: "hi" }],
+        }),
       );
       primeThenExpire(layer, body);
       layer.rewriteRequestBody(body);
       expect(layer.isColdStart).toBe(false);
-      expect(layer.getActions().find((a) => a.type === "cold_start")).toBeUndefined();
+      expect(
+        layer.getActions().find((a) => a.type === "cold_start"),
+      ).toBeUndefined();
     });
   });
 
@@ -1014,9 +1019,7 @@ describe("OptimizeLayer", () => {
           system: [
             { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
           ],
-          tools: [
-            { name: "Read", cache_control: { type: "ephemeral" } },
-          ],
+          tools: [{ name: "Read", cache_control: { type: "ephemeral" } }],
           messages: [
             {
               role: "user",

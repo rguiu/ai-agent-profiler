@@ -267,7 +267,7 @@ already expired, the next write is unavoidable, so shrink the prefix on that one
 free." In practice it causes a **double write** — the cold turn writes a shrunk prefix, then
 the next turn reverts to the steady-state set and the client re-sends the pristine full
 prefix (it never learns the proxy edited it), so the whole prefix rebuilds. Net worse than
-doing nothing. Only *deterministic* edits can be sustained across turns, and those are safe
+doing nothing. Only _deterministic_ edits can be sustained across turns, and those are safe
 to run always — so gating them on "cold" adds nothing. Left configurable for experiments,
 default off. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
 
