@@ -252,8 +252,15 @@ system prompt, pruning tools, compacting history) and found they don't beat the 
 own prompt cache: on Anthropic/Bedrock and DeepSeek alike, the high-impact ideas edit the
 _cached prefix_, and editing the prefix costs more (cache writes / misses) than the tokens
 it saves. So the layer auto-detects the provider and keeps only the edits that don't touch
-the cached prefix (`stripTools`, `tailTruncate`); everything that rewrites the middle of
-the prompt is disabled in steady state.
+the cached prefix — principally `stripTools` (removed before the first write) and the
+deterministic `stableTruncate`; everything that rewrites the middle of the prompt is
+disabled in steady state.
+
+> **Note (correction):** `tailTruncate` was previously listed as prefix-safe. It isn't —
+> because the client re-sends the full result next turn once it moves into mid-history, and
+> `tailTruncate` only edits the newest message, so it fails to re-shrink it and forces a
+> cache rebuild. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
+> The genuinely safe deterministic truncator is `stableTruncate`.
 
 **`optimizeOnCold` (on by default).** There is exactly one moment when editing the prefix
 is free: after the cache has already expired. If the gap since the previous request exceeds

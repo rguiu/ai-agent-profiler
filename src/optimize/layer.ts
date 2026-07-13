@@ -13,8 +13,12 @@ export interface OptimizeConfig {
   insertBreakpoints: boolean;
   reorderVolatile: boolean;
   // Truncate tool results only in the last user message (the growing edge).
-  // Safe for explicit-cache providers: the tail is always cache-written anyway,
-  // and on subsequent turns the truncated version is what's already cached.
+  // WARNING: NOT actually prefix-safe. The client re-sends the full (untruncated)
+  // result next turn once it moves into mid-history, and tailTruncate only touches
+  // the newest message — so it does NOT re-shrink it, causing a cache rebuild from
+  // that point. Use stableTruncate (re-applies to every result, every turn) instead.
+  // See docs/OPTIMIZATION-STRATEGIES.md (tailTruncate note). Kept for compatibility;
+  // the Bedrock default should migrate to stableTruncate once verified.
   tailTruncate: boolean;
   truncateThreshold: number;
   pruneAfterTurns: number;
@@ -1044,8 +1048,11 @@ export class OptimizeLayer {
   }
 
   // Truncate tool results only in the last user message (growing edge).
-  // The tail is always a cache-write anyway, so truncating it doesn't cause
-  // cache misses. On subsequent turns the truncated bytes are what's cached.
+  // WARNING: the "on subsequent turns the truncated bytes are what's cached" claim
+  // is FALSE. The client re-sends the full result next turn (it never learns we
+  // edited it); once that result is mid-history this method no longer touches it,
+  // so the emitted prefix diverges from the cached one and forces a rebuild. Prefer
+  // stableTruncate. See docs/OPTIMIZATION-STRATEGIES.md (tailTruncate note).
   private tailTruncateResults(messages: Message[]): Message[] | null {
     let lastUserIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
