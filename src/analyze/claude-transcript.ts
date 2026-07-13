@@ -180,7 +180,17 @@ function activePath(events: TranscriptEvent[]): TranscriptEvent[] {
   }
   if (byUuid.size === 0) return [];
 
-  // Newest leaf = the last chained event in file order (Claude appends).
+  // Newest leaf = the last chained event in file order.
+  //
+  // ASSUMPTION (not fully verified): the active conversation ends at the last
+  // physical line with a uuid. This holds when Claude only ever appends. After a
+  // rewind/edit, Claude writes new events onto a branch off an earlier node — if
+  // it appends those to the end of the file (observed here), the last line is
+  // still the active leaf. DOUBT: if a resumed/rewound session can leave a
+  // higher-timestamp event on an *abandoned* branch as the physical last line,
+  // this picks the wrong leaf. A more robust rule would pick the leaf with the
+  // newest `timestamp`, or the deepest leaf. Revisit if abandoned-branch counts
+  // look wrong on real files.
   let leaf: string | undefined;
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i]!.uuid) {
@@ -284,6 +294,11 @@ export function toolResults(messages: ReconstructedMessage[]): ToolResultInfo[] 
           name?: string;
         };
         const text = contentToString(b.content);
+        // DOUBT: in the Anthropic block format a `tool_result` does NOT normally
+        // carry a `name` — the tool name lives on the matching `tool_use` block.
+        // We read `b.name` opportunistically in case Claude's transcript adds it,
+        // but the reliable attribution is via toolUseNames() (tool_use_id → name),
+        // which callers apply. `toolName` here is usually null; don't rely on it.
         out.push({
           toolName: b.name ?? null,
           toolUseId: b.tool_use_id ?? "",
