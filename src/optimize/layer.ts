@@ -13,8 +13,12 @@ export interface OptimizeConfig {
   insertBreakpoints: boolean;
   reorderVolatile: boolean;
   // Truncate tool results only in the last user message (the growing edge).
-  // Safe for explicit-cache providers: the tail is always cache-written anyway,
-  // and on subsequent turns the truncated version is what's already cached.
+  // WARNING: NOT actually prefix-safe. The client re-sends the full (untruncated)
+  // result next turn once it moves into mid-history, and tailTruncate only touches
+  // the newest message — so it does NOT re-shrink it, causing a cache rebuild from
+  // that point. Use stableTruncate (re-applies to every result, every turn) instead.
+  // See docs/OPTIMIZATION-STRATEGIES.md (tailTruncate note). Kept for compatibility;
+  // the Bedrock default should migrate to stableTruncate once verified.
   tailTruncate: boolean;
   truncateThreshold: number;
   pruneAfterTurns: number;
@@ -32,23 +36,37 @@ export interface OptimizeConfig {
   // Tool names to strip from every request from turn 1 onwards.
   // Keeps the prefix stable (no mid-session cache invalidation).
   stripTools: string[];
+  // optimizeOnCold: when true, if the gap between requests exceeds cacheTtlMs,
+  // temporarily enable all strategies for that single request (the cache write
+  // is happening anyway, so shrinking the prefix before it is written is free).
+  optimizeOnCold: boolean;
+  cacheTtlMs: number;
+  // upgradeCacheTtl: rewrite the client's cache_control markers to a 1-hour TTL
+  // before forwarding. Claude Code only ever requests the 5m cache; a 1h entry
+  // costs 2× input to write (vs 1.25× for 5m) but survives 12× longer, so it
+  // wins when idle gaps often fall between 5 min and 1 hour. "off" = passthrough.
+  upgradeCacheTtl: "off" | "1h";
 }
 
+// Default: only cache-safe strategies active. Prefix-editing strategies are
+// retained in code (for optimizeOnCold to fire when the cache is expired anyway)
+// but off by default — modifying the cached prefix on Bedrock/DeepSeek destroys
+// the native cache and triggers expensive cache-writes. See profiles.ts.
 export const DEFAULT_CONFIG: OptimizeConfig = {
-  dedup: true,
-  truncate: true,
-  stablePrefix: true,
-  pruneStale: true,
+  dedup: false,
+  truncate: false,
+  stablePrefix: false,
+  pruneStale: false,
   stableTruncate: false,
   shapeTestOutput: false,
   prefixProbe: false,
   frozenCompact: false,
-  suppressReread: true,
-  collapseSystem: true,
-  pruneUnusedTools: true,
+  suppressReread: false,
+  collapseSystem: false,
+  pruneUnusedTools: false,
   insertBreakpoints: false,
   reorderVolatile: false,
-  tailTruncate: false,
+  tailTruncate: true,
   truncateThreshold: 4096,
   pruneAfterTurns: 6,
   suppressWithinTurns: 2,
@@ -57,18 +75,47 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   compactKeepTail: 20,
   pruneStabilityWindow: 0,
   stripTools: [],
+  // DEFAULT OFF — known flaw: applying prefix edits on the cold turn is not
+  // sustained (the next turn reverts and the client re-sends the pristine full
+  // prefix), so it causes a SECOND cache write and is a net loss. Only edits that
+  // are already deterministic-and-reproducible can be sustained — and those are
+  // safe to run always, so gating them on "cold" adds nothing. Kept configurable
+  // for experiments. See docs/OPTIMIZATION-STRATEGIES.md (optimizeOnCold note).
+  optimizeOnCold: false,
+  // If ever enabled: 30 min. Anthropic documents a 5-min *minimum* TTL, but the
+  // real expiry is often longer; firing too early rewrites a still-warm prefix.
+  cacheTtlMs: 1_800_000, // 30 minutes
+  upgradeCacheTtl: "off",
+};
+
+// All prefix-editing strategies enabled — applied by optimizeOnCold for the one
+// request after the cache has expired. The cache write is unavoidable at that
+// point, so shrinking the prefix first is free and makes subsequent reads (for
+// the rest of the new TTL window) cheaper.
+export const COLD_START_CONFIG: Partial<OptimizeConfig> = {
+  dedup: true,
+  truncate: true,
+  pruneStale: true,
+  stableTruncate: true,
+  shapeTestOutput: true,
+  frozenCompact: true,
+  suppressReread: true,
+  collapseSystem: true,
+  pruneUnusedTools: true,
+  tailTruncate: true,
 };
 
 // Cache-safe overrides for providers with automatic prefix caching (DeepSeek).
-// The three disabled strategies edit the prompt *prefix* (system, tool defs,
-// oldest messages by age), which resets DeepSeek's token-prefix cache and
-// re-bills the entire downstream context at the ~10× more expensive miss rate.
-// In their place `stableTruncate` and `shapeTestOutput` shrink large tool
-// results with transforms that are pure functions of content — identical bytes
-// in every request — so they save tokens WITHOUT ever moving the cached prefix.
-// `prefixProbe` measures the shared prefix between consecutive emitted requests
-// so unexpected cache resets are visible. See docs/DEEPSEEK-CACHING.md.
+// Deterministic transforms (stableTruncate, shapeTestOutput) produce identical
+// bytes for the same input — safe because the cached prefix never shifts.
+// prefixProbe is diagnostic-only (no rewrites). See docs/DEEPSEEK-CACHING.md.
 export const CACHE_SAFE_OVERRIDES: Partial<OptimizeConfig> = {
+  dedup: false,
+  truncate: false,
+  stablePrefix: false,
+  suppressReread: false,
+  insertBreakpoints: false,
+  reorderVolatile: false,
   collapseSystem: false,
   pruneUnusedTools: false,
   pruneStale: false,
@@ -76,6 +123,7 @@ export const CACHE_SAFE_OVERRIDES: Partial<OptimizeConfig> = {
   shapeTestOutput: true,
   prefixProbe: true,
   frozenCompact: true,
+  tailTruncate: true,
 };
 
 export type OptimizeActionType =
@@ -93,7 +141,8 @@ export type OptimizeActionType =
   | "strip_tools"
   | "tail_truncate"
   | "insert_breakpoints"
-  | "reorder_volatile";
+  | "reorder_volatile"
+  | "cold_start";
 
 export interface OptimizeAction {
   type: OptimizeActionType;
@@ -301,7 +350,11 @@ function tokensAfter(s: PrefixSnapshot, from: number): number {
 }
 
 export class OptimizeLayer {
-  private readonly config: OptimizeConfig;
+  // baseConfig is the resolved provider profile; config is the per-request
+  // effective config, which optimizeOnCold may temporarily overlay with
+  // COLD_START_CONFIG for a single cold request.
+  private readonly baseConfig: OptimizeConfig;
+  private config: OptimizeConfig;
   private readonly actions: OptimizeAction[] = [];
   private readonly seenCalls = new Map<string, SeenCall>();
   private readonly recentWrites: WriteRecord[] = [];
@@ -323,9 +376,17 @@ export class OptimizeLayer {
   // `turn - lastPruneTurn < pruneStabilityWindow`, pruneStale is suppressed.
   // When pruneStabilityWindow === Infinity, prune fires once then never again.
   private lastPruneTurn = 0;
+  // optimizeOnCold state
+  private lastRequestAt = 0;
+  private _coldStart = false;
 
   constructor(config: Partial<OptimizeConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.baseConfig = { ...DEFAULT_CONFIG, ...config };
+    this.config = this.baseConfig;
+  }
+
+  get isColdStart(): boolean {
+    return this._coldStart;
   }
 
   getActions(): OptimizeAction[] {
@@ -342,6 +403,31 @@ export class OptimizeLayer {
 
   rewriteRequestBody(body: Buffer): Buffer {
     this.turn++;
+
+    // optimizeOnCold: if the cache TTL has elapsed since the last request, the
+    // next request pays a full cache-write regardless — so enable every strategy
+    // for this one request to shrink the prefix before it is written.
+    const now = Date.now();
+    this._coldStart = false;
+    if (
+      this.baseConfig.optimizeOnCold &&
+      this.lastRequestAt > 0 &&
+      now - this.lastRequestAt > this.baseConfig.cacheTtlMs
+    ) {
+      this._coldStart = true;
+      this.config = { ...this.baseConfig, ...COLD_START_CONFIG };
+      const gapSec = Math.round((now - this.lastRequestAt) / 1000);
+      this.actions.push({
+        type: "cold_start",
+        turn: this.turn,
+        tokensSaved: 0,
+        detail: `cache expired (${gapSec}s idle > ${this.baseConfig.cacheTtlMs / 1000}s TTL) — full optimization enabled for this request`,
+      });
+    } else {
+      this.config = this.baseConfig;
+    }
+    this.lastRequestAt = now;
+
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(body.toString("utf8")) as Record<string, unknown>;
@@ -373,15 +459,20 @@ export class OptimizeLayer {
       }
     }
 
-    // Collapse repeated system prompts to a short hash stub
-    if (this.config.collapseSystem && parsed.system != null) {
+    // Track the system-prompt hash unconditionally so optimizeOnCold can
+    // collapse a repeated prompt even when collapseSystem is normally off.
+    if (parsed.system != null) {
       const systemStr =
         typeof parsed.system === "string"
           ? parsed.system
           : JSON.stringify(parsed.system);
       const hash = hashContent(systemStr);
       const tokens = estimateTokens(systemStr);
-      if (this.lastSystemHash === hash && tokens > 100) {
+      if (
+        this.config.collapseSystem &&
+        this.lastSystemHash === hash &&
+        tokens > 100
+      ) {
         parsed.system = `[system unchanged — hash:${hash}]`;
         const saved = tokens - estimateTokens(parsed.system as string);
         this.actions.push({
@@ -476,9 +567,47 @@ export class OptimizeLayer {
       if (inserted) changed = true;
     }
 
+    // Upgrade cache_control TTL last, after breakpoints are finalised, so every
+    // marker (client's + any we added) gets the longer TTL.
+    if (this.config.upgradeCacheTtl === "1h") {
+      if (this.upgradeCacheControlTtl(parsed)) changed = true;
+    }
+
     const out = changed ? Buffer.from(JSON.stringify(parsed)) : body;
     if (this.config.prefixProbe) this.probePrefix(parsed);
     return out;
+  }
+
+  // Rewrite every cache_control marker to a 1-hour TTL. Anthropic accepts
+  // `{"type":"ephemeral","ttl":"1h"}`; adding the ttl key is idempotent. Walks
+  // system blocks, tool defs, and message content blocks. Returns true if any
+  // marker was changed. NOTE: this changes the cached-prefix bytes the first
+  // time it runs, so enable it from turn 1 (before the first write) — flipping
+  // it mid-session forces one cache miss.
+  private upgradeCacheControlTtl(parsed: Record<string, unknown>): boolean {
+    let changed = false;
+    const bump = (holder: Record<string, unknown> | undefined): void => {
+      if (!holder) return;
+      const cc = holder.cache_control as Record<string, unknown> | undefined;
+      if (cc && cc.type === "ephemeral" && cc.ttl !== "1h") {
+        cc.ttl = "1h";
+        changed = true;
+      }
+    };
+    if (Array.isArray(parsed.system)) {
+      for (const b of parsed.system as Record<string, unknown>[]) bump(b);
+    }
+    if (Array.isArray(parsed.tools)) {
+      for (const t of parsed.tools as Record<string, unknown>[]) bump(t);
+    }
+    if (Array.isArray(parsed.messages)) {
+      for (const msg of parsed.messages as Message[]) {
+        if (Array.isArray(msg.content)) {
+          for (const b of msg.content as Record<string, unknown>[]) bump(b);
+        }
+      }
+    }
+    return changed;
   }
 
   /** Expose action count for debugging. */
@@ -923,8 +1052,11 @@ export class OptimizeLayer {
   }
 
   // Truncate tool results only in the last user message (growing edge).
-  // The tail is always a cache-write anyway, so truncating it doesn't cause
-  // cache misses. On subsequent turns the truncated bytes are what's cached.
+  // WARNING: the "on subsequent turns the truncated bytes are what's cached" claim
+  // is FALSE. The client re-sends the full result next turn (it never learns we
+  // edited it); once that result is mid-history this method no longer touches it,
+  // so the emitted prefix diverges from the cached one and forces a rebuild. Prefer
+  // stableTruncate. See docs/OPTIMIZATION-STRATEGIES.md (tailTruncate note).
   private tailTruncateResults(messages: Message[]): Message[] | null {
     let lastUserIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {

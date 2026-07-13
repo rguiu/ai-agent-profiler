@@ -218,29 +218,37 @@ These do NOT need normalization — they don't benefit from cross-user cache sha
 
 ### How it interacts with Bedrock's cache
 
+Rates below are Opus 4.x, 5m cache ($6.25/MTok write, $0.50/MTok read).
+
 ```
-User A (first today): system[normalized] + tools → WRITE ($18.75/MTok on ~24K tokens = $0.45)
-User B (same minute):  system[normalized] + tools → READ ($1.50/MTok on ~24K tokens = $0.04)
-User C (same minute):  system[normalized] + tools → READ ($0.04)
-User D (same minute):  system[normalized] + tools → READ ($0.04)
-User E (same minute):  system[normalized] + tools → READ ($0.04)
+User A (first today): system[normalized] + tools → WRITE ($6.25/MTok on ~24K tokens = $0.15)
+User B (same window):  system[normalized] + tools → READ ($0.50/MTok on ~24K tokens = $0.012)
+User C (same window):  system[normalized] + tools → READ ($0.012)
+User D (same window):  system[normalized] + tools → READ ($0.012)
+User E (same window):  system[normalized] + tools → READ ($0.012)
 ```
 
 ### Estimated savings
 
 System + tools prefix: ~24K tokens.
 
-- Cold write: 24K × $18.75/MTok = $0.45
-- Warm read: 24K × $1.50/MTok  = $0.04
+- Cold write: 24K × $6.25/MTok = $0.15
+- Warm read: 24K × $0.50/MTok  = $0.012
 
-Per cold window (5-min TTL), savings = (N-1 users) × ($0.45 - $0.04):
+Per cold window, savings = (N-1 users) × ($0.15 - $0.012):
 
-- 5-person team: ~$1.64 saved per cold window
-- 10-person team: ~$3.69 saved per cold window
+- 5-person team: ~$0.55 saved per cold window
+- 10-person team: ~$1.24 saved per cold window
 
-Over a workday (~50 cold windows assuming 5-min TTL with activity gaps):
+Over a workday (~50 cold windows with activity gaps):
 
-- 5-person team: **~$82/day** potential savings
+- 5-person team: **~$28/day** potential savings
+
+Note: with the 5m cache these windows are short, so cross-user overlap is
+rarer than it looks — rewriting Claude Code's markers to a **1h TTL** (write
+$10/MTok, 2× input) widens each window 12×, making shared warm reads far more
+likely. The higher write cost is amortised across many more reads.
+
 - Depends on concurrent usage within TTL windows
 
 ### Challenges
@@ -264,9 +272,20 @@ Over a workday (~50 cold windows assuming 5-min TTL with activity gaps):
 
 ---
 
-## 8. optimizeOnCold — Full Optimization After Cache Expiry
+## 8. optimizeOnCold — Full Optimization After Cache Expiry ❌ BUILT, DEFAULTED OFF
 
-**Impact: Medium | Complexity: Low**
+**Status: built, found flawed, default OFF. Not recommended.**
+
+> **Why it doesn't work.** Implemented in `src/optimize/layer.ts` (`COLD_START_CONFIG`,
+> cold-start detection in `rewriteRequestBody`), then defaulted off. The premise ("the write
+> is happening anyway, so shrink it for free") ignores the reproducibility rule: the layer
+> applies the aggressive edits only on the cold turn, then reverts. The **next** turn the
+> client re-sends the pristine full prefix (it never learns we edited it), which diverges
+> from the shrunk prefix we just cached → the whole prefix rebuilds → **two writes instead
+> of one**, strictly worse than doing nothing. Only deterministic edits could be sustained
+> across the following turns, and those are safe to run always — so gating them on "cold"
+> adds nothing. See docs/OPTIMIZATION-STRATEGIES.md ("Attempts that did not pay off").
+> Original (now-invalidated) design notes preserved below for reference.
 
 When a user returns after the cache TTL has expired, the next request pays full cache-write
 cost regardless. This is the optimal moment to apply aggressive optimizations — the prefix
@@ -290,32 +309,70 @@ making every subsequent read cheaper for the rest of the TTL window.
 
 ### Estimated savings
 
-A 200K-token session returning after cache expiry:
+A 200K-token session returning after cache expiry (Opus 4.x, 5m write $6.25/MTok):
 
-- Without: writes 200K tokens at $18.75/MTok = $3.75
-- With pruning/dedup: writes 150K tokens at $18.75/MTok = $2.81
-- Saves: ~$0.94 per cold return, plus cheaper reads for all subsequent turns
+- Without: writes 200K tokens at $6.25/MTok = $1.25
+- With pruning/dedup: writes 150K tokens at $6.25/MTok = $0.94
+- Saves: ~$0.31 per cold return, plus cheaper reads for all subsequent turns
 
 ### Configuration
 
 ```toml
 [optimize]
-cacheTtlMs = 300000  # 5 minutes (match Anthropic's documented minimum)
-optimizeOnCold = true
+cacheTtlMs = 1800000   # 30 min (only relevant if you re-enable optimizeOnCold)
+optimizeOnCold = false # OFF by default — causes a double write (see above)
 ```
+
+---
+
+## 9. optimizeOnCompaction — piggyback on a client-side history shrink (speculative)
+
+**Impact: Uncertain (likely small) | Complexity: Medium | Status: idea only**
+
+This is the salvageable core of the abandoned `optimizeOnCold` (§8). That one failed because
+the proxy shrank the prefix on a turn the _client didn't know about_, so the client re-sent
+the full prefix next turn and forced a second write. The one moment that failure mode does
+NOT apply is when **the client itself rewrites its history** — i.e. Claude Code's Compact.
+
+When Compact fires, Claude Code summarises older turns and replaces them in its own local
+state, then re-sends the _compacted_ history every subsequent turn. So:
+
+- A prefix rebuild is happening **anyway** (client-initiated), and
+- The new shorter prefix is now the client's source of truth, so it **is** reproduced every
+  turn — the reproducibility rule is satisfied _by the client_, not by us.
+
+The idea: **detect a client-side compaction** (the prefix legitimately shrank / diverged
+early without an idle gap — distinguishable from a cache expiry via the cache-regen signals)
+and piggyback additional _deterministic_ shrinking (stableTruncate, shapeTestOutput) onto
+that same unavoidable write. No double write, because the client keeps sending the new form.
+
+### Why it's probably NOT significant
+
+- The extra shrink rides on top of Compact, which has _already_ removed the bulk of the
+  history — the marginal tokens left to trim are small.
+- The deterministic strategies we'd apply are safe to run **every turn anyway**, so most of
+  their benefit is already captured without special cold/compaction handling.
+- Detecting a compaction vs. any other prefix change reliably is non-trivial and easy to get
+  wrong (a false positive re-introduces the double-write bug).
+
+So the realistic upside is "a slightly smaller write on compaction turns," not a step change.
+Worth prototyping only if compaction turns out to be frequent and expensive in real traces.
+Needs data first: how often does Compact fire, and how big are those writes?
 
 ---
 
 ## Priority Order
 
+- ❌ **optimizeOnCold** — built, found to cause a double cache write, defaulted OFF. Not recommended.
+- ❓ **optimizeOnCompaction** — speculative salvage of the above; likely small upside, needs data first.
+
 1. **IASH** — highest ROI, prevents waste at source
-2. **optimizeOnCold** — trivial to implement, free gains on cache-expired returns
-3. **normalizePrefix** — high savings that scale with team size (needs shared proxy)
-4. **Adaptive pruneAfter** — trivial to implement, immediate savings
-5. **Search-result dedup** — low-hanging fruit on top of existing dedup
-6. **Fuzzy system collapse** — high savings but more complex
-7. **Diff-based Read** — medium savings, needs careful correctness
-8. **Test output compression** — nice-to-have, pattern-specific
+2. **normalizePrefix** — high savings that scale with team size (needs shared proxy)
+3. **Adaptive pruneAfter** — trivial to implement, immediate savings
+4. **Search-result dedup** — low-hanging fruit on top of existing dedup
+5. **Fuzzy system collapse** — high savings but more complex
+6. **Diff-based Read** — medium savings, needs careful correctness
+7. **Test output compression** — nice-to-have, pattern-specific
 
 ## Data backing these estimates
 

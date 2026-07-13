@@ -43,30 +43,38 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
   ollama: "none",
 };
 
-// For explicit-breakpoint providers (Anthropic/Bedrock): disable optimization.
+// For explicit-breakpoint providers (Anthropic/Bedrock): only stripTools +
+// tailTruncate stay active on the steady-state path. Everything else destroys
+// the native ~98-99% cache read rate.
 //
 // Anthropic's native cache achieves ~98-99% read rate on unmodified requests.
 // ANY modification — even deterministic transforms — causes cache misses where
-// bytes changed. The write penalty ($18.75/MTok) far exceeds any savings from
-// smaller context ($1.50/MTok read rate).
+// bytes changed. On Opus 4.x the 5m write penalty ($6.25/MTok, 1.25× input) far
+// exceeds any savings from smaller context ($0.50/MTok read rate) — a 12.5×
+// read→write ratio. (Claude Code sends the 5m cache; the 1h cache writes at 20×.)
 //
 // Benchmarks (iterative-fix-plus, 70 requests, Opus 4.6 Bedrock):
 //   no optimization:      99% read, 1% write  → $7.47
 //   stableTruncate only:  95% read, 5% write  → $9.40 (+26%)
 //   prefix-editing:       34% read, 66% write → $18.78 (+151%)
 //
-// The optimal strategy: pass through untouched.
+// (optimizeOnCold once re-enabled the full set on a cold turn regardless of this
+// profile, but that caused a double write and is defaulted OFF — see layer.ts.)
 export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
-  collapseSystem: false,
-  pruneUnusedTools: false,
+  dedup: false,
+  truncate: false,
+  stablePrefix: false,
   pruneStale: false,
   pruneStabilityWindow: 0,
-  insertBreakpoints: false,
-  reorderVolatile: false,
-  frozenCompact: false,
   stableTruncate: false,
   shapeTestOutput: false,
-  stablePrefix: false,
+  prefixProbe: false,
+  frozenCompact: false,
+  suppressReread: false,
+  collapseSystem: false,
+  pruneUnusedTools: false,
+  insertBreakpoints: false,
+  reorderVolatile: false,
   tailTruncate: true,
 };
 

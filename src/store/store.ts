@@ -216,6 +216,7 @@ export interface RequestDetail {
   model: string | null;
   input_tokens: number | null;
   cached_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
   output_tokens: number | null;
   stop_reason: string | null;
   streaming: number | null;
@@ -256,6 +257,7 @@ export interface GrowthPoint {
   started_at: string | null;
   input_tokens: number | null;
   cached_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
   output_tokens: number | null;
 }
 
@@ -428,7 +430,7 @@ export class Store {
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.streaming, m.tool_call_count, m.cost, m.parsed_at,
              m.message_count, m.system_tokens, m.tools_defined, m.tools_tokens,
-             m.cached_input_tokens
+             m.cached_input_tokens, m.cache_creation_input_tokens
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.id = ?
@@ -468,7 +470,8 @@ export class Store {
       LIMIT 50
     `);
     this.contextGrowthStmt = db.prepare(`
-      SELECT r.id, r.started_at, m.input_tokens, m.output_tokens, m.cached_input_tokens
+      SELECT r.id, r.started_at, m.input_tokens, m.output_tokens,
+             m.cached_input_tokens, m.cache_creation_input_tokens
       FROM requests r LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
       ORDER BY r.started_at

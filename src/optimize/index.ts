@@ -2,8 +2,10 @@ export {
   OptimizeLayer,
   DEFAULT_CONFIG,
   CACHE_SAFE_OVERRIDES,
+  COLD_START_CONFIG,
   type OptimizeConfig,
   type OptimizeAction,
+  type OptimizeActionType,
 } from "./layer.js";
 export {
   simulateOptimize,

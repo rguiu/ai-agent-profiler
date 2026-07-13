@@ -907,4 +907,165 @@ describe("OptimizeLayer", () => {
       expect(build()).toBe(build());
     });
   });
+
+  describe("optimizeOnCold", () => {
+    const primeThenExpire = (layer: OptimizeLayer, body: Buffer): void => {
+      layer.rewriteRequestBody(body); // prime lastRequestAt
+      // Force the TTL to look expired without waiting.
+      (layer as unknown as { lastRequestAt: number }).lastRequestAt =
+        Date.now() - 200;
+    };
+
+    it("flags a cold start after the TTL elapses", () => {
+      const layer = new OptimizeLayer({
+        optimizeOnCold: true,
+        cacheTtlMs: 100,
+        collapseSystem: false,
+      });
+      const body = Buffer.from(
+        JSON.stringify({
+          system: "S".repeat(600),
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      );
+
+      layer.rewriteRequestBody(body);
+      expect(layer.isColdStart).toBe(false); // first request, no prior timestamp
+      layer.rewriteRequestBody(body);
+      expect(layer.isColdStart).toBe(false); // immediate, still warm
+
+      (layer as unknown as { lastRequestAt: number }).lastRequestAt =
+        Date.now() - 200;
+      layer.rewriteRequestBody(body);
+      expect(layer.isColdStart).toBe(true);
+
+      const cold = layer.getActions().find((a) => a.type === "cold_start");
+      expect(cold).toBeDefined();
+      expect(cold!.detail).toContain("cache expired");
+    });
+
+    it("enables collapseSystem on the cold request even when off by default", () => {
+      const layer = new OptimizeLayer({
+        optimizeOnCold: true,
+        cacheTtlMs: 100,
+        collapseSystem: false,
+      });
+      const body = Buffer.from(
+        JSON.stringify({
+          system: "S".repeat(600),
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      );
+
+      primeThenExpire(layer, body);
+      layer.rewriteRequestBody(body);
+      expect(layer.isColdStart).toBe(true);
+      expect(
+        layer.getActions().find((a) => a.type === "collapse_system"),
+      ).toBeDefined();
+    });
+
+    it("reverts to the base config after the cold request", () => {
+      const layer = new OptimizeLayer({
+        optimizeOnCold: true,
+        cacheTtlMs: 100,
+        collapseSystem: false,
+      });
+      const body = Buffer.from(
+        JSON.stringify({
+          system: "S".repeat(600),
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      );
+
+      primeThenExpire(layer, body);
+      layer.rewriteRequestBody(body); // cold
+      expect(layer.isColdStart).toBe(true);
+
+      const before = layer.getActions().length;
+      layer.rewriteRequestBody(body); // warm again
+      expect(layer.isColdStart).toBe(false);
+      const newCollapse = layer
+        .getActions()
+        .slice(before)
+        .filter((a) => a.type === "collapse_system");
+      expect(newCollapse).toHaveLength(0);
+    });
+
+    it("never fires when optimizeOnCold is disabled", () => {
+      const layer = new OptimizeLayer({
+        optimizeOnCold: false,
+        cacheTtlMs: 100,
+      });
+      const body = Buffer.from(
+        JSON.stringify({
+          system: "s",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      );
+      primeThenExpire(layer, body);
+      layer.rewriteRequestBody(body);
+      expect(layer.isColdStart).toBe(false);
+      expect(
+        layer.getActions().find((a) => a.type === "cold_start"),
+      ).toBeUndefined();
+    });
+  });
+
+  describe("upgradeCacheTtl", () => {
+    const bodyWithMarkers = (): Buffer =>
+      Buffer.from(
+        JSON.stringify({
+          system: [
+            { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
+          ],
+          tools: [{ name: "Read", cache_control: { type: "ephemeral" } }],
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "t1",
+                  content: "x",
+                  cache_control: { type: "ephemeral" },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+    it("leaves markers untouched when off (default)", () => {
+      const layer = new OptimizeLayer({ upgradeCacheTtl: "off" });
+      const out = layer.rewriteRequestBody(bodyWithMarkers()).toString("utf8");
+      expect(out).not.toContain('"ttl"');
+    });
+
+    it("rewrites every ephemeral marker to a 1h ttl", () => {
+      const layer = new OptimizeLayer({ upgradeCacheTtl: "1h" });
+      const out = JSON.parse(
+        layer.rewriteRequestBody(bodyWithMarkers()).toString("utf8"),
+      );
+      expect(out.system[0].cache_control).toEqual({
+        type: "ephemeral",
+        ttl: "1h",
+      });
+      expect(out.tools[0].cache_control.ttl).toBe("1h");
+      expect(out.messages[0].content[0].cache_control.ttl).toBe("1h");
+    });
+
+    it("does not add markers where the client placed none", () => {
+      const layer = new OptimizeLayer({ upgradeCacheTtl: "1h" });
+      const body = Buffer.from(
+        JSON.stringify({
+          system: "plain",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      );
+      const out = layer.rewriteRequestBody(body).toString("utf8");
+      expect(out).not.toContain('"ttl"');
+      expect(out).not.toContain("cache_control");
+    });
+  });
 });

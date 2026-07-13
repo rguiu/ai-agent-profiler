@@ -93,6 +93,10 @@ function buildConfig(upstreamPort: number): Config {
       compactThreshold: 60000,
       compactKeepTail: 20,
       stripTools: [],
+      tailTruncate: true,
+      optimizeOnCold: true,
+      cacheTtlMs: 300_000,
+      upgradeCacheTtl: "off",
     },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
@@ -192,21 +196,28 @@ describe("optimize recording", () => {
     const store = openStore(dir);
     try {
       const { proxyPort } = await startOptimizeStack(store);
-      const system = "S".repeat(600); // ~150 tokens — over the collapse threshold
+      // tailTruncate is the always-on strategy: it truncates a large tool
+      // result in the last user message (the growing edge).
+      const bigResult = "x\n".repeat(3000); // >4096 bytes
       const body = JSON.stringify({
-        system,
-        messages: [{ role: "user", content: "hi" }],
+        system: "test",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "tu1", content: bigResult },
+            ],
+          },
+        ],
       });
       const url = `http://127.0.0.1:${proxyPort}/sess-opt/test/echo`;
-      // First request primes the system hash; the second collapses it.
-      await (await fetch(url, { method: "POST", body })).text();
       await (await fetch(url, { method: "POST", body })).text();
 
       const actions = store.getOptimizeActions("sess-opt");
-      const collapse = actions.find((a) => a.type === "collapse_system");
-      expect(collapse).toBeDefined();
-      expect(collapse!.count).toBeGreaterThanOrEqual(1);
-      expect(collapse!.tokens_saved).toBeGreaterThan(0);
+      const truncate = actions.find((a) => a.type === "tail_truncate");
+      expect(truncate).toBeDefined();
+      expect(truncate!.count).toBeGreaterThanOrEqual(1);
+      expect(truncate!.tokens_saved).toBeGreaterThan(0);
     } finally {
       store.close();
       rmSync(dir, { recursive: true, force: true });

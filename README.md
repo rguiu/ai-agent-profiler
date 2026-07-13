@@ -252,10 +252,36 @@ system prompt, pruning tools, compacting history) and found they don't beat the 
 own prompt cache: on Anthropic/Bedrock and DeepSeek alike, the high-impact ideas edit the
 _cached prefix_, and editing the prefix costs more (cache writes / misses) than the tokens
 it saves. So the layer auto-detects the provider and keeps only the edits that don't touch
-the cached prefix; everything that rewrites the middle of the prompt is disabled.
+the cached prefix — principally `stripTools` (removed before the first write) and the
+deterministic `stableTruncate`; everything that rewrites the middle of the prompt is
+disabled in steady state.
+
+> **Note (correction):** `tailTruncate` was previously listed as prefix-safe. It isn't —
+> because the client re-sends the full result next turn once it moves into mid-history, and
+> `tailTruncate` only edits the newest message, so it fails to re-shrink it and forces a
+> cache rebuild. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
+> The genuinely safe deterministic truncator is `stableTruncate`.
+
+**`optimizeOnCold` (off by default — known flaw).** The intended idea: when the cache has
+already expired, the next write is unavoidable, so shrink the prefix on that one turn "for
+free." In practice it causes a **double write** — the cold turn writes a shrunk prefix, then
+the next turn reverts to the steady-state set and the client re-sends the pristine full
+prefix (it never learns the proxy edited it), so the whole prefix rebuilds. Net worse than
+doing nothing. Only _deterministic_ edits can be sustained across turns, and those are safe
+to run always — so gating them on "cold" adds nothing. Left configurable for experiments,
+default off. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
+
+**`upgradeCacheTtl` (off by default).** Claude Code always requests the **5-minute** cache
+(verified across captured Bedrock traces: every `cache_control` marker is bare
+`{"type":"ephemeral"}` with no `ttl`). Setting `upgradeCacheTtl = "1h"` rewrites those markers
+to a 1-hour TTL before forwarding. On Opus 4.x a 1h write costs 2× input ($10/MTok) vs 1.25×
+for 5m ($6.25/MTok), but the entry survives 12× longer — so it pays off when your idle gaps
+often fall between 5 min and 1 hour (fewer re-writes), and it makes cross-user cache sharing
+far more likely. Reads cost the same ($0.50/MTok) either way. Enable it from the start of a
+session, since it changes the cached-prefix bytes.
 
 The full story — what we tried, why it failed, what's still safe, and where real gains
-might exist (e.g. rewriting only idle/cold sessions where the cache has expired) — is in:
+might exist (e.g. cross-user prefix normalisation) — is in:
 
 - [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) — the narrative.
 - [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue + safety table.
@@ -321,7 +347,7 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue and cache-safety table.
 - [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
 - [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider caching and optimizer notes.
-- [`docs/OPTIMIZATIONS-TODO.md`](docs/OPTIMIZATIONS-TODO.md) — future optimization roadmap (normalizePrefix, optimizeOnCold, IASH).
+- [`docs/OPTIMIZATIONS-TODO.md`](docs/OPTIMIZATIONS-TODO.md) — future optimization roadmap (normalizePrefix, keep-alive, IASH; and why optimizeOnCold was abandoned).
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
 
 ## License

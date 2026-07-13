@@ -38,32 +38,50 @@ upstream = "https://bedrock-runtime.eu-west-1.amazonaws.com"
 [optimize]
 enabled = false               # set true to always optimise without --optimize flag
 profile = "auto"              # auto|default|cache-safe. auto disables prefix-editing
-                              # strategies (collapseSystem/pruneUnusedTools/pruneStale)
-                              # for prefix-cache providers (deepseek) where they backfire;
-                              # cache-safe forces this everywhere; default keeps full layer.
-dedup = true                  # suppress identical tool re-reads (unchanged content)
-truncate = true               # head+tail truncation for large results
-stablePrefix = true           # canonicalise tool defs for prompt-cache stability
-pruneStale = true             # replace old tool results with compact summaries
+                              # strategies for prefix-cache providers (deepseek) where they
+                              # backfire; cache-safe forces this everywhere; default keeps
+                              # the full layer.
+# IMPORTANT: prefix-editing strategies default OFF. Anthropic/Bedrock's native
+# cache achieves ~98-99% read rate on unmodified requests; editing the cached
+# prefix triggers cache-writes (12.5x read cost) that exceed any token savings.
+# Only stripTools + tailTruncate stay active in steady state. The disabled
+# strategies below are re-enabled automatically for ONE request when the cache
+# has expired (optimizeOnCold) — the write is unavoidable then, so shrinking the
+# prefix first is free.
+dedup = false                 # suppress identical tool re-reads (unchanged content)
+truncate = false              # head+tail truncation for large results
+stablePrefix = false          # canonicalise tool defs for prompt-cache stability
+pruneStale = false            # replace old tool results with compact summaries
 stableTruncate = false        # cache-safe: truncate large tool results in place with a
-                              # content-only (position-independent) transform, so bytes are
-                              # identical every request. Auto-enabled for deepseek via profile.
-shapeTestOutput = false       # cache-safe: strip passing-test spam/ANSI/dup lines from test
-                              # & build output deterministically. Auto-enabled for deepseek.
-prefixProbe = false           # diagnostic: log prefix-cache stability between consecutive
-                              # requests (flags accidental prefix edits). Auto-on for deepseek.
-frozenCompact = false         # long sessions: fold old messages into ONE frozen summary once
-                              # context crosses compactThreshold, then keep those bytes stable
-                              # (rare reset, amortised over later turns). Auto-on for deepseek.
-suppressReread = true         # suppress reads of files just written
-collapseSystem = true         # collapse repeated system prompts to a hash stub
-pruneUnusedTools = true       # drop tool defs never called (after pruneUnusedToolsAfter)
+                              # content-only transform. Auto-enabled for deepseek via profile.
+shapeTestOutput = false       # cache-safe: strip passing-test spam/ANSI/dup lines. deepseek.
+prefixProbe = false           # diagnostic: log prefix-cache stability between requests. deepseek.
+frozenCompact = false         # long sessions: fold old messages into ONE frozen summary. deepseek.
+suppressReread = false        # suppress reads of files just written
+collapseSystem = false        # collapse repeated system prompts to a hash stub
+pruneUnusedTools = false      # drop tool defs never called (after pruneUnusedToolsAfter)
+tailTruncate = true           # cache-safe: truncate large results only in the last user
+                              # message (the growing edge is always a cache write anyway).
 truncateThreshold = 4096      # bytes above which truncation kicks in
 pruneAfterTurns = 6           # prune results older than N assistant turns
 suppressWithinTurns = 2       # suppress re-reads within N turns of a write
 pruneUnusedToolsAfter = 10    # drop never-called tool defs after this many requests
 compactThreshold = 60000      # frozenCompact: emitted-context token budget before folding
 compactKeepTail = 20          # frozenCompact: recent messages always kept full
+optimizeOnCold = false        # OFF by default — known flaw: cold-turn prefix edits aren't
+                              # sustained (next turn reverts + client re-sends the pristine
+                              # prefix) -> a SECOND cache write = net loss. Left configurable
+                              # for experiments only. See docs/OPTIMIZATION-STRATEGIES.md.
+cacheTtlMs = 1800000          # idle gap (ms) before a request is treated as cache-cold.
+                              # Conservative 30-min default: Anthropic documents a 5-min
+                              # *minimum* TTL but real expiry is often longer; firing too
+                              # early rewrites a still-warm prefix (cheap read -> costly
+                              # write). Lower once cache-regen data shows the real TTL.
+upgradeCacheTtl = "off"       # off|1h. Claude Code always requests the 5m cache. "1h"
+                              # rewrites its cache_control markers to a 1-hour TTL: writes
+                              # cost 2x input (vs 1.25x for 5m) but the entry lives 12x
+                              # longer — wins when idle gaps often fall in the 5m..1h range.
+                              # Enable from the start of a session (it changes prefix bytes).
 
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.
