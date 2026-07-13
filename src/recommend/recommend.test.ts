@@ -118,6 +118,7 @@ describe("recommend", () => {
             started_at: null,
             input_tokens: 2000,
             cached_input_tokens: null,
+            cache_creation_input_tokens: null,
             output_tokens: 1,
           },
           {
@@ -125,6 +126,7 @@ describe("recommend", () => {
             started_at: null,
             input_tokens: 30000,
             cached_input_tokens: null,
+            cache_creation_input_tokens: null,
             output_tokens: 1,
           },
         ],
@@ -143,6 +145,7 @@ describe("recommend", () => {
       started_at: null,
       input_tokens: input,
       cached_input_tokens: cached,
+      cache_creation_input_tokens: null,
       output_tokens: 1,
     });
     const recs = recommend(
@@ -166,6 +169,7 @@ describe("recommend", () => {
       started_at: null,
       input_tokens: input,
       cached_input_tokens: cached,
+      cache_creation_input_tokens: null,
       output_tokens: 1,
     });
     // Turn adds 8000 tokens (a big file read) and misses 8000 — all new, no reset.
@@ -190,6 +194,7 @@ describe("recommend", () => {
       started_at: null,
       input_tokens: input,
       cached_input_tokens: cached,
+      cache_creation_input_tokens: null,
       output_tokens: 1,
     });
     const recs = recommend(
