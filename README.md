@@ -252,10 +252,18 @@ system prompt, pruning tools, compacting history) and found they don't beat the 
 own prompt cache: on Anthropic/Bedrock and DeepSeek alike, the high-impact ideas edit the
 _cached prefix_, and editing the prefix costs more (cache writes / misses) than the tokens
 it saves. So the layer auto-detects the provider and keeps only the edits that don't touch
-the cached prefix; everything that rewrites the middle of the prompt is disabled.
+the cached prefix (`stripTools`, `tailTruncate`); everything that rewrites the middle of
+the prompt is disabled in steady state.
+
+**`optimizeOnCold` (on by default).** There is exactly one moment when editing the prefix
+is free: after the cache has already expired. If the gap since the previous request exceeds
+`cacheTtlMs` (default 5 min), the next request pays a full cache-write regardless — so for
+that single request the layer re-enables the full strategy set, shrinking the prefix before
+it is written. Every subsequent read in the new TTL window is then cheaper. It reverts to
+the safe set automatically on the next warm request.
 
 The full story — what we tried, why it failed, what's still safe, and where real gains
-might exist (e.g. rewriting only idle/cold sessions where the cache has expired) — is in:
+might exist (e.g. cross-user prefix normalisation) — is in:
 
 - [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) — the narrative.
 - [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue + safety table.

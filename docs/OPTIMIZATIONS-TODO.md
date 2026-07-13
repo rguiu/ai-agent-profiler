@@ -264,9 +264,14 @@ Over a workday (~50 cold windows assuming 5-min TTL with activity gaps):
 
 ---
 
-## 8. optimizeOnCold — Full Optimization After Cache Expiry
+## 8. optimizeOnCold — Full Optimization After Cache Expiry ✅ IMPLEMENTED
 
-**Impact: Medium | Complexity: Low**
+**Impact: Medium | Complexity: Low | Status: shipped (on by default)**
+
+Implemented in `src/optimize/layer.ts` (`COLD_START_CONFIG`, cold-start detection in
+`rewriteRequestBody`). Config keys `optimizeOnCold` / `cacheTtlMs` in `[optimize]`. When
+the idle gap exceeds `cacheTtlMs`, the layer emits a `cold_start` action and applies the
+full strategy set for that one request, then reverts. Original design notes below.
 
 When a user returns after the cache TTL has expired, the next request pays full cache-write
 cost regardless. This is the optimal moment to apply aggressive optimizations — the prefix
@@ -308,14 +313,14 @@ optimizeOnCold = true
 
 ## Priority Order
 
+- ✅ **optimizeOnCold** — DONE. Free gains on cache-expired returns (shipped, on by default).
 1. **IASH** — highest ROI, prevents waste at source
-2. **optimizeOnCold** — trivial to implement, free gains on cache-expired returns
-3. **normalizePrefix** — high savings that scale with team size (needs shared proxy)
-4. **Adaptive pruneAfter** — trivial to implement, immediate savings
-5. **Search-result dedup** — low-hanging fruit on top of existing dedup
-6. **Fuzzy system collapse** — high savings but more complex
-7. **Diff-based Read** — medium savings, needs careful correctness
-8. **Test output compression** — nice-to-have, pattern-specific
+2. **normalizePrefix** — high savings that scale with team size (needs shared proxy)
+3. **Adaptive pruneAfter** — trivial to implement, immediate savings
+4. **Search-result dedup** — low-hanging fruit on top of existing dedup
+5. **Fuzzy system collapse** — high savings but more complex
+6. **Diff-based Read** — medium savings, needs careful correctness
+7. **Test output compression** — nice-to-have, pattern-specific
 
 ## Data backing these estimates
 

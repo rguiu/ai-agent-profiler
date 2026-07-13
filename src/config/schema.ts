@@ -21,22 +21,26 @@ export const storageSchema = z.object({
 export const optimizeSchema = z.object({
   enabled: z.boolean().default(false),
   // "auto" applies cache-safe overrides for prefix-caching providers (deepseek);
-  // "cache-safe" forces them for all providers; "default" uses the full layer
-  // (tuned for Anthropic explicit cache breakpoints).
+  // "cache-safe" forces them for all providers; "default" uses the full layer.
   profile: z.enum(["auto", "default", "cache-safe"]).default("auto"),
-  dedup: z.boolean().default(true),
-  truncate: z.boolean().default(true),
-  stablePrefix: z.boolean().default(true),
-  pruneStale: z.boolean().default(true),
+  // Prefix-editing strategies default OFF: they destroy Bedrock/DeepSeek's
+  // native cache. optimizeOnCold re-enables them for a single request when the
+  // cache has already expired (the write is unavoidable). See optimize/layer.ts.
+  dedup: z.boolean().default(false),
+  truncate: z.boolean().default(false),
+  stablePrefix: z.boolean().default(false),
+  pruneStale: z.boolean().default(false),
   stableTruncate: z.boolean().default(false),
   shapeTestOutput: z.boolean().default(false),
   prefixProbe: z.boolean().default(false),
   frozenCompact: z.boolean().default(false),
-  suppressReread: z.boolean().default(true),
-  collapseSystem: z.boolean().default(true),
-  pruneUnusedTools: z.boolean().default(true),
+  suppressReread: z.boolean().default(false),
+  collapseSystem: z.boolean().default(false),
+  pruneUnusedTools: z.boolean().default(false),
   insertBreakpoints: z.boolean().default(false),
   reorderVolatile: z.boolean().default(false),
+  // Only touches the trailing edge (always a cache write anyway) — cache-safe.
+  tailTruncate: z.boolean().default(true),
   // Tool names to strip from every request. Stripped from turn 1 so the prefix
   // remains stable and the cache is never invalidated. Use for tools that are
   // defined by the client but never (or rarely) used in your workload.
@@ -49,6 +53,10 @@ export const optimizeSchema = z.object({
   pruneUnusedToolsAfter: z.number().int().positive().default(10),
   compactThreshold: z.number().int().positive().default(60000),
   compactKeepTail: z.number().int().positive().default(20),
+  // When cache is expired (idle > cacheTtlMs), apply full optimization for the
+  // one inevitable cold write, shrinking the prefix for the new TTL window.
+  optimizeOnCold: z.boolean().default(true),
+  cacheTtlMs: z.number().int().positive().default(300_000),
 });
 
 export const modelPricingSchema = z.object({

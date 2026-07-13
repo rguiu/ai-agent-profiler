@@ -11,7 +11,9 @@ describe("resolveOptimizeConfig", () => {
     expect(out?.collapseSystem).toBe(false);
     expect(out?.pruneStale).toBe(false);
     expect(out?.pruneUnusedTools).toBe(false);
-    expect(out?.dedup).toBe(true);
+    expect(out?.dedup).toBe(false);
+    expect(out?.stableTruncate).toBe(true);
+    expect(out?.tailTruncate).toBe(true);
   });
 
   it("applies explicit-cache overrides for anthropic under auto", () => {

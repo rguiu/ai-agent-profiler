@@ -43,7 +43,9 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
   ollama: "none",
 };
 
-// For explicit-breakpoint providers (Anthropic/Bedrock): disable optimization.
+// For explicit-breakpoint providers (Anthropic/Bedrock): only stripTools +
+// tailTruncate stay active on the steady-state path. Everything else destroys
+// the native ~98-99% cache read rate.
 //
 // Anthropic's native cache achieves ~98-99% read rate on unmodified requests.
 // ANY modification — even deterministic transforms — causes cache misses where
@@ -55,18 +57,24 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
 //   stableTruncate only:  95% read, 5% write  → $9.40 (+26%)
 //   prefix-editing:       34% read, 66% write → $18.78 (+151%)
 //
-// The optimal strategy: pass through untouched.
+// The exception is a cold start: once the cache has expired the write is
+// unavoidable, so the layer's optimizeOnCold logic re-enables the full set for
+// that single request regardless of this profile.
 export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
-  collapseSystem: false,
-  pruneUnusedTools: false,
+  dedup: false,
+  truncate: false,
+  stablePrefix: false,
   pruneStale: false,
   pruneStabilityWindow: 0,
-  insertBreakpoints: false,
-  reorderVolatile: false,
-  frozenCompact: false,
   stableTruncate: false,
   shapeTestOutput: false,
-  stablePrefix: false,
+  prefixProbe: false,
+  frozenCompact: false,
+  suppressReread: false,
+  collapseSystem: false,
+  pruneUnusedTools: false,
+  insertBreakpoints: false,
+  reorderVolatile: false,
   tailTruncate: true,
 };
 
