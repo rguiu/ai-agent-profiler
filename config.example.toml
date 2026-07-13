@@ -70,7 +70,11 @@ compactThreshold = 60000      # frozenCompact: emitted-context token budget befo
 compactKeepTail = 20          # frozenCompact: recent messages always kept full
 optimizeOnCold = true         # when idle > cacheTtlMs, apply full optimization for the one
                               # inevitable cold write (shrinks prefix for the new TTL window)
-cacheTtlMs = 300000           # cache TTL in ms (Anthropic's documented 5-min minimum)
+cacheTtlMs = 1800000          # idle gap (ms) before a request is treated as cache-cold.
+                              # Conservative 30-min default: Anthropic documents a 5-min
+                              # *minimum* TTL but real expiry is often longer; firing too
+                              # early rewrites a still-warm prefix (cheap read -> costly
+                              # write). Lower once cache-regen data shows the real TTL.
 
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.

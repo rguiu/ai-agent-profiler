@@ -55,8 +55,10 @@ export const optimizeSchema = z.object({
   compactKeepTail: z.number().int().positive().default(20),
   // When cache is expired (idle > cacheTtlMs), apply full optimization for the
   // one inevitable cold write, shrinking the prefix for the new TTL window.
+  // Default 30 min: conservative, since firing on a still-warm cache would turn
+  // a cheap read into an expensive write. Lower it once real data confirms TTL.
   optimizeOnCold: z.boolean().default(true),
-  cacheTtlMs: z.number().int().positive().default(300_000),
+  cacheTtlMs: z.number().int().positive().default(1_800_000),
 });
 
 export const modelPricingSchema = z.object({

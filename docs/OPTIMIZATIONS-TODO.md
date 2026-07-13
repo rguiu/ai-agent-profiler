@@ -305,7 +305,7 @@ A 200K-token session returning after cache expiry:
 
 ```toml
 [optimize]
-cacheTtlMs = 300000  # 5 minutes (match Anthropic's documented minimum)
+cacheTtlMs = 1800000  # 30 min (conservative; lower once real TTL is observed)
 optimizeOnCold = true
 ```
 

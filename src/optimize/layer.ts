@@ -67,7 +67,11 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   pruneStabilityWindow: 0,
   stripTools: [],
   optimizeOnCold: true,
-  cacheTtlMs: 300_000, // 5 minutes (Anthropic's documented minimum TTL)
+  // Conservative default: 30 min. Anthropic documents a 5-min *minimum* TTL, but
+  // the real expiry is often longer — firing too early would rewrite a still-warm
+  // prefix and turn a cheap read into an expensive write. Start high and tighten
+  // once real idle-gap/cache-write data (see cache-regen) shows the true TTL.
+  cacheTtlMs: 1_800_000, // 30 minutes
 };
 
 // All prefix-editing strategies enabled — applied by optimizeOnCold for the one

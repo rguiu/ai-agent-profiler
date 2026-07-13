@@ -257,10 +257,12 @@ the prompt is disabled in steady state.
 
 **`optimizeOnCold` (on by default).** There is exactly one moment when editing the prefix
 is free: after the cache has already expired. If the gap since the previous request exceeds
-`cacheTtlMs` (default 5 min), the next request pays a full cache-write regardless — so for
-that single request the layer re-enables the full strategy set, shrinking the prefix before
-it is written. Every subsequent read in the new TTL window is then cheaper. It reverts to
-the safe set automatically on the next warm request.
+`cacheTtlMs` (default 30 min — deliberately conservative, since firing on a still-warm cache
+would turn a cheap read into an expensive write), the next request pays a full cache-write
+regardless — so for that single request the layer re-enables the full strategy set, shrinking
+the prefix before it is written. Every subsequent read in the new TTL window is then cheaper.
+It reverts to the safe set automatically on the next warm request. Watch the cache-regen
+diagnostics to learn your real TTL, then lower `cacheTtlMs` accordingly.
 
 The full story — what we tried, why it failed, what's still safe, and where real gains
 might exist (e.g. cross-user prefix normalisation) — is in:
