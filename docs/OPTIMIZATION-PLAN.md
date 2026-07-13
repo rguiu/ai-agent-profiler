@@ -1,5 +1,128 @@
 # Optimization plan — cache-aware request rewriting
 
+## Wave 2 — implementation priorities
+
+Clean separation between wrapper and proxy. No communication needed:
+- **Wrapper** (`aap run`): permanent conversation compaction via JSONL manipulation.
+  Makes the history smaller. One-time operation.
+- **Proxy** (`aap serve`): per-request cache-lifecycle management. Makes the cache
+  last longer. Runs on every request.
+
+### 1. Wrapper-level optimization: JSONL compaction
+
+The wrapper compacts Claude's conversation history directly in
+`~/.claude/projects/<hash>/<uuid>.jsonl`. Claude then owns the compacted
+version and re-sends it every turn — no proxy rewriting needed.
+
+**Implementation steps:**
+1. `aap run` discovers Claude's session JSONL path (parse `~/.claude/projects/`,
+   match by cwd or let Claude tell us via `--session-id`).
+2. On each Claude request, the wrapper estimates accumulated tokens (read the
+   JSONL, sum message sizes / 4).
+3. When accumulated tokens > threshold (configurable, default 80K):
+   - Compute compaction boundary: fold messages [1..N-keepTail] into a summary
+   - Ensure tool message pairing is preserved (keep assistant+tool_calls+tools together)
+   - Write compacted JSONL atomically (write to .tmp, rename)
+   - Keep backup of original (.bak)
+   - Log the action (tokens saved)
+4. Strategies to apply during compaction:
+   - `stableTruncate`: truncate large tool results deterministically
+   - `shapeTestOutput`: strip passing-test spam from test output
+   - `pruneStale`: replace old tool results with compact summaries
+   - `collapseSystem`: replace repeated system prompts with hash stubs
+   - `dedup`: replace identical repeated tool results with stubs
+   - `pruneUnusedTools`: remove tool defs never called
+   - `suppressReread`: remove reads of files just written
+5. Edge cases:
+   - Claude is mid-request when compaction fires → wait for request to complete
+   - Claude Code version mismatch → detect format, bail with warning
+   - Session already compacted by Claude Code's own Compact → skip or piggyback
+   - File locked or unreadable → retry with backoff, then bail
+
+**No proxy communication needed.** The wrapper tracks token estimates from the
+JSONL directly. It doesn't need cache hit/miss metrics to decide when to compact
+— the token threshold is enough.
+
+### 2. Keep-alive: prevent cache expiry during idle
+
+The proxy replays the last request with `max_tokens: 1` before the cache TTL
+expires, keeping the prefix warm. Lives in the proxy because it needs the API
+connection (upstream URL, auth headers).
+
+**Implementation steps:**
+1. Per-session state: store `lastRequestBytes`, `lastRequestPath`, `lastRequestModel`.
+2. Session abandonment detection (see §3.1 for full signal list):
+   - **Strongest signal:** `aap run` knows the agent's PID. `kill(pid, 0)` checks
+     liveness. Agent exited → session definitively over → stop pings immediately.
+   - **Shell trap:** `aap run` injects a trap EXIT that curl-calls
+     `POST /_control/sessions/{id}/end` on agent exit.
+   - Explicit opt-in: `aap run --keep-alive` or session metadata `{ keepAlive: true }`.
+3. Ping timing: ping at `TTL * 0.8` intervals (4 min for 5m cache, 48 min for 1h).
+4. Ping execution:
+   - Replay `lastRequestBytes` with `stream: false, max_tokens: 1`
+   - If response shows `cache_creation > 0`: cache was already dead → stop pinging
+   - If response shows `cache_read > 0`: cache is alive → continue
+5. Abandonment policy:
+   - Agent PID died → stop immediately
+   - No user request within N pings → stop (user abandoned session)
+   - Cache write detected → stop immediately (burning money)
+
+**Cost model** (see §3.2):
+- 5m cache: ~12.5 pings to break even with one rebuild. Borderline.
+- 1h cache: ~12 pings to break even. Much more viable.
+- **Recommendation:** only enable keep-alive with `upgradeCacheTtl = "1h"`.
+
+### 3. 1h cache for Claude (Anthropic/Bedrock)
+
+Claude Code always requests the 5-minute cache (`cache_control: { type: "ephemeral" }`).
+The proxy can rewrite markers to 1h before forwarding. A 1h write costs 2× input
+($10/MTok on Opus 4.x vs $6.25 for 5m) but survives 12× longer, so it wins when
+idle gaps often fall between 5 min and 1 hour.
+
+**Implementation steps:**
+1. Strategy already implemented in `src/optimize/layer.ts` (`upgradeCacheTtl`).
+   Activated by `[optimize].upgradeCacheTtl = "1h"` in config.
+2. Verify it actually works (§2.1): controlled test with 6-minute gap.
+3. Measure the real TTL: does the 1h marker actually give 1 hour? Run probes
+   with increasing idle gaps and record cache hit rate.
+4. If verified, make it the default for Bedrock/Anthropic providers when
+   `--optimize` is active. The cost difference (2× write vs 1.25×) is small
+   per-session and the extended window benefits keep-alive and cross-user sharing.
+5. Surface in dashboard: next to cache metrics, show "TTL: 5m / 1h" and the
+   effective cache window.
+
+### 4. Additional improvements
+
+- **4.1 Cache-point metrics in the live proxy.** Wire `commonPrefixTokens()` into
+  the hot path (§2.5). Store previous request bytes per session. On each new
+  request, compute `cachePointTokens = commonPrefixTokens(prev, current)`.
+  Log it: `[cache] session X: 85% hit, divergence at token 41000`. This gives
+  us visibility into actual cache behavior without waiting for the parse phase.
+
+- **4.2 Read-only JSONL analysis first.** Before implementing writes, build a
+  tool that reads Claude's JSONL, reconstructs the full message array, and
+  reports what compaction WOULD save. Run it against real sessions to validate
+  the approach without risk. `aap analyze --claude-session <path>`.
+
+- **4.3 Keep-alive as a standalone proxy mode.** Allow the proxy to run keep-alive
+  pings even when `--optimize` is off. Keep-alive is pure cache-lifecycle management,
+  not request rewriting. `aap serve --keep-alive` (without --optimize).
+
+- **4.4 OpenCode JSONL support.** Discover and support OpenCode's conversation
+  storage format alongside Claude's. OpenCode sessions are also visible in the
+  proxy. The wrapper should auto-detect the agent type and use the right format.
+
+- **4.5 Compaction on session resume.** When `aap run` starts and Claude Code
+  resumes a previous session (JSONL exists with history), compact immediately
+  if the accumulated tokens exceed threshold. The first request of a resumed
+  session is always a cache write → compacting before it is free.
+
+- **4.6 Dashboard: compaction history.** Show when the wrapper compacted a session,
+  how many tokens were saved, and the before/after message count. Gives users
+  visibility into what the wrapper is doing.
+
+---
+
 ## The fundamental constraint
 
 Claude Code and opencode rebuild every request from scratch each turn. They re-send the
