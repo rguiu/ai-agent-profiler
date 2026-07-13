@@ -39,8 +39,10 @@ export const optimizeSchema = z.object({
   pruneUnusedTools: z.boolean().default(false),
   insertBreakpoints: z.boolean().default(false),
   reorderVolatile: z.boolean().default(false),
-  // Only touches the trailing edge (always a cache write anyway) — cache-safe.
-  tailTruncate: z.boolean().default(true),
+  // NOT prefix-safe: the client re-sends the full result next turn when it moves
+  // into mid-history, and tailTruncate only touches the newest message — causing
+  // a cache rebuild from the divergence point. Prefer stableTruncate instead.
+  tailTruncate: z.boolean().default(false),
   // Tool names to strip from every request. Stripped from turn 1 so the prefix
   // remains stable and the cache is never invalidated. Use for tools that are
   // defined by the client but never (or rarely) used in your workload.

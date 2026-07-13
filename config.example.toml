@@ -44,10 +44,8 @@ profile = "auto"              # auto|default|cache-safe. auto disables prefix-ed
 # IMPORTANT: prefix-editing strategies default OFF. Anthropic/Bedrock's native
 # cache achieves ~98-99% read rate on unmodified requests; editing the cached
 # prefix triggers cache-writes (12.5x read cost) that exceed any token savings.
-# Only stripTools + tailTruncate stay active in steady state. The disabled
-# strategies below are re-enabled automatically for ONE request when the cache
-# has expired (optimizeOnCold) — the write is unavoidable then, so shrinking the
-# prefix first is free.
+# Only stripTools is safe on all providers. The disabled strategies below are
+# prefix-editing and kept for the `none` cache family (Ollama) or experiments.
 dedup = false                 # suppress identical tool re-reads (unchanged content)
 truncate = false              # head+tail truncation for large results
 stablePrefix = false          # canonicalise tool defs for prompt-cache stability
@@ -56,22 +54,23 @@ stableTruncate = false        # cache-safe: truncate large tool results in place
                               # content-only transform. Auto-enabled for deepseek via profile.
 shapeTestOutput = false       # cache-safe: strip passing-test spam/ANSI/dup lines. deepseek.
 prefixProbe = false           # diagnostic: log prefix-cache stability between requests. deepseek.
-frozenCompact = false         # long sessions: fold old messages into ONE frozen summary. deepseek.
+frozenCompact = false         # long sessions: fold old messages into ONE frozen summary. NOTE:
+                              # can break OpenAI tool message pairing — disabled by default.
 suppressReread = false        # suppress reads of files just written
 collapseSystem = false        # collapse repeated system prompts to a hash stub
 pruneUnusedTools = false      # drop tool defs never called (after pruneUnusedToolsAfter)
-tailTruncate = true           # cache-safe: truncate large results only in the last user
-                              # message (the growing edge is always a cache write anyway).
+tailTruncate = false           # NOT prefix-safe: only touches the newest message, but the client
+                              # re-sends the full result next turn when it moves mid-history,
+                              # causing a cache rebuild. Prefer stableTruncate instead.
 truncateThreshold = 4096      # bytes above which truncation kicks in
 pruneAfterTurns = 6           # prune results older than N assistant turns
 suppressWithinTurns = 2       # suppress re-reads within N turns of a write
 pruneUnusedToolsAfter = 10    # drop never-called tool defs after this many requests
 compactThreshold = 60000      # frozenCompact: emitted-context token budget before folding
 compactKeepTail = 20          # frozenCompact: recent messages always kept full
-optimizeOnCold = false        # OFF by default — known flaw: cold-turn prefix edits aren't
-                              # sustained (next turn reverts + client re-sends the pristine
-                              # prefix) -> a SECOND cache write = net loss. Left configurable
-                              # for experiments only. See docs/OPTIMIZATION-STRATEGIES.md.
+optimizeOnCold = false        # DEPRECATED: cold-turn prefix edits aren't sustained (client
+                              # re-sends pristine prefix next turn) → double cache write.
+                              # Removed from code. Kept for config backward compat only.
 cacheTtlMs = 1800000          # idle gap (ms) before a request is treated as cache-cold.
                               # Conservative 30-min default: Anthropic documents a 5-min
                               # *minimum* TTL but real expiry is often longer; firing too

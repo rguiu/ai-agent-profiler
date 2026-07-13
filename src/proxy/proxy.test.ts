@@ -195,10 +195,24 @@ describe("optimize recording", () => {
     const dir = mkdtempSync(join(tmpdir(), "aap-proxy-"));
     const store = openStore(dir);
     try {
-      const { proxyPort } = await startOptimizeStack(store);
-      // tailTruncate is the always-on strategy: it truncates a large tool
-      // result in the last user message (the growing edge).
-      const bigResult = "x\n".repeat(3000); // >4096 bytes
+      const upstream = http.createServer(upstreamHandler);
+      const upstreamPort = await listen(upstream);
+      servers.push(upstream);
+
+      const proxy = createProxyServer(
+        buildConfig(upstreamPort),
+        new SessionRegistry(),
+        undefined,
+        store,
+        undefined,
+        { optimize: { stableTruncate: true, shapeTestOutput: false } },
+      );
+      const proxyPort = await listen(proxy);
+      servers.push(proxy);
+
+      // stableTruncate deterministically truncates large tool results
+      // in every result regardless of position. 3000 lines * 2 = 6000 bytes > 4096 threshold.
+      const bigResult = "x\n".repeat(3000);
       const body = JSON.stringify({
         system: "test",
         messages: [
@@ -214,7 +228,7 @@ describe("optimize recording", () => {
       await (await fetch(url, { method: "POST", body })).text();
 
       const actions = store.getOptimizeActions("sess-opt");
-      const truncate = actions.find((a) => a.type === "tail_truncate");
+      const truncate = actions.find((a) => a.type === "stable_truncate");
       expect(truncate).toBeDefined();
       expect(truncate!.count).toBeGreaterThanOrEqual(1);
       expect(truncate!.tokens_saved).toBeGreaterThan(0);

@@ -66,7 +66,7 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   pruneUnusedTools: false,
   insertBreakpoints: false,
   reorderVolatile: false,
-  tailTruncate: true,
+  tailTruncate: false,
   truncateThreshold: 4096,
   pruneAfterTurns: 6,
   suppressWithinTurns: 2,
@@ -88,23 +88,6 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   upgradeCacheTtl: "off",
 };
 
-// All prefix-editing strategies enabled — applied by optimizeOnCold for the one
-// request after the cache has expired. The cache write is unavoidable at that
-// point, so shrinking the prefix first is free and makes subsequent reads (for
-// the rest of the new TTL window) cheaper.
-export const COLD_START_CONFIG: Partial<OptimizeConfig> = {
-  dedup: true,
-  truncate: true,
-  pruneStale: true,
-  stableTruncate: true,
-  shapeTestOutput: true,
-  frozenCompact: true,
-  suppressReread: true,
-  collapseSystem: true,
-  pruneUnusedTools: true,
-  tailTruncate: true,
-};
-
 // Cache-safe overrides for providers with automatic prefix caching (DeepSeek).
 // Deterministic transforms (stableTruncate, shapeTestOutput) produce identical
 // bytes for the same input — safe because the cached prefix never shifts.
@@ -122,8 +105,8 @@ export const CACHE_SAFE_OVERRIDES: Partial<OptimizeConfig> = {
   stableTruncate: true,
   shapeTestOutput: true,
   prefixProbe: true,
-  frozenCompact: true,
-  tailTruncate: true,
+  frozenCompact: false,
+  tailTruncate: false,
 };
 
 export type OptimizeActionType =
@@ -141,8 +124,7 @@ export type OptimizeActionType =
   | "strip_tools"
   | "tail_truncate"
   | "insert_breakpoints"
-  | "reorder_volatile"
-  | "cold_start";
+  | "reorder_volatile";
 
 export interface OptimizeAction {
   type: OptimizeActionType;
@@ -350,9 +332,6 @@ function tokensAfter(s: PrefixSnapshot, from: number): number {
 }
 
 export class OptimizeLayer {
-  // baseConfig is the resolved provider profile; config is the per-request
-  // effective config, which optimizeOnCold may temporarily overlay with
-  // COLD_START_CONFIG for a single cold request.
   private readonly baseConfig: OptimizeConfig;
   private config: OptimizeConfig;
   private readonly actions: OptimizeAction[] = [];
@@ -376,17 +355,10 @@ export class OptimizeLayer {
   // `turn - lastPruneTurn < pruneStabilityWindow`, pruneStale is suppressed.
   // When pruneStabilityWindow === Infinity, prune fires once then never again.
   private lastPruneTurn = 0;
-  // optimizeOnCold state
-  private lastRequestAt = 0;
-  private _coldStart = false;
 
   constructor(config: Partial<OptimizeConfig> = {}) {
     this.baseConfig = { ...DEFAULT_CONFIG, ...config };
     this.config = this.baseConfig;
-  }
-
-  get isColdStart(): boolean {
-    return this._coldStart;
   }
 
   getActions(): OptimizeAction[] {
@@ -403,30 +375,7 @@ export class OptimizeLayer {
 
   rewriteRequestBody(body: Buffer): Buffer {
     this.turn++;
-
-    // optimizeOnCold: if the cache TTL has elapsed since the last request, the
-    // next request pays a full cache-write regardless — so enable every strategy
-    // for this one request to shrink the prefix before it is written.
-    const now = Date.now();
-    this._coldStart = false;
-    if (
-      this.baseConfig.optimizeOnCold &&
-      this.lastRequestAt > 0 &&
-      now - this.lastRequestAt > this.baseConfig.cacheTtlMs
-    ) {
-      this._coldStart = true;
-      this.config = { ...this.baseConfig, ...COLD_START_CONFIG };
-      const gapSec = Math.round((now - this.lastRequestAt) / 1000);
-      this.actions.push({
-        type: "cold_start",
-        turn: this.turn,
-        tokensSaved: 0,
-        detail: `cache expired (${gapSec}s idle > ${this.baseConfig.cacheTtlMs / 1000}s TTL) — full optimization enabled for this request`,
-      });
-    } else {
-      this.config = this.baseConfig;
-    }
-    this.lastRequestAt = now;
+    this.config = this.baseConfig;
 
     let parsed: Record<string, unknown>;
     try {
@@ -459,8 +408,7 @@ export class OptimizeLayer {
       }
     }
 
-    // Track the system-prompt hash unconditionally so optimizeOnCold can
-    // collapse a repeated prompt even when collapseSystem is normally off.
+    // Track the system-prompt hash for collapseSystem detection.
     if (parsed.system != null) {
       const systemStr =
         typeof parsed.system === "string"
@@ -983,21 +931,37 @@ export class OptimizeLayer {
       this.frozenSummary =
         `[earlier conversation compacted — ${folded.length} messages (${roleStr}), ` +
         `~${foldedTokens} tokens omitted. hash:${hashContent(JSON.stringify(folded))}]`;
-      this.compactBoundary = tailStart;
+      let safeBoundary = tailStart;
+      while (
+        safeBoundary < messages.length &&
+        messages[safeBoundary]?.role === "tool"
+      ) {
+        safeBoundary++;
+      }
+      this.compactBoundary = safeBoundary;
       this.actions.push({
         type: "frozen_compact",
         turn: this.turn,
         tokensSaved: foldedTokens - estimateTokens(this.frozenSummary),
-        detail: `compacted ${folded.length} messages before index ${tailStart} into one frozen summary (~${foldedTokens} → ~${estimateTokens(this.frozenSummary)} tokens); boundary frozen until emitted context crosses the threshold again`,
+        detail: `compacted ${folded.length} messages before index ${safeBoundary} into one frozen summary (~${foldedTokens} → ~${estimateTokens(this.frozenSummary)} tokens); boundary frozen until emitted context crosses the threshold again`,
       });
     }
 
     // Apply the current frozen boundary (if any) every turn, byte-identically.
-    if (this.frozenSummary === null || this.compactBoundary <= 1) return null;
-    if (this.compactBoundary >= messages.length) return null;
+    // Skip orphaned tool messages at the boundary — they must follow an assistant
+    // with tool_calls, but their parent assistant was folded into the summary.
+    let safeBoundary = this.compactBoundary;
+    while (
+      safeBoundary < messages.length &&
+      messages[safeBoundary]?.role === "tool"
+    ) {
+      safeBoundary++;
+    }
+    if (this.frozenSummary === null || safeBoundary <= 1) return null;
+    if (safeBoundary >= messages.length) return null;
 
     const summaryMsg: Message = { role: "user", content: this.frozenSummary };
-    return [messages[0]!, summaryMsg, ...messages.slice(this.compactBoundary)];
+    return [messages[0]!, summaryMsg, ...messages.slice(safeBoundary)];
   }
 
   // Cache-safe alternative to pruneStale: truncate large tool results with a

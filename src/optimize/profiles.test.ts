@@ -58,7 +58,7 @@ describe("overridesFor", () => {
     expect(overridesFor("auto", "bedrock")).toHaveProperty("pruneStale", false);
     expect(overridesFor("auto", "bedrock")).toHaveProperty(
       "tailTruncate",
-      true,
+      false,
     );
   });
 

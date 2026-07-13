@@ -15,9 +15,7 @@ export function serve(args?: string[]): void {
   const portArg = portIdx >= 0 ? args?.[portIdx + 1] : undefined;
   const cliPort = portArg ? parseInt(portArg, 10) : undefined;
   const config = loadConfig();
-  const optimize = cliNoOptimize
-    ? false
-    : cliOptimize || config.optimize.enabled;
+  const optimize = cliNoOptimize ? false : cliOptimize;
   const registry = new SessionRegistry();
   const store = openStore(config.storage.dir);
 

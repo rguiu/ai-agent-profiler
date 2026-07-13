@@ -43,9 +43,9 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
   ollama: "none",
 };
 
-// For explicit-breakpoint providers (Anthropic/Bedrock): only stripTools +
-// tailTruncate stay active on the steady-state path. Everything else destroys
-// the native ~98-99% cache read rate.
+// For explicit-breakpoint providers (Anthropic/Bedrock): stripTools stays
+// active on the steady-state path (prefix-safe from turn 1). Everything else
+// destroys the native ~98-99% cache read rate.
 //
 // Anthropic's native cache achieves ~98-99% read rate on unmodified requests.
 // ANY modification — even deterministic transforms — causes cache misses where
@@ -58,8 +58,10 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
 //   stableTruncate only:  95% read, 5% write  → $9.40 (+26%)
 //   prefix-editing:       34% read, 66% write → $18.78 (+151%)
 //
-// (optimizeOnCold once re-enabled the full set on a cold turn regardless of this
-// profile, but that caused a double write and is defaulted OFF — see layer.ts.)
+// Benchmark results (see OPTIMIZATION-FINDINGS.md) show that editing the cached
+// prefix on explicit-cache providers costs more than it saves, so the full layer
+// is disabled. Only stripTools (prefix-safe from turn 1) remains active through
+// the base config.
 export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
   dedup: false,
   truncate: false,
@@ -75,7 +77,7 @@ export const EXPLICIT_CACHE_OVERRIDES: Partial<OptimizeConfig> = {
   pruneUnusedTools: false,
   insertBreakpoints: false,
   reorderVolatile: false,
-  tailTruncate: true,
+  tailTruncate: false,
 };
 
 export function cacheFamilyFor(provider: string): CacheFamily {

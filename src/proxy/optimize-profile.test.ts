@@ -13,13 +13,13 @@ describe("resolveOptimizeConfig", () => {
     expect(out?.pruneUnusedTools).toBe(false);
     expect(out?.dedup).toBe(false);
     expect(out?.stableTruncate).toBe(true);
-    expect(out?.tailTruncate).toBe(true);
+    expect(out?.tailTruncate).toBe(false);
   });
 
   it("applies explicit-cache overrides for anthropic under auto", () => {
     const out = resolveOptimizeConfig(base, "anthropic");
     expect(out?.collapseSystem).toBe(false);
-    expect(out?.tailTruncate).toBe(true);
+    expect(out?.tailTruncate).toBe(false);
     expect(out?.pruneStale).toBe(false);
   });
 
