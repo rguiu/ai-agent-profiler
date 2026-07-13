@@ -6,6 +6,7 @@ import http, {
 import https from "node:https";
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
+import { commonPrefixTokens, estimateTokens } from "../optimize/cache-cost.js";
 import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
 import {
@@ -91,6 +92,7 @@ export function createProxyServer(
     typeof options?.optimize === "object" ? options.optimize : undefined;
 
   const throttle = new Throttle(config.throttle);
+  const prevBodies = new Map<string, string>();
 
   return http.createServer((req, res) => {
     handle(
@@ -106,6 +108,7 @@ export function createProxyServer(
       optimizeLayers,
       optimizeConfig,
       throttle,
+      prevBodies,
     );
   });
 }
@@ -123,13 +126,14 @@ function handle(
   optimizeLayers?: Map<string, OptimizeLayer> | null,
   optimizeConfig?: Partial<OptimizeConfig>,
   throttle?: Throttle,
+  prevBodies?: Map<string, string>,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
   const pathname = queryStart === -1 ? rawUrl : rawUrl.slice(0, queryStart);
   const search = queryStart === -1 ? "" : rawUrl.slice(queryStart);
 
-  if (handleControl(req, res, pathname, registry, state, capture)) return;
+  if (handleControl(req, res, pathname, registry, state, capture, prevBodies)) return;
   if (handleUi(req, res, pathname)) return;
   if (store && handleApi(req, res, pathname, store)) return;
 
@@ -151,6 +155,7 @@ function handle(
   }
 
   const method = req.method ?? "GET";
+  const isKeepAlive = req.headers["x-aap-keep-alive"] === "1";
 
   let trace: RequestTrace | undefined;
   if (capture) {
@@ -164,6 +169,7 @@ function handle(
       httpVersion: req.httpVersion,
       headers: req.headers,
       startedAt: Date.now(),
+      keepAlive: isKeepAlive || undefined,
     });
   }
 
@@ -249,6 +255,8 @@ function handle(
       recordOptimize,
       throttle,
       timeoutMs: route.provider === "ollama" ? 120_000 : undefined,
+      sessionId: route.sessionId,
+      prevBodies,
       meta: {
         sessionId: route.sessionId,
         provider: route.provider,
@@ -276,6 +284,7 @@ function handleControl(
   registry: SessionRegistry,
   state: ProxyState,
   capture?: Capture,
+  prevBodies?: Map<string, string>,
 ): boolean {
   if (pathname === "/health") {
     sendJson(res, 200, { status: "ok" });
@@ -290,6 +299,15 @@ function handleControl(
       registerSession(req, res, registry, state, capture);
       return true;
     }
+  }
+  const lastBodyMatch = pathname.match(
+    /^\/_control\/sessions\/([^/]+)\/last-body$/,
+  );
+  if (lastBodyMatch && req.method === "GET") {
+    const sid = decodeURIComponent(lastBodyMatch[1] ?? "");
+    const body = prevBodies?.get(sid) ?? null;
+    sendJson(res, 200, { sessionId: sid, body });
+    return true;
   }
   return false;
 }
@@ -355,6 +373,8 @@ interface ForwardObs {
   recordOptimize?: () => void;
   throttle?: Throttle;
   timeoutMs?: number;
+  sessionId?: string | null;
+  prevBodies?: Map<string, string>;
   meta: Omit<
     RequestLogEntry,
     "status" | "latencyMs" | "responseBytes" | "error"
@@ -376,6 +396,8 @@ function forward(
     recordOptimize,
     throttle,
     timeoutMs,
+    sessionId,
+    prevBodies,
     meta,
   } = obs;
   const startedAt = Date.now();
@@ -417,6 +439,7 @@ function forward(
 
   const headers: OutgoingHttpHeaders = { ...req.headers };
   for (const name of HOP_BY_HOP) delete headers[name];
+  delete headers["x-aap-keep-alive"];
   headers["host"] = base.host;
   if (extraHeaders) {
     for (const [k, v] of Object.entries(extraHeaders)) headers[k] = v;
@@ -503,6 +526,22 @@ function forward(
       }
       if (optimizer) body = optimizer.rewriteRequestBody(body);
       recordOptimize?.();
+
+      if (sessionId && prevBodies) {
+        const currentBody = body.toString("utf8");
+        const prev = prevBodies.get(sessionId);
+        if (prev) {
+          const hitTokens = commonPrefixTokens(prev, currentBody);
+          const totalTokens = estimateTokens(currentBody);
+          const missTokens = totalTokens - hitTokens;
+          const hitPct = totalTokens > 0 ? Math.round((hitTokens / totalTokens) * 100) : 0;
+          process.stderr.write(
+            `[cache] ${sessionId.slice(0, 8)} hit=${hitPct}% hitT=${hitTokens} missT=${missTokens} totalT=${totalTokens}\n`,
+          );
+        }
+        prevBodies.set(sessionId, currentBody);
+      }
+
       sendUpstream(body);
     });
   } else {

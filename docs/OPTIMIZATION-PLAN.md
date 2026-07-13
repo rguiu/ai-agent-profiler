@@ -3,10 +3,10 @@
 ## Wave 2 — implementation priorities
 
 Clean separation between wrapper and proxy. No communication needed:
-- **Wrapper** (`aap run`): permanent conversation compaction via JSONL manipulation.
-  Makes the history smaller. One-time operation.
-- **Proxy** (`aap serve`): per-request cache-lifecycle management. Makes the cache
-  last longer. Runs on every request.
+- **Wrapper** (`aap run`): permanent conversation compaction via JSONL manipulation,
+  plus keep-alive pings. Owns the session lifecycle end-to-end.
+- **Proxy** (`aap serve`): per-request cache-lifecycle modifications (1h cache
+  markers). Passes keep-alive pings transparently, doesn't need to know about them.
 
 ### 1. Wrapper-level optimization: JSONL compaction
 
@@ -45,32 +45,38 @@ JSONL directly. It doesn't need cache hit/miss metrics to decide when to compact
 
 ### 2. Keep-alive: prevent cache expiry during idle
 
-The proxy replays the last request with `max_tokens: 1` before the cache TTL
-expires, keeping the prefix warm. Lives in the proxy because it needs the API
-connection (upstream URL, auth headers).
+The wrapper replays the last request with `max_tokens: 1` through the proxy before
+the cache TTL expires, keeping the prefix warm. Lives in the wrapper because it
+owns the session lifecycle and definitively knows when the agent exits.
+
+**Why the wrapper, not the proxy:**
+- The wrapper spawned the agent → knows its PID → `kill(pid, 0)` or `child_process`
+  exit event gives a **definitive** signal that the session is over. No heuristics,
+  no confidence scoring, no false positives.
+- The wrapper already tracks session start, last request time, and request bytes
+  (from the JSONL it reads for compaction).
+- No control endpoint needed — the wrapper IS the lifecycle manager.
+- Keep-alive pings go through the same proxy path as regular requests
+  (`POST /<session-id>/deepseek/v1/chat/completions`). The proxy forwards
+  transparently — it doesn't even need to know they're keep-alive pings.
 
 **Implementation steps:**
-1. Per-session state: store `lastRequestBytes`, `lastRequestPath`, `lastRequestModel`.
-2. Session abandonment detection (see §3.1 for full signal list):
-   - **Strongest signal:** `aap run` knows the agent's PID. `kill(pid, 0)` checks
-     liveness. Agent exited → session definitively over → stop pings immediately.
-   - **Shell trap:** `aap run` injects a trap EXIT that curl-calls
-     `POST /_control/sessions/{id}/end` on agent exit.
-   - Explicit opt-in: `aap run --keep-alive` or session metadata `{ keepAlive: true }`.
-3. Ping timing: ping at `TTL * 0.8` intervals (4 min for 5m cache, 48 min for 1h).
-4. Ping execution:
-   - Replay `lastRequestBytes` with `stream: false, max_tokens: 1`
+1. After each Claude request completes, the wrapper stores `lastRequestBytes`
+   and starts/restarts a keep-alive timer.
+2. Ping timing: `TTL * 0.8` (4 min for 5m cache, 48 min for 1h cache).
+3. Ping execution:
+   - Send `lastRequestBytes` through proxy with `stream: false, max_tokens: 1`
+   - Add header `x-aap-keep-alive: 1` so the proxy can tag the request in traces
+     and highlight it in the dashboard (distinct color/badge from real requests).
+     The proxy strips this header before forwarding upstream.
    - If response shows `cache_creation > 0`: cache was already dead → stop pinging
    - If response shows `cache_read > 0`: cache is alive → continue
-5. Abandonment policy:
-   - Agent PID died → stop immediately
-   - No user request within N pings → stop (user abandoned session)
-   - Cache write detected → stop immediately (burning money)
-
-**Cost model** (see §3.2):
-- 5m cache: ~12.5 pings to break even with one rebuild. Borderline.
-- 1h cache: ~12 pings to break even. Much more viable.
-- **Recommendation:** only enable keep-alive with `upgradeCacheTtl = "1h"`.
+4. Stop conditions:
+   - Agent process exits (`child_process` exit event or `kill(pid, 0)` fails)
+   - `aap run` receives SIGINT/SIGTERM → wrapper's own cleanup stops pings
+   - Cache write detected on ping → burning money, stop immediately
+   - Max pings reached without user return → assume abandoned, stop
+   - User sends a real request → timer resets, pings restart after completion
 
 ### 3. 1h cache for Claude (Anthropic/Bedrock)
 
@@ -117,9 +123,13 @@ idle gaps often fall between 5 min and 1 hour.
   if the accumulated tokens exceed threshold. The first request of a resumed
   session is always a cache write → compacting before it is free.
 
-- **4.6 Dashboard: compaction history.** Show when the wrapper compacted a session,
-  how many tokens were saved, and the before/after message count. Gives users
-  visibility into what the wrapper is doing.
+- **4.6 Dashboard: keep-alive + compaction visibility.**
+  - Highlight keep-alive pings in the request list (dimmed row, `♻ keep-alive` badge,
+    different color). Show ping count, cache hit/miss per ping, and total cost.
+  - Show compaction history: when the wrapper compacted a session, tokens saved,
+    before/after message count.
+  - Session header: show "keep-alive active" indicator with time since last user
+    request and time until next ping.
 
 ---
 

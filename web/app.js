@@ -247,12 +247,14 @@ function paginatedRequestsTable(requests, page, regenerations) {
           ? `${num(totalIn)}${r.cached_input_tokens ? ` <span class="muted">(${num(r.cached_input_tokens)} cached)</span>` : ""}`
           : "—";
       const rg = regen[r.id];
-      const rowCls = rg ? ` class="regen regen-${esc(rg.severity)}"` : "";
+      const ka = r.keep_alive;
+      const rowCls = ka ? ' class="keepalive"' : rg ? ` class="regen regen-${esc(rg.severity)}"` : "";
       const regenCell = rg
         ? `<span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
         : "";
+      const kaCell = ka ? '<span class="ka-badge">♻ keep-alive</span>' : "";
       return `<tr${rowCls}>
-      <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a></td>
+      <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a>${kaCell ? ` ${kaCell}` : ""}</td>
       <td class="mono muted">${dt(r.started_at)}</td>
       <td>${esc(r.provider)}</td>
       <td>${esc(r.method)}</td>
@@ -404,7 +406,7 @@ async function requestDetail(id) {
 
   app.innerHTML = `
     <div class="crumb"><a href="#/sessions/${encodeURIComponent(r.session_id)}">${shortId(r.session_id)}</a> / ${shortId(r.id)}</div>
-    <h2>Request ${shortId(r.id)}</h2>
+    <h2>Request ${shortId(r.id)}${r.keep_alive ? ' <span class="ka-badge">♻ keep-alive</span>' : ""}</h2>
     <div class="kv">
       <div class="k">provider</div><div class="v">${esc(r.provider)}</div>
       <div class="k">path</div><div class="v">${shortPath(r.path)}</div>

@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS requests (
   latency_ms     INTEGER,
   request_bytes  INTEGER,
   response_bytes INTEGER,
-  error          TEXT
+  error          TEXT,
+  keep_alive     INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_session ON requests (session_id);
@@ -84,6 +85,7 @@ export interface RequestRow {
   path: string;
   traceFile: string;
   startedAt: string;
+  keepAlive?: number;
 }
 
 export interface RequestFinish {
@@ -227,6 +229,7 @@ export interface RequestDetail {
   system_tokens: number | null;
   tools_defined: number | null;
   tools_tokens: number | null;
+  keep_alive: number | null;
   toolCalls: ToolCall[];
   events?: unknown[];
 }
@@ -323,8 +326,8 @@ export class Store {
         meta         = COALESCE(excluded.meta, sessions.meta)
     `);
     this.insertRequestStmt = db.prepare(`
-      INSERT INTO requests (id, session_id, provider, method, path, trace_file, started_at)
-      VALUES (@id, @session_id, @provider, @method, @path, @trace_file, @started_at)
+      INSERT INTO requests (id, session_id, provider, method, path, trace_file, started_at, keep_alive)
+      VALUES (@id, @session_id, @provider, @method, @path, @trace_file, @started_at, @keep_alive)
     `);
     this.finishRequestStmt = db.prepare(`
       UPDATE requests SET
@@ -415,6 +418,7 @@ export class Store {
     this.getSessionRequestsStmt = db.prepare(`
       SELECT r.id, r.provider, r.method, r.path, r.status, r.latency_ms,
              r.started_at, r.ended_at, r.request_bytes, r.response_bytes, r.error,
+             r.keep_alive,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.cost, m.tool_call_count, m.cached_input_tokens,
              m.cache_creation_input_tokens
@@ -426,7 +430,7 @@ export class Store {
     this.getRequestStmt = db.prepare(`
       SELECT r.id, r.session_id, r.provider, r.method, r.path, r.trace_file,
              r.started_at, r.ended_at, r.status, r.latency_ms,
-             r.request_bytes, r.response_bytes, r.error,
+             r.request_bytes, r.response_bytes, r.error, r.keep_alive,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.streaming, m.tool_call_count, m.cost, m.parsed_at,
              m.message_count, m.system_tokens, m.tools_defined, m.tools_tokens,
@@ -537,6 +541,7 @@ export class Store {
       path: row.path,
       trace_file: row.traceFile,
       started_at: row.startedAt,
+      keep_alive: row.keepAlive ?? 0,
     });
   }
 
@@ -787,6 +792,7 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "tools_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cached_input_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cache_creation_input_tokens", "INTEGER");
+  ensureColumn(db, "requests", "keep_alive", "INTEGER");
   ensureColumn(db, "sessions", "meta", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,
   // otherwise pre-existing databases fail before ensureColumn can run.

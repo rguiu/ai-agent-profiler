@@ -145,17 +145,78 @@ export async function run(args: string[]): Promise<void> {
   }
 
   const child = spawn(agent, agentArgs, { stdio: "inherit", env });
+
+  const keepAlive = env.AAP_KEEP_ALIVE === "1";
+  let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  if (keepAlive) {
+    const intervalMs = config.optimize.cacheTtlMs * 0.8;
+    const primaryProvider = resolvePrimaryProvider(config, agent);
+    console.error(
+      `aap: keep-alive active (interval ${Math.round(intervalMs / 1000)}s, provider ${primaryProvider})`,
+    );
+    keepAliveTimer = setInterval(() => {
+      sendKeepAlivePing(origin, sessionId, primaryProvider).catch(() => {});
+    }, intervalMs);
+    keepAliveTimer.unref();
+  }
+
   child.on("error", (err) => {
     console.error(`aap: failed to launch "${agent}": ${err.message}`);
+    if (keepAliveTimer) clearInterval(keepAliveTimer);
     process.exitCode = 1;
   });
   child.on("exit", (code, signal) => {
+    if (keepAliveTimer) clearInterval(keepAliveTimer);
     process.exit(code ?? (signal ? 1 : 0));
   });
 }
 
 function normalizeHost(host: string): string {
   return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+}
+
+function resolvePrimaryProvider(
+  config: Config,
+  agent: string,
+): string {
+  const providers = Object.keys(config.providers);
+  if (providers.length === 1) return providers[0]!;
+  if (agent === "opencode") return "deepseek" in config.providers ? "deepseek" : providers[0]!;
+  if (agent === "claude") return "anthropic" in config.providers ? "anthropic" : providers[0]!;
+  return providers[0]!;
+}
+
+async function sendKeepAlivePing(
+  origin: string,
+  sessionId: string,
+  provider: string,
+): Promise<void> {
+  try {
+    const bodyRes = await fetch(
+      `${origin}/_control/sessions/${encodeURIComponent(sessionId)}/last-body`,
+    );
+    if (!bodyRes.ok) return;
+    const { body } = (await bodyRes.json()) as { body: string | null };
+    if (!body) return;
+
+    const res = await fetch(
+      `${origin}/${sessionId}/${provider}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-aap-keep-alive": "1",
+        },
+        body,
+      },
+    );
+    if (!res.ok) {
+      console.error(`aap: keep-alive ping failed HTTP ${res.status}`);
+    }
+  } catch {
+    // Proxy not running or network error — silent, will retry next interval
+  }
 }
 
 async function registerSession(
