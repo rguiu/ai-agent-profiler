@@ -1,4 +1,4 @@
-export { createProxyServer, resolveOptimizeConfig } from "./proxy.js";
+export { createProxyServer } from "./proxy.js";
 export { parseRoute, type Route } from "./route.js";
 export {
   consoleRequestLogger,

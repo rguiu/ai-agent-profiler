@@ -6,16 +6,10 @@ import http, {
 import https from "node:https";
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
-import { commonPrefixTokens, estimateTokens } from "../optimize/cache-cost.js";
+import { commonPrefixTokens, estimateTokens } from "../cache/common-prefix.js";
 import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
-import {
-  OptimizeLayer,
-  overridesFor,
-  applyCacheTtlUpgrade,
-  type OptimizeConfig,
-  type OptimizeProfile,
-} from "../optimize/index.js";
+import { applyCacheTtlUpgrade } from "../cache/ttl-upgrade.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
@@ -41,36 +35,12 @@ export interface ProxyState {
   activeOllamaSession: string | null;
 }
 
-export interface ProxyOptions {
-  optimize?: Partial<OptimizeConfig> | boolean;
-}
-
-export type { OptimizeProfile } from "../optimize/index.js";
-export type OptimizeConfigWithProfile = Partial<OptimizeConfig> & {
-  profile?: OptimizeProfile;
-};
-
-// Resolve the effective optimize config for a provider. The provider→strategy
-// mapping now lives in the optimize profile registry (src/optimize/profiles.ts);
-// this just merges the resolved overrides (if any) onto the base config.
-// "auto" applies cache-safe overrides only to prefix-cache providers;
-// "cache-safe" forces them everywhere; "default" leaves the full layer intact.
-export function resolveOptimizeConfig(
-  base: OptimizeConfigWithProfile | undefined,
-  provider: string,
-): Partial<OptimizeConfig> | undefined {
-  const overrides = overridesFor(base?.profile ?? "auto", provider);
-  if (!overrides) return base;
-  return { ...base, ...overrides };
-}
-
 export function createProxyServer(
   config: Config,
   registry: SessionRegistry,
   capture?: Capture,
   store?: Store,
   logger?: RequestLogger,
-  options?: ProxyOptions,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
   // Initialize active provider sessions from hydrated registry (survives restart)
@@ -86,12 +56,6 @@ export function createProxyServer(
     activeOllamaSession: initialOllama,
   };
 
-  const optimizeLayers: Map<string, OptimizeLayer> | null = options?.optimize
-    ? new Map()
-    : null;
-  const optimizeConfig: Partial<OptimizeConfig> | undefined =
-    typeof options?.optimize === "object" ? options.optimize : undefined;
-
   const throttle = new Throttle(config.throttle);
   const prevBodies = new Map<string, { body: string; path: string }>();
 
@@ -106,8 +70,6 @@ export function createProxyServer(
       capture,
       store,
       logger,
-      optimizeLayers,
-      optimizeConfig,
       throttle,
       prevBodies,
     );
@@ -124,8 +86,6 @@ function handle(
   capture?: Capture,
   store?: Store,
   logger?: RequestLogger,
-  optimizeLayers?: Map<string, OptimizeLayer> | null,
-  optimizeConfig?: Partial<OptimizeConfig>,
   throttle?: Throttle,
   prevBodies?: Map<string, { body: string; path: string }>,
 ): void {
@@ -186,38 +146,6 @@ function handle(
     }
   }
 
-  // Resolve per-session optimize layer (if --optimize is active)
-  let optimizer: OptimizeLayer | undefined;
-  if (optimizeLayers && route.sessionId) {
-    let layer = optimizeLayers.get(route.sessionId);
-    if (!layer) {
-      layer = new OptimizeLayer(
-        resolveOptimizeConfig(optimizeConfig, route.provider),
-      );
-      optimizeLayers.set(route.sessionId, layer);
-    }
-    optimizer = layer;
-  }
-
-  // Persist which strategies the optimizer actually applied, so a live
-  // optimized session records its own savings (not just via simulation).
-  const recordOptimize: (() => void) | undefined =
-    optimizer && store && route.sessionId
-      ? () => {
-          const actions = optimizer!.getActions();
-          if (actions.length > 0) {
-            const byType: Record<string, number> = {};
-            for (const a of actions) byType[a.type] = (byType[a.type] || 0) + 1;
-            process.stderr.write(
-              `[optimize] ${route.sessionId} ${Object.entries(byType)
-                .map(([k, v]) => `${k}=${v}`)
-                .join(" ")}\n`,
-            );
-          }
-          store.recordOptimizeActions(route.sessionId!, actions);
-        }
-      : undefined;
-
   const doForward = (): void => {
     // Bedrock requires SigV4 re-signing — the original signature is for the proxy host.
     if (route.provider === "bedrock") {
@@ -236,13 +164,6 @@ function handle(
         region,
         extraHeaders:
           Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
-        rewriteBody: optimizer
-          ? (body) => {
-              const out = optimizer!.rewriteRequestBody(body);
-              recordOptimize?.();
-              return out;
-            }
-          : undefined,
         onRequestChunk: (chunk) => trace?.requestChunk(chunk),
         onResponse: (status, headers) =>
           trace?.response(status, undefined, headers as Record<string, string>),
@@ -256,9 +177,7 @@ function handle(
       trace,
       logger,
       extraHeaders,
-      optimizer,
-      recordOptimize,
-      throttle,
+  throttle,
       timeoutMs: route.provider === "ollama" ? 120_000 : undefined,
       sessionId: route.sessionId,
       prevBodies,
@@ -379,8 +298,6 @@ interface ForwardObs {
   trace?: RequestTrace;
   logger?: RequestLogger;
   extraHeaders?: Record<string, string>;
-  optimizer?: OptimizeLayer;
-  recordOptimize?: () => void;
   throttle?: Throttle;
   timeoutMs?: number;
   sessionId?: string | null;
@@ -403,8 +320,6 @@ function forward(
     trace,
     logger,
     extraHeaders,
-    optimizer,
-    recordOptimize,
     throttle,
     timeoutMs,
     sessionId,
@@ -458,7 +373,7 @@ function forward(
   }
 
   // Request-body tracing happens in sendUpstream so the trace records the
-  // exact bytes sent upstream (post shaping/optimize), not the raw request.
+  // exact bytes sent upstream (post shaping/), not the raw request.
   const transport = isHttps ? https : http;
 
   const sendUpstream = (body?: Buffer): void => {
@@ -520,10 +435,9 @@ function forward(
   };
 
   // Buffer the body when either the request shaper (always-on, for token/cost
-  // accuracy) or the optimizer (--optimize only) needs to rewrite it. Shaper
-  // runs first, then the optimizer.
+  // accuracy) needs to rewrite it. Shaper runs first.
   const willShape = needsShaping(meta.provider, req.method ?? "GET", meta.path);
-  if (willShape || optimizer || cacheTtlUpgrade) {
+  if (willShape || cacheTtlUpgrade) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
@@ -549,8 +463,6 @@ function forward(
           // not JSON — skip TTL upgrade
         }
       }
-      if (optimizer) body = optimizer.rewriteRequestBody(body);
-      recordOptimize?.();
 
       if (sessionId && prevBodies) {
         const currentBody = body.toString("utf8");

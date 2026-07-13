@@ -190,54 +190,6 @@ describe("proxy passthrough", () => {
   });
 });
 
-describe("optimize recording", () => {
-  it("persists which strategies fired for a session", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "aap-proxy-"));
-    const store = openStore(dir);
-    try {
-      const upstream = http.createServer(upstreamHandler);
-      const upstreamPort = await listen(upstream);
-      servers.push(upstream);
-
-      const proxy = createProxyServer(
-        buildConfig(upstreamPort),
-        new SessionRegistry(),
-        undefined,
-        store,
-        undefined,
-        { optimize: { stableTruncate: true, shapeTestOutput: false } },
-      );
-      const proxyPort = await listen(proxy);
-      servers.push(proxy);
-
-      // stableTruncate deterministically truncates large tool results
-      // in every result regardless of position. 3000 lines * 2 = 6000 bytes > 4096 threshold.
-      const bigResult = "x\n".repeat(3000);
-      const body = JSON.stringify({
-        system: "test",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "tool_result", tool_use_id: "tu1", content: bigResult },
-            ],
-          },
-        ],
-      });
-      const url = `http://127.0.0.1:${proxyPort}/sess-opt/test/echo`;
-      await (await fetch(url, { method: "POST", body })).text();
-
-      const actions = store.getOptimizeActions("sess-opt");
-      const truncate = actions.find((a) => a.type === "stable_truncate");
-      expect(truncate).toBeDefined();
-      expect(truncate!.count).toBeGreaterThanOrEqual(1);
-      expect(truncate!.tokens_saved).toBeGreaterThan(0);
-    } finally {
-      store.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
 
 describe("control endpoint", () => {
   it("registers and lists sessions", async () => {

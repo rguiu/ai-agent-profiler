@@ -19,7 +19,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { estimateTokens } from "../optimize/cache-cost.js";
+import { estimateTokens } from "../cache/common-prefix.js";
 
 // Raw event as stored on one JSONL line. Only the fields we use are typed;
 // the rest are preserved opaquely.

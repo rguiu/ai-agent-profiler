@@ -172,7 +172,7 @@ export async function run(args: string[]): Promise<void> {
   let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   if (keepAlive) {
-    const ttlMs = cacheTtl === "1h" ? 3_600_000 : config.optimize.cacheTtlMs;
+    const ttlMs = cacheTtl === "1h" ? 3_600_000 : 300000;
     const intervalMs = ttlMs * 0.8;
     const primaryProvider = resolvePrimaryProvider(config, agent);
     console.error(

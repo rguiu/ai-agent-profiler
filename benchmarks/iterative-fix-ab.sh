@@ -3,9 +3,8 @@
 # (tool output filtering via ~/.aap/bin PATH wrappers) vs bare agent.
 #
 # Tests:
-#   1. Baseline — no hooks, no cache changes (raw tool output)
+#   1. Baseline — no hooks, raw tool output
 #   2. Hooks — tool output filtered (aap hook mode aggressive)
-#   3. Hooks + 1h cache — filtered output + extended cache TTL (Anthropic/Bedrock only)
 #
 # Usage:
 #   ./benchmarks/iterative-fix-ab.sh [agent] [--fixture NAME] [--port N] [--keep-serve]
@@ -14,7 +13,7 @@
 #   --fixture      fixture under benchmarks/fixtures/ (default: iterative-fix-plus)
 #   --port         proxy port for this run (default: 8199, or $AAP_BENCH_PORT)
 #   --scenario     which scenarios to run (default: "baseline hooks")
-#                  comma-separated: baseline, hooks, cache1h
+#                  comma-separated: baseline, hooks
 #   --keep-serve   leave the proxy running at the end (for manual poking)
 #
 # Prereqs: `aap` built + on PATH; the agent installed with its API key; the
@@ -104,12 +103,8 @@ IFS=','; for scenario in $SCENARIOS; do
     hooks)
       run_phase hooks aggressive "" "--no-optimize"
       ;;
-    cache1h)
-      # Only meaningful for Claude/Bedrock
-      run_phase cache1h aggressive "--cache-1h" "--no-optimize"
-      ;;
     *)
-      echo "unknown scenario: $scenario (valid: baseline, hooks, cache1h)" >&2
+      echo "unknown scenario: $scenario (valid: baseline, hooks)" >&2
       ;;
   esac
 done
@@ -120,8 +115,7 @@ aap parse >/dev/null 2>&1 || true
 IFS=','; for scenario in $SCENARIOS; do
   case "$scenario" in
     baseline) TAGS="${TAGS:+$TAGS }baseline" ;;
-    hooks)    TAGS="${TAGS:+$TAGS }hooks" ;;
-    cache1h)  TAGS="${TAGS:+$TAGS }cache1h" ;;
+    hooks)    TAGS="${TAGS:+$TAGS }hooks" ;;                                                   
   esac
 done
 
