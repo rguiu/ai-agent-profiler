@@ -97,5 +97,5 @@ there a guard that rejects transcripts it didn't write itself?
 ---
 
 *Background and the verified constraints behind these questions are in
-`docs/OPTIMIZATION-PLAN.md` (see "What is possible vs. not") and
-`docs/CLAUDE-JSONL-WRAPPER.md` (see the "VERIFIED REALITY" box).*
+`docs/optimization/PLAN.md` (see "What is possible vs. not") and
+`docs/wrapper/CLAUDE-JSONL.md` (see the "VERIFIED REALITY" box).*

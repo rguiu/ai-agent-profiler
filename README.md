@@ -2,7 +2,7 @@
 
 A **local-first profiler for AI coding agents** — read-only by default, with an
 optional in-flight optimize layer (which, we found, mostly can't beat the provider's
-own prompt cache — see [findings](docs/OPTIMIZATION-FINDINGS.md)).
+own prompt cache — see [findings](docs/optimization/FINDINGS.md)).
 
 It sits as a transparent proxy between a coding agent (Claude Code, opencode) and an
 LLM provider (Anthropic, OpenAI-compatible) and records high-fidelity traces of every
@@ -16,7 +16,7 @@ rewrite requests in-flight to cut token waste. We tried it and it mostly **doesn
 the provider's own prompt cache**: on both Anthropic/Bedrock and DeepSeek, the high-impact
 ideas all edit the cached prefix, and editing the prefix costs more (cache writes / misses)
 than the tokens it saves. So the layer is **off by default** and passes cached traffic
-through. See [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) for the full
+through. See [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md) for the full
 story, what remains safe, and future directions (e.g. rewriting only idle/cold sessions,
 where the cache has expired anyway).
 
@@ -259,7 +259,7 @@ disabled in steady state.
 > **Note (correction):** `tailTruncate` was previously listed as prefix-safe. It isn't —
 > because the client re-sends the full result next turn once it moves into mid-history, and
 > `tailTruncate` only edits the newest message, so it fails to re-shrink it and forces a
-> cache rebuild. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
+> cache rebuild. See [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md).
 > The genuinely safe deterministic truncator is `stableTruncate`.
 
 **`optimizeOnCold` (off by default — known flaw).** The intended idea: when the cache has
@@ -269,7 +269,7 @@ the next turn reverts to the steady-state set and the client re-sends the pristi
 prefix (it never learns the proxy edited it), so the whole prefix rebuilds. Net worse than
 doing nothing. Only _deterministic_ edits can be sustained across turns, and those are safe
 to run always — so gating them on "cold" adds nothing. Left configurable for experiments,
-default off. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
+default off. See [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md).
 
 **`upgradeCacheTtl` (off by default).** Claude Code always requests the **5-minute** cache
 (verified across captured Bedrock traces: every `cache_control` marker is bare
@@ -283,8 +283,8 @@ session, since it changes the cached-prefix bytes.
 The full story — what we tried, why it failed, what's still safe, and where real gains
 might exist (e.g. cross-user prefix normalisation) — is in:
 
-- [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) — the narrative.
-- [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue + safety table.
+- [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md) — the narrative.
+- [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md) — per-strategy catalogue + safety table.
 - [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the caches work and how to benchmark them fairly.
 - [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider notes.
 
@@ -343,11 +343,11 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`VISION.md`](VISION.md) — why the project exists.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
-- [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) — what we tried to optimize, why it doesn't beat the cache, and where gains might still exist.
-- [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue and cache-safety table.
+- [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md) — what we tried to optimize, why it doesn't beat the cache, and where gains might still exist.
+- [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md) — per-strategy catalogue and cache-safety table.
 - [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
 - [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider caching and optimizer notes.
-- [`docs/OPTIMIZATIONS-TODO.md`](docs/OPTIMIZATIONS-TODO.md) — future optimization roadmap (normalizePrefix, keep-alive, IASH; and why optimizeOnCold was abandoned).
+- [`docs/optimization/TODO.md`](docs/optimization/TODO.md) — future optimization roadmap (normalizePrefix, keep-alive, IASH; and why optimizeOnCold was abandoned).
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
 
 ## License

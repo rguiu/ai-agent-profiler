@@ -17,7 +17,7 @@ export interface OptimizeConfig {
   // result next turn once it moves into mid-history, and tailTruncate only touches
   // the newest message — so it does NOT re-shrink it, causing a cache rebuild from
   // that point. Use stableTruncate (re-applies to every result, every turn) instead.
-  // See docs/OPTIMIZATION-STRATEGIES.md (tailTruncate note). Kept for compatibility;
+  // See docs/optimization/STRATEGIES.md (tailTruncate note). Kept for compatibility;
   // the Bedrock default should migrate to stableTruncate once verified.
   tailTruncate: boolean;
   truncateThreshold: number;
@@ -80,7 +80,7 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   // prefix), so it causes a SECOND cache write and is a net loss. Only edits that
   // are already deterministic-and-reproducible can be sustained — and those are
   // safe to run always, so gating them on "cold" adds nothing. Kept configurable
-  // for experiments. See docs/OPTIMIZATION-STRATEGIES.md (optimizeOnCold note).
+  // for experiments. See docs/optimization/STRATEGIES.md (optimizeOnCold note).
   optimizeOnCold: false,
   // If ever enabled: 30 min. Anthropic documents a 5-min *minimum* TTL, but the
   // real expiry is often longer; firing too early rewrites a still-warm prefix.
@@ -1025,7 +1025,7 @@ export class OptimizeLayer {
   // is FALSE. The client re-sends the full result next turn (it never learns we
   // edited it); once that result is mid-history this method no longer touches it,
   // so the emitted prefix diverges from the cached one and forces a rebuild. Prefer
-  // stableTruncate. See docs/OPTIMIZATION-STRATEGIES.md (tailTruncate note).
+  // stableTruncate. See docs/optimization/STRATEGIES.md (tailTruncate note).
   private tailTruncateResults(messages: Message[]): Message[] | null {
     let lastUserIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
