@@ -49,8 +49,9 @@ export const PROVIDER_CACHE_FAMILY: Readonly<Record<string, CacheFamily>> = {
 //
 // Anthropic's native cache achieves ~98-99% read rate on unmodified requests.
 // ANY modification — even deterministic transforms — causes cache misses where
-// bytes changed. The write penalty ($18.75/MTok) far exceeds any savings from
-// smaller context ($1.50/MTok read rate).
+// bytes changed. On Opus 4.x the 5m write penalty ($6.25/MTok, 1.25× input) far
+// exceeds any savings from smaller context ($0.50/MTok read rate) — a 12.5×
+// read→write ratio. (Claude Code sends the 5m cache; the 1h cache writes at 20×.)
 //
 // Benchmarks (iterative-fix-plus, 70 requests, Opus 4.6 Bedrock):
 //   no optimization:      99% read, 1% write  → $7.47

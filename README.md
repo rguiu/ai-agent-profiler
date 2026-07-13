@@ -264,6 +264,15 @@ the prefix before it is written. Every subsequent read in the new TTL window is 
 It reverts to the safe set automatically on the next warm request. Watch the cache-regen
 diagnostics to learn your real TTL, then lower `cacheTtlMs` accordingly.
 
+**`upgradeCacheTtl` (off by default).** Claude Code always requests the **5-minute** cache
+(verified across captured Bedrock traces: every `cache_control` marker is bare
+`{"type":"ephemeral"}` with no `ttl`). Setting `upgradeCacheTtl = "1h"` rewrites those markers
+to a 1-hour TTL before forwarding. On Opus 4.x a 1h write costs 2× input ($10/MTok) vs 1.25×
+for 5m ($6.25/MTok), but the entry survives 12× longer — so it pays off when your idle gaps
+often fall between 5 min and 1 hour (fewer re-writes), and it makes cross-user cache sharing
+far more likely. Reads cost the same ($0.50/MTok) either way. Enable it from the start of a
+session, since it changes the cached-prefix bytes.
+
 The full story — what we tried, why it failed, what's still safe, and where real gains
 might exist (e.g. cross-user prefix normalisation) — is in:
 

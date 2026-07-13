@@ -55,9 +55,9 @@ Position:  0 ──────────────────────�
                   breakpoint 1          breakpoint 2  breakpoint 3
 
 Cache check:
-  - Bytes 0..BP1 match prior request? → READ (BP1 tokens at $1.50/MTok)
-  - Bytes 0..BP2 match prior request? → READ (BP2 tokens at $1.50/MTok)
-  - Bytes BP2..BP3 are new?           → WRITE (new tokens at $18.75/MTok)
+  - Bytes 0..BP1 match prior request? → READ (BP1 tokens at $0.50/MTok)
+  - Bytes 0..BP2 match prior request? → READ (BP2 tokens at $0.50/MTok)
+  - Bytes BP2..BP3 are new?           → WRITE (new tokens at $6.25/MTok)
 ```
 
 If bytes diverge at position X (before a breakpoint), everything from X onwards becomes a
@@ -79,14 +79,24 @@ This means:
 
 ### Pricing
 
-| Token type    | Cost per MTok | When                                         |
-| ------------- | ------------- | -------------------------------------------- |
-| Cache read    | $1.50         | Bytes match a previously cached prefix       |
-| Cache write   | $18.75        | New content up to a breakpoint (1.25× input) |
-| Regular input | $15.00        | Content not covered by any breakpoint        |
+Figures below are for **Claude Opus 4.x** ($5/MTok input). Cache costs are always a
+multiple of a model's input rate, so the *ratios* hold for any model even when the dollar
+amounts differ — scale by (input rate ÷ $5).
 
-Cache write is 12.5× more expensive than cache read. A cache miss that converts reads to
-writes is devastating — converting 100K tokens from read to write costs an extra $1.73.
+| Token type       | Cost per MTok | When                                             |
+| ---------------- | ------------- | ------------------------------------------------ |
+| Cache read       | $0.50         | Bytes match a previously cached prefix (0.1× in) |
+| Cache write (5m) | $6.25         | New content up to a breakpoint (1.25× input)     |
+| Cache write (1h) | $10.00        | Same, for a 1-hour-TTL entry (2× input)          |
+| Regular input    | $5.00         | Content not covered by any breakpoint            |
+| Output           | $25.00        | Generated tokens                                 |
+
+A **5m cache write is 12.5× a cache read**; a **1h write is 20×**. A cache miss that
+converts reads to writes is devastating — converting 100K tokens from read to a 5m write
+costs an extra $0.575 (100K × ($6.25 − $0.50) / 1M).
+
+Claude Code (verified across captured Bedrock traces) always sends
+`cache_control: {"type": "ephemeral"}` with **no `ttl`** → the **5m** cache.
 
 ### Minimum Token Threshold
 
@@ -114,9 +124,9 @@ cache hit.
 This means:
 
 ```
-Session A (baseline):  [system + 9 tools + msg1]  → cache WRITE ($18.75/MTok)
-Session B (baseline):  [system + 9 tools + msg1]  → cache READ ($1.50/MTok) ← free!
-Session C (strip):     [system + 6 tools + msg1]  → cache WRITE ($18.75/MTok) ← different prefix
+Session A (baseline):  [system + 9 tools + msg1]  → cache WRITE ($6.25/MTok)
+Session B (baseline):  [system + 9 tools + msg1]  → cache READ ($0.50/MTok) ← free!
+Session C (strip):     [system + 6 tools + msg1]  → cache WRITE ($6.25/MTok) ← different prefix
 ```
 
 Session B gets cheap cache reads because Session A already paid the write cost for the same
@@ -155,7 +165,7 @@ If you leave for longer than the cache TTL:
 
 - Your system prompt + tools prefix expires
 - Your full conversation history prefix expires
-- First request back pays cache-write on the ENTIRE context ($18.75/MTok on potentially
+- First request back pays cache-write on the ENTIRE context ($6.25/MTok on potentially
   200K+ tokens = $3.75+)
 - Subsequent requests are cheap again (cache re-warmed)
 
@@ -199,13 +209,13 @@ Run N sessions. Discard or annotate the first session as "cold start". Compare s
 For a prefix of P tokens, the cold-start penalty vs warm cache is:
 
 ```
-penalty = P × ($18.75 - $1.50) / 1M = P × $17.25 / 1M
+penalty = P × ($6.25 - $0.50) / 1M = P × $5.75 / 1M   (5m cache, Opus 4.x)
 ```
 
 For our benchmark:
 
-- Full prefix (9 tools): ~24K tokens → cold penalty ≈ $0.41
-- Stripped prefix (6 tools): ~16K tokens → cold penalty ≈ $0.28
+- Full prefix (9 tools): ~24K tokens → cold penalty ≈ $0.14
+- Stripped prefix (6 tools): ~16K tokens → cold penalty ≈ $0.09
 
 This penalty applies only to the first 1-2 requests. After that, the cache is warm for both.
 
@@ -221,7 +231,7 @@ Saves: ~$0.41 cold-start penalty if user returns after a break.
 
 If all sessions use the same tool set, the system+tools prefix stays warm across sessions
 automatically. `stripTools` changes the prefix — but once warm, the stripped prefix is
-cheaper per-turn (fewer tokens read at $1.50/MTok).
+cheaper per-turn (fewer tokens read at $0.50/MTok).
 
 ### Morning cold start
 

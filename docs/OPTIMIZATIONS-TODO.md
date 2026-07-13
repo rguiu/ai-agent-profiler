@@ -218,29 +218,36 @@ These do NOT need normalization — they don't benefit from cross-user cache sha
 
 ### How it interacts with Bedrock's cache
 
+Rates below are Opus 4.x, 5m cache ($6.25/MTok write, $0.50/MTok read).
+
 ```
-User A (first today): system[normalized] + tools → WRITE ($18.75/MTok on ~24K tokens = $0.45)
-User B (same minute):  system[normalized] + tools → READ ($1.50/MTok on ~24K tokens = $0.04)
-User C (same minute):  system[normalized] + tools → READ ($0.04)
-User D (same minute):  system[normalized] + tools → READ ($0.04)
-User E (same minute):  system[normalized] + tools → READ ($0.04)
+User A (first today): system[normalized] + tools → WRITE ($6.25/MTok on ~24K tokens = $0.15)
+User B (same window):  system[normalized] + tools → READ ($0.50/MTok on ~24K tokens = $0.012)
+User C (same window):  system[normalized] + tools → READ ($0.012)
+User D (same window):  system[normalized] + tools → READ ($0.012)
+User E (same window):  system[normalized] + tools → READ ($0.012)
 ```
 
 ### Estimated savings
 
 System + tools prefix: ~24K tokens.
 
-- Cold write: 24K × $18.75/MTok = $0.45
-- Warm read: 24K × $1.50/MTok  = $0.04
+- Cold write: 24K × $6.25/MTok = $0.15
+- Warm read: 24K × $0.50/MTok  = $0.012
 
-Per cold window (5-min TTL), savings = (N-1 users) × ($0.45 - $0.04):
+Per cold window, savings = (N-1 users) × ($0.15 - $0.012):
 
-- 5-person team: ~$1.64 saved per cold window
-- 10-person team: ~$3.69 saved per cold window
+- 5-person team: ~$0.55 saved per cold window
+- 10-person team: ~$1.24 saved per cold window
 
-Over a workday (~50 cold windows assuming 5-min TTL with activity gaps):
+Over a workday (~50 cold windows with activity gaps):
 
-- 5-person team: **~$82/day** potential savings
+- 5-person team: **~$28/day** potential savings
+
+Note: with the 5m cache these windows are short, so cross-user overlap is
+rarer than it looks — rewriting Claude Code's markers to a **1h TTL** (write
+$10/MTok, 2× input) widens each window 12×, making shared warm reads far more
+likely. The higher write cost is amortised across many more reads.
 - Depends on concurrent usage within TTL windows
 
 ### Challenges
@@ -295,11 +302,11 @@ making every subsequent read cheaper for the rest of the TTL window.
 
 ### Estimated savings
 
-A 200K-token session returning after cache expiry:
+A 200K-token session returning after cache expiry (Opus 4.x, 5m write $6.25/MTok):
 
-- Without: writes 200K tokens at $18.75/MTok = $3.75
-- With pruning/dedup: writes 150K tokens at $18.75/MTok = $2.81
-- Saves: ~$0.94 per cold return, plus cheaper reads for all subsequent turns
+- Without: writes 200K tokens at $6.25/MTok = $1.25
+- With pruning/dedup: writes 150K tokens at $6.25/MTok = $0.94
+- Saves: ~$0.31 per cold return, plus cheaper reads for all subsequent turns
 
 ### Configuration
 

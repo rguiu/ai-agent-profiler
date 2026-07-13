@@ -1006,4 +1006,63 @@ describe("OptimizeLayer", () => {
       expect(layer.getActions().find((a) => a.type === "cold_start")).toBeUndefined();
     });
   });
+
+  describe("upgradeCacheTtl", () => {
+    const bodyWithMarkers = (): Buffer =>
+      Buffer.from(
+        JSON.stringify({
+          system: [
+            { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
+          ],
+          tools: [
+            { name: "Read", cache_control: { type: "ephemeral" } },
+          ],
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "t1",
+                  content: "x",
+                  cache_control: { type: "ephemeral" },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+    it("leaves markers untouched when off (default)", () => {
+      const layer = new OptimizeLayer({ upgradeCacheTtl: "off" });
+      const out = layer.rewriteRequestBody(bodyWithMarkers()).toString("utf8");
+      expect(out).not.toContain('"ttl"');
+    });
+
+    it("rewrites every ephemeral marker to a 1h ttl", () => {
+      const layer = new OptimizeLayer({ upgradeCacheTtl: "1h" });
+      const out = JSON.parse(
+        layer.rewriteRequestBody(bodyWithMarkers()).toString("utf8"),
+      );
+      expect(out.system[0].cache_control).toEqual({
+        type: "ephemeral",
+        ttl: "1h",
+      });
+      expect(out.tools[0].cache_control.ttl).toBe("1h");
+      expect(out.messages[0].content[0].cache_control.ttl).toBe("1h");
+    });
+
+    it("does not add markers where the client placed none", () => {
+      const layer = new OptimizeLayer({ upgradeCacheTtl: "1h" });
+      const body = Buffer.from(
+        JSON.stringify({
+          system: "plain",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      );
+      const out = layer.rewriteRequestBody(body).toString("utf8");
+      expect(out).not.toContain('"ttl"');
+      expect(out).not.toContain("cache_control");
+    });
+  });
 });

@@ -59,6 +59,10 @@ export const optimizeSchema = z.object({
   // a cheap read into an expensive write. Lower it once real data confirms TTL.
   optimizeOnCold: z.boolean().default(true),
   cacheTtlMs: z.number().int().positive().default(1_800_000),
+  // Rewrite Claude Code's cache_control markers to a 1-hour TTL before
+  // forwarding. "off" = passthrough (5m, what the client sends). "1h" writes at
+  // 2× input (vs 1.25× for 5m) but the entry survives 12× longer.
+  upgradeCacheTtl: z.enum(["off", "1h"]).default("off"),
 });
 
 export const modelPricingSchema = z.object({

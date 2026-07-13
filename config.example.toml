@@ -75,6 +75,11 @@ cacheTtlMs = 1800000          # idle gap (ms) before a request is treated as cac
                               # *minimum* TTL but real expiry is often longer; firing too
                               # early rewrites a still-warm prefix (cheap read -> costly
                               # write). Lower once cache-regen data shows the real TTL.
+upgradeCacheTtl = "off"       # off|1h. Claude Code always requests the 5m cache. "1h"
+                              # rewrites its cache_control markers to a 1-hour TTL: writes
+                              # cost 2x input (vs 1.25x for 5m) but the entry lives 12x
+                              # longer — wins when idle gaps often fall in the 5m..1h range.
+                              # Enable from the start of a session (it changes prefix bytes).
 
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.

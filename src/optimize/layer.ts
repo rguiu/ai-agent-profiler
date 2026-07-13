@@ -37,6 +37,11 @@ export interface OptimizeConfig {
   // is happening anyway, so shrinking the prefix before it is written is free).
   optimizeOnCold: boolean;
   cacheTtlMs: number;
+  // upgradeCacheTtl: rewrite the client's cache_control markers to a 1-hour TTL
+  // before forwarding. Claude Code only ever requests the 5m cache; a 1h entry
+  // costs 2× input to write (vs 1.25× for 5m) but survives 12× longer, so it
+  // wins when idle gaps often fall between 5 min and 1 hour. "off" = passthrough.
+  upgradeCacheTtl: "off" | "1h";
 }
 
 // Default: only cache-safe strategies active. Prefix-editing strategies are
@@ -72,6 +77,7 @@ export const DEFAULT_CONFIG: OptimizeConfig = {
   // prefix and turn a cheap read into an expensive write. Start high and tighten
   // once real idle-gap/cache-write data (see cache-regen) shows the true TTL.
   cacheTtlMs: 1_800_000, // 30 minutes
+  upgradeCacheTtl: "off",
 };
 
 // All prefix-editing strategies enabled — applied by optimizeOnCold for the one
@@ -553,9 +559,47 @@ export class OptimizeLayer {
       if (inserted) changed = true;
     }
 
+    // Upgrade cache_control TTL last, after breakpoints are finalised, so every
+    // marker (client's + any we added) gets the longer TTL.
+    if (this.config.upgradeCacheTtl === "1h") {
+      if (this.upgradeCacheControlTtl(parsed)) changed = true;
+    }
+
     const out = changed ? Buffer.from(JSON.stringify(parsed)) : body;
     if (this.config.prefixProbe) this.probePrefix(parsed);
     return out;
+  }
+
+  // Rewrite every cache_control marker to a 1-hour TTL. Anthropic accepts
+  // `{"type":"ephemeral","ttl":"1h"}`; adding the ttl key is idempotent. Walks
+  // system blocks, tool defs, and message content blocks. Returns true if any
+  // marker was changed. NOTE: this changes the cached-prefix bytes the first
+  // time it runs, so enable it from turn 1 (before the first write) — flipping
+  // it mid-session forces one cache miss.
+  private upgradeCacheControlTtl(parsed: Record<string, unknown>): boolean {
+    let changed = false;
+    const bump = (holder: Record<string, unknown> | undefined): void => {
+      if (!holder) return;
+      const cc = holder.cache_control as Record<string, unknown> | undefined;
+      if (cc && cc.type === "ephemeral" && cc.ttl !== "1h") {
+        cc.ttl = "1h";
+        changed = true;
+      }
+    };
+    if (Array.isArray(parsed.system)) {
+      for (const b of parsed.system as Record<string, unknown>[]) bump(b);
+    }
+    if (Array.isArray(parsed.tools)) {
+      for (const t of parsed.tools as Record<string, unknown>[]) bump(t);
+    }
+    if (Array.isArray(parsed.messages)) {
+      for (const msg of parsed.messages as Message[]) {
+        if (Array.isArray(msg.content)) {
+          for (const b of msg.content as Record<string, unknown>[]) bump(b);
+        }
+      }
+    }
+    return changed;
   }
 
   /** Expose action count for debugging. */

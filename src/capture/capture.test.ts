@@ -78,6 +78,7 @@ async function startStack(): Promise<Stack> {
       tailTruncate: true,
       optimizeOnCold: true,
       cacheTtlMs: 300_000,
+      upgradeCacheTtl: "off",
     },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
