@@ -324,9 +324,46 @@ optimizeOnCold = false # OFF by default — causes a double write (see above)
 
 ---
 
+## 9. optimizeOnCompaction — piggyback on a client-side history shrink (speculative)
+
+**Impact: Uncertain (likely small) | Complexity: Medium | Status: idea only**
+
+This is the salvageable core of the abandoned `optimizeOnCold` (§8). That one failed because
+the proxy shrank the prefix on a turn the *client didn't know about*, so the client re-sent
+the full prefix next turn and forced a second write. The one moment that failure mode does
+NOT apply is when **the client itself rewrites its history** — i.e. Claude Code's Compact.
+
+When Compact fires, Claude Code summarises older turns and replaces them in its own local
+state, then re-sends the *compacted* history every subsequent turn. So:
+
+- A prefix rebuild is happening **anyway** (client-initiated), and
+- The new shorter prefix is now the client's source of truth, so it **is** reproduced every
+  turn — the reproducibility rule is satisfied *by the client*, not by us.
+
+The idea: **detect a client-side compaction** (the prefix legitimately shrank / diverged
+early without an idle gap — distinguishable from a cache expiry via the cache-regen signals)
+and piggyback additional *deterministic* shrinking (stableTruncate, shapeTestOutput) onto
+that same unavoidable write. No double write, because the client keeps sending the new form.
+
+### Why it's probably NOT significant
+
+- The extra shrink rides on top of Compact, which has *already* removed the bulk of the
+  history — the marginal tokens left to trim are small.
+- The deterministic strategies we'd apply are safe to run **every turn anyway**, so most of
+  their benefit is already captured without special cold/compaction handling.
+- Detecting a compaction vs. any other prefix change reliably is non-trivial and easy to get
+  wrong (a false positive re-introduces the double-write bug).
+
+So the realistic upside is "a slightly smaller write on compaction turns," not a step change.
+Worth prototyping only if compaction turns out to be frequent and expensive in real traces.
+Needs data first: how often does Compact fire, and how big are those writes?
+
+---
+
 ## Priority Order
 
 - ❌ **optimizeOnCold** — built, found to cause a double cache write, defaulted OFF. Not recommended.
+- ❓ **optimizeOnCompaction** — speculative salvage of the above; likely small upside, needs data first.
 1. **IASH** — highest ROI, prevents waste at source
 2. **normalizePrefix** — high savings that scale with team size (needs shared proxy)
 3. **Adaptive pruneAfter** — trivial to implement, immediate savings
