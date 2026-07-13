@@ -1,5 +1,60 @@
 # Optimization plan — cache-aware request rewriting
 
+## What is possible vs. not (verified 2026-07-13)
+
+This section is the ground truth. Everything below it is planning; where the two
+disagree, this section wins. Findings are empirical (tested on this machine) plus
+Claude Code docs and the Anthropic prompt-caching docs — high confidence.
+
+### Possible ✅
+
+- **1h cache TTL upgrade.** Rewrite Claude Code's `cache_control:{type:"ephemeral"}`
+  markers to add `ttl:"1h"` before forwarding. **No beta header required** — the
+  `ttl` field alone enables it — and it is **supported on both the Anthropic API and
+  Amazon Bedrock** (our two providers). Built and wired end-to-end this branch
+  (`--cache-1h` / `AAP_CACHE_TTL=1h` → `applyCacheTtlUpgrade()`), works independent
+  of `--optimize`. Pure cache-lifetime, no content edit → nothing for the client to
+  undo. **Economics gate it:** a 1h write costs 2× input vs 1.25× for 5m, so it only
+  pays when idle gaps regularly fall in the 5min–1h window. Needs idle-gap data +
+  one live Bedrock probe (does eu-west-1 actually *honor* the rewritten ttl?) before
+  defaulting on.
+- **Keep-alive pings.** Replay the last request during idle to keep the prefix warm.
+  Built (`AAP_KEEP_ALIVE=1`). **Only economically viable *with* the 1h cache**
+  (break-even ~12 pings); on the 5m cache it barely breaks even. Downstream of
+  proving 1h works. Caveat: phantom API calls that appear in billing.
+- **`stripTools` from turn 1.** The one *content* strategy that's cache-safe — remove
+  never-used tool defs (e.g. `Workflow`) before the first write. Already works via
+  the proxy.
+- **Deterministic proxy transforms** (`stableTruncate`, `shapeTestOutput`). Safe
+  because same input → same bytes every turn.
+- **Read-only Claude transcript analysis.** `aap analyze-claude` — shipped.
+- **Edit Claude's JSONL, then `--resume`.** Claude reloads the edited transcript on
+  resume. This is the only runtime path to make Claude adopt an edited history.
+
+### Not possible ❌
+
+- **Permanently owning the request stack from the wrapper or proxy.** Claude is the
+  source of truth and rebuilds each request from its own in-memory state every turn.
+  The proxy's edit is undone next turn; a JSONL edit is adopted only at the next
+  *reload*, after which Claude owns the stack again. So no set-once-forever change
+  exists — only recurring intervention at load boundaries.
+- **Mid-session prefix editing that sticks.** Any proxy edit to the cached prefix
+  diverges from what the client re-sends next turn → cache rebuild (net loss). This
+  killed `tailTruncate`, `pruneStale`, `collapseSystem`, `frozenCompact`,
+  `optimizeOnCold` (all removed/off).
+- **Mid-session JSONL reload.** Claude holds the conversation in memory and only
+  appends to the file; no hook/signal/IPC/file-watch forces a re-read. Editing the
+  file mid-run does nothing until reload and risks corruption.
+- **Transparent (no-resume) compaction.** The JSONL route requires a reload boundary
+  (`--resume` or auto-compact), so it cannot be fully invisible to the user.
+
+### Immediate next step
+
+Build the **idle-gap distribution analyzer** (read-only: bucket request timestamp
+gaps into <5m / 5m–1h / 1h+). It is the evidence that decides whether the 1h cache
+*and* keep-alive are worth turning on for the Bedrock workload. Without it, enabling
+either is a guess.
+
 ## Wave 2 — implementation priorities
 
 Clean separation between wrapper and proxy. No communication needed:
@@ -85,9 +140,18 @@ The proxy can rewrite markers to 1h before forwarding. A 1h write costs 2× inpu
 ($10/MTok on Opus 4.x vs $6.25 for 5m) but survives 12× longer, so it wins when
 idle gaps often fall between 5 min and 1 hour.
 
+> **Verified (2026-07-13):** 1h TTL needs **no beta header** — the `ttl:"1h"` field
+> in `cache_control` alone enables it — and it is supported on **both the Anthropic
+> API and Amazon Bedrock** (per Anthropic prompt-caching docs). So the body rewrite
+> is mechanically sufficient on our providers; no header injection required. Still
+> unverified: whether Bedrock eu-west-1 actually *honors* the rewritten ttl at
+> runtime (§2.1 probe).
+
 **Implementation steps:**
-1. Strategy already implemented in `src/optimize/layer.ts` (`upgradeCacheTtl`).
-   Activated by `[optimize].upgradeCacheTtl = "1h"` in config.
+1. Strategy implemented two ways this branch: `upgradeCacheTtl` in
+   `src/optimize/layer.ts` (optimize path) AND the standalone `applyCacheTtlUpgrade()`
+   wired into the proxy independent of `--optimize`, triggered by session
+   `meta.cache_ttl="1h"` (set via `aap run --cache-1h` / `AAP_CACHE_TTL=1h`).
 2. Verify it actually works (§2.1): controlled test with 6-minute gap.
 3. Measure the real TTL: does the 1h marker actually give 1 hour? Run probes
    with increasing idle gaps and record cache hit rate.
@@ -280,6 +344,17 @@ what enters the context in the first place rather than editing it afterward.
 being generated. Designed in `OPTIMIZATIONS-TODO.md` §1.
 
 ### Idea H: Client-state manipulation — write into Claude's own storage
+
+> **Verified constraint (2026-07-13):** the sketch below assumes the proxy can
+> signal the wrapper mid-session to compact and have Claude pick it up. **That is
+> not possible** — Claude only reloads the JSONL at a load boundary (`--resume` /
+> startup / after its own auto-compact); mid-session it holds history in memory and
+> ignores the file. So Idea H is realizable only as **compact-on-resume** (edit the
+> file while Claude is stopped, then relaunch with `--resume`), not as the
+> proxy-signalled mid-session flow drawn below. The transcript format is also a
+> **tree** (walk `parentUuid`), not the flat log the sketch implies — see
+> `CLAUDE-JSONL-WRAPPER.md` for the corrected model. Read-only analysis shipped as
+> `aap analyze-claude`.
 
 Instead of rewriting every API request mid-flight and fighting the client's pristine
 history every turn, **write the optimized/compacted history directly into Claude Code's
