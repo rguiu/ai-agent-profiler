@@ -314,6 +314,45 @@ svg.chart .line {
 svg.chart circle {
   fill: var(--accent);
 }
+/* Growth chart series */
+svg.chart .line-total {
+  stroke: var(--accent);
+}
+svg.chart .line-read {
+  stroke: var(--good);
+  stroke-width: 1.5;
+}
+svg.chart .line-write {
+  stroke: #f44336;
+  stroke-width: 1.5;
+}
+svg.chart .dot-write {
+  fill: #f44336;
+}
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  margin: -16px 0 24px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chart-legend .lg::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.chart-legend .lg-total::before {
+  background: var(--accent);
+}
+.chart-legend .lg-read::before {
+  background: var(--good);
+}
+.chart-legend .lg-write::before {
+  background: #f44336;
+}
 
 .msg-list {
   display: flex;
@@ -440,4 +479,21 @@ tr.regen-high td:first-child {
 .regen-badge.regen-high {
   background: color-mix(in srgb, var(--bad) 22%, transparent);
   color: var(--bad);
+}
+
+tr.keepalive td {
+  opacity: 0.55;
+}
+tr.keepalive:hover td {
+  opacity: 1;
+}
+.ka-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  font-family: var(--mono);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
 }

@@ -20,7 +20,6 @@ async function api(path) {
   return res.json();
 }
 // ---------------------------------------------------------------------------
-
 function esc(s) {
   return String(s ?? "").replace(
     /[&<>"']/g,
@@ -161,34 +160,53 @@ function repeatedTable(items) {
 }
 
 function growthChart(points) {
-  const vals = (points || []).map(
-    (p) => (p.input_tokens ?? 0) + (p.cached_input_tokens ?? 0),
+  const pts = points || [];
+  // Three series: total input = new + cache-read + cache-write; cache read;
+  // cache write (spikes on a cold-cache refresh).
+  const total = pts.map(
+    (p) =>
+      (p.input_tokens ?? 0) +
+      (p.cached_input_tokens ?? 0) +
+      (p.cache_creation_input_tokens ?? 0),
   );
-  if (vals.length < 2 || vals.every((v) => v === 0))
+  const read = pts.map((p) => p.cached_input_tokens ?? 0);
+  const write = pts.map((p) => p.cache_creation_input_tokens ?? 0);
+  if (total.length < 2 || total.every((v) => v === 0))
     return `<p class="empty">Not enough parsed data yet — run <code>aap parse</code>.</p>`;
   const w = 640;
   const h = 160;
   const pad = 28;
-  const max = Math.max(...vals, 1);
-  const stepX = (w - pad * 2) / (vals.length - 1);
+  const max = Math.max(...total, 1);
+  const stepX = (w - pad * 2) / (total.length - 1);
   const xy = (v, i) => {
     const x = pad + i * stepX;
     const y = h - pad - (v / max) * (h - pad * 2);
     return [x, y];
   };
-  const line = vals.map((v, i) => xy(v, i).join(",")).join(" ");
-  const dots = vals
+  const poly = (vals, cls) =>
+    `<polyline points="${vals.map((v, i) => xy(v, i).join(",")).join(" ")}" class="${cls}" fill="none" />`;
+  // Emphasise cache-write points (cold refreshes) with a marker.
+  const writeDots = write
     .map((v, i) => {
+      if (!v) return "";
       const [x, y] = xy(v, i);
-      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" />`;
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" class="dot-write" />`;
     })
     .join("");
+  const maxWrite = Math.max(...write, 0);
   return `<svg class="chart" viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">
     <text x="${pad}" y="16" class="axis-label">input tokens per request (max ${num(max)})</text>
     <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" class="axis" />
-    <polyline points="${line}" class="line" fill="none" />
-    ${dots}
-  </svg>`;
+    ${poly(total, "line line-total")}
+    ${poly(read, "line line-read")}
+    ${maxWrite > 0 ? poly(write, "line line-write") : ""}
+    ${writeDots}
+  </svg>
+  <div class="chart-legend">
+    <span class="lg lg-total">total input</span>
+    <span class="lg lg-read">cache read</span>
+    ${maxWrite > 0 ? `<span class="lg lg-write">cache write (cold refresh — max ${num(maxWrite)})</span>` : ""}
+  </div>`;
 }
 
 function sessionsTable(sessions) {
@@ -243,12 +261,14 @@ function paginatedRequestsTable(requests, page, regenerations) {
           ? `${num(totalIn)}${r.cached_input_tokens ? ` <span class="muted">(${num(r.cached_input_tokens)} cached)</span>` : ""}`
           : "—";
       const rg = regen[r.id];
-      const rowCls = rg ? ` class="regen regen-${esc(rg.severity)}"` : "";
+      const ka = r.keep_alive;
+      const rowCls = ka ? ' class="keepalive"' : rg ? ` class="regen regen-${esc(rg.severity)}"` : "";
       const regenCell = rg
         ? `<span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
         : "";
+      const kaCell = ka ? '<span class="ka-badge">♻ keep-alive</span>' : "";
       return `<tr${rowCls}>
-      <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a></td>
+      <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a>${kaCell ? ` ${kaCell}` : ""}</td>
       <td class="mono muted">${dt(r.started_at)}</td>
       <td>${esc(r.provider)}</td>
       <td>${esc(r.method)}</td>
@@ -400,7 +420,7 @@ async function requestDetail(id) {
 
   app.innerHTML = `
     <div class="crumb"><a href="#/sessions/${encodeURIComponent(r.session_id)}">${shortId(r.session_id)}</a> / ${shortId(r.id)}</div>
-    <h2>Request ${shortId(r.id)}</h2>
+    <h2>Request ${shortId(r.id)}${r.keep_alive ? ' <span class="ka-badge">♻ keep-alive</span>' : ""}</h2>
     <div class="kv">
       <div class="k">provider</div><div class="v">${esc(r.provider)}</div>
       <div class="k">path</div><div class="v">${shortPath(r.path)}</div>
@@ -408,7 +428,7 @@ async function requestDetail(id) {
       <div class="k">status</div><div class="v">${statusCell(r.status)}</div>
       <div class="k">latency</div><div class="v">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</div>
       <div class="k">model</div><div class="v">${esc(r.model) || "—"}</div>
-      <div class="k">tokens</div><div class="v">in ${num((r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0))} (${num(r.input_tokens ?? 0)} new + ${num(r.cached_input_tokens ?? 0)} cached) / out ${r.output_tokens ?? "—"}</div>
+      <div class="k">tokens</div><div class="v">in ${num((r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0) + (r.cache_creation_input_tokens ?? 0))} (${num(r.input_tokens ?? 0)} new + ${num(r.cached_input_tokens ?? 0)} cache read${r.cache_creation_input_tokens ? ` + <span class="cache-miss">${num(r.cache_creation_input_tokens)} cache write</span>` : ""}) / out ${r.output_tokens ?? "—"}</div>
       <div class="k">messages</div><div class="v">${r.message_count ?? "—"}</div>
       <div class="k">system prompt</div><div class="v">~${num(r.system_tokens ?? 0)} tok</div>
       <div class="k">tools defined</div><div class="v">${r.tools_defined ?? "—"} (~${num(r.tools_tokens ?? 0)} tok)</div>
