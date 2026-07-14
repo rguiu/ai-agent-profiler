@@ -74,6 +74,17 @@ CREATE TABLE IF NOT EXISTS optimize_actions (
   tokens_saved INTEGER NOT NULL,
   PRIMARY KEY (session_id, type)
 );
+
+CREATE TABLE IF NOT EXISTS request_prefix (
+  request_id     TEXT PRIMARY KEY,
+  session_id     TEXT NOT NULL,
+  system_hash    TEXT,
+  tools_hash     TEXT,
+  message_hashes TEXT,
+  message_count  INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_prefix_session ON request_prefix (session_id);
 `;
 
 export interface RequestRow {
@@ -98,6 +109,7 @@ export interface RequestFinish {
 export interface ParseTarget {
   id: string;
   trace_file: string;
+  session_id: string;
 }
 
 export interface MetricsRow {
@@ -277,6 +289,25 @@ export interface SessionAnalysis {
   commands: CommandStat[];
 }
 
+export interface PrefixRow {
+  requestId: string;
+  sessionId: string;
+  systemHash: string;
+  toolsHash: string;
+  messageHashes: string[];
+  messageCount: number;
+}
+
+export interface PrefixHistoryRow {
+  request_id: string;
+  session_id: string;
+  system_hash: string | null;
+  tools_hash: string | null;
+  message_hashes: string[];
+  message_count: number | null;
+  started_at: string | null;
+}
+
 export class Store {
   private readonly upsertSessionStmt;
   private readonly insertRequestStmt;
@@ -309,6 +340,8 @@ export class Store {
     sessionId: string,
     rows: ReadonlyArray<{ type: string; count: number; tokens_saved: number }>,
   ) => void;
+  private readonly upsertPrefixStmt;
+  private readonly getSessionPrefixesStmt;
 
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
@@ -337,10 +370,10 @@ export class Store {
       WHERE id = @id
     `);
     this.allTargetsStmt = db.prepare(`
-      SELECT id, trace_file FROM requests WHERE trace_file IS NOT NULL
+      SELECT id, trace_file, session_id FROM requests WHERE trace_file IS NOT NULL
     `);
     this.pendingTargetsStmt = db.prepare(`
-      SELECT r.id, r.trace_file FROM requests r
+      SELECT r.id, r.trace_file, r.session_id FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE m.request_id IS NULL
         AND r.trace_file IS NOT NULL
@@ -511,6 +544,25 @@ export class Store {
         }
       },
     );
+    this.upsertPrefixStmt = db.prepare(`
+      INSERT INTO request_prefix (request_id, session_id, system_hash, tools_hash,
+                                   message_hashes, message_count)
+      VALUES (@request_id, @session_id, @system_hash, @tools_hash,
+              @message_hashes, @message_count)
+      ON CONFLICT(request_id) DO UPDATE SET
+        session_id     = excluded.session_id,
+        system_hash    = excluded.system_hash,
+        tools_hash     = excluded.tools_hash,
+        message_hashes = excluded.message_hashes,
+        message_count  = excluded.message_count
+    `);
+    this.getSessionPrefixesStmt = db.prepare(`
+      SELECT p.request_id, p.session_id, p.system_hash, p.tools_hash,
+             p.message_hashes, p.message_count, r.started_at
+      FROM request_prefix p JOIN requests r ON r.id = p.request_id
+      WHERE p.session_id = ?
+      ORDER BY r.started_at
+    `);
   }
 
   upsertSession(info: SessionInfo): void {
@@ -610,6 +662,33 @@ export class Store {
 
   getOptimizeActions(sessionId: string): OptimizeActionSummary[] {
     return this.getOptimizeStmt.all(sessionId) as OptimizeActionSummary[];
+  }
+
+  // Persist a request's prefix fingerprint (see docs/PREFIX-FINGERPRINTING.md).
+  // Written during parse alongside metrics; idempotent, keyed by request_id.
+  upsertPrefix(row: PrefixRow): void {
+    this.upsertPrefixStmt.run({
+      request_id: row.requestId,
+      session_id: row.sessionId,
+      system_hash: row.systemHash,
+      tools_hash: row.toolsHash,
+      message_hashes: JSON.stringify(row.messageHashes),
+      message_count: row.messageCount,
+    });
+  }
+
+  // Prefix rows for a session, ordered by the request's started_at — the
+  // order the prefix-stability classifier needs to diff consecutive requests.
+  getSessionPrefixes(sessionId: string): PrefixHistoryRow[] {
+    const rows = this.getSessionPrefixesStmt.all(sessionId) as Array<
+      Omit<PrefixHistoryRow, "message_hashes"> & {
+        message_hashes: string | null;
+      }
+    >;
+    return rows.map((row) => ({
+      ...row,
+      message_hashes: parseMessageHashes(row.message_hashes),
+    }));
   }
 
   listSessions(): SessionSummary[] {
@@ -718,6 +797,9 @@ export class Store {
       this.db
         .prepare("DELETE FROM optimize_actions WHERE session_id = ?")
         .run(sid);
+      this.db
+        .prepare("DELETE FROM request_prefix WHERE session_id = ?")
+        .run(sid);
       this.db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
     });
     txn(id);
@@ -794,6 +876,16 @@ export function openStore(dir: string): Store {
     "CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_id ON tool_calls (tool_id)",
   );
   return new Store(db);
+}
+
+function parseMessageHashes(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function parseMeta(value: string | null): Record<string, string> | null {

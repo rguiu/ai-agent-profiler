@@ -20,4 +20,6 @@ export {
   type GrowthPoint,
   type SessionAnalysis,
   type SessionContext,
+  type PrefixRow,
+  type PrefixHistoryRow,
 } from "./store.js";

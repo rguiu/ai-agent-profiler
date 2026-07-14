@@ -55,6 +55,14 @@ export async function runParse(
         toolsTokens: result.context.toolsTokens,
       });
       store.replaceToolCalls(target.id, result.toolCalls);
+      store.upsertPrefix({
+        requestId: target.id,
+        sessionId: target.session_id,
+        systemHash: result.fingerprint.systemHash,
+        toolsHash: result.fingerprint.toolsHash,
+        messageHashes: result.fingerprint.messageHashes,
+        messageCount: result.context.messageCount,
+      });
       for (const toolResult of result.toolResults) toolResults.push(toolResult);
       parsed++;
     } catch (err) {
