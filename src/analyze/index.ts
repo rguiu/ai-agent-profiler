@@ -12,3 +12,13 @@ export {
   type RegenResult,
   type RegenSeverity,
 } from "./cache-regen.js";
+export {
+  classifyPrefixTransition,
+  analyzePrefixStability,
+  summarizePrefixStability,
+  type PrefixInput,
+  type PrefixTransition,
+  type BrokenSegment,
+  type PrefixStabilityResult,
+  type PrefixStabilitySummary,
+} from "./prefix-stability.js";
