@@ -831,7 +831,8 @@ describe("computeCost", () => {
 });
 
 describe("classifyRequestKind", () => {
-  const SUB = "x-anthropic-billing-header: cc_version=2.1; cc_is_subagent=true;";
+  const SUB =
+    "x-anthropic-billing-header: cc_version=2.1; cc_is_subagent=true;";
 
   it("splits the file-search subagent", () => {
     expect(
@@ -840,14 +841,17 @@ describe("classifyRequestKind", () => {
   });
 
   it("splits the guide subagent", () => {
-    expect(
-      classifyRequestKind(`${SUB} You are the Claude guide agent.`),
-    ).toBe("guide");
+    expect(classifyRequestKind(`${SUB} You are the Claude guide agent.`)).toBe(
+      "guide",
+    );
   });
 
   it("splits the webfetch subagent (identity in the message body)", () => {
     expect(
-      classifyRequestKind(`${SUB} You are Claude Code.`, "Web page content:\n---"),
+      classifyRequestKind(
+        `${SUB} You are Claude Code.`,
+        "Web page content:\n---",
+      ),
     ).toBe("webfetch");
   });
 

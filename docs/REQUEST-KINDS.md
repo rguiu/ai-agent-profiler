@@ -3,7 +3,7 @@
 `aap parse` tags every request with a **kind** — what triggered it. Only a
 fraction of an agent's API traffic is the user-driven turn; the rest are calls
 the agent (or the CLI) makes on its own. Classifying them lets the dashboard
-show *where the money actually goes* and separate "cost I asked for" from
+show _where the money actually goes_ and separate "cost I asked for" from
 "overhead the tool spent on my behalf".
 
 The kind is stored in `metrics.kind`, exposed by the `/kinds` API, and rendered
@@ -12,21 +12,21 @@ session view.
 
 ## The kinds
 
-| Kind | Model | Non-user? | What it is |
-|------|-------|-----------|------------|
-| `main` | primary | no | The user-driven interactive loop — your actual turns. |
-| `search` | primary | yes | The read-only **file-search / `Explore` subagent** navigating the codebase. Usually the largest non-user bucket. |
-| `guide` | primary | yes | The **Claude guide agent** answering "how do I…"-style questions about Claude Code/SDK/API. |
-| `webfetch` | primary | yes | A subagent **summarising fetched web-page content** (WebFetch). |
-| `subagent` | primary | yes | A subagent we couldn't further identify (fallback). |
-| `recap` | primary | yes | A short **mid-session catch-up summary** ("The user stepped away…"), injected when you return to an idle session. Disable via `/config`. |
-| `compact` | primary | yes | **Context compaction** — full-history summarisation to shrink the context window. |
-| `title` | small/fast | yes | **Session-title generation** (3–7 word summary), a one-shot Haiku call. |
-| `quota` | — | yes | A quota / usage-limit check. |
-| `unknown` | — | — | No system prompt or last message available to classify. |
+| Kind       | Model      | Non-user? | What it is                                                                                                                               |
+| ---------- | ---------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `main`     | primary    | no        | The user-driven interactive loop — your actual turns.                                                                                    |
+| `search`   | primary    | yes       | The read-only **file-search / `Explore` subagent** navigating the codebase. Usually the largest non-user bucket.                         |
+| `guide`    | primary    | yes       | The **Claude guide agent** answering "how do I…"-style questions about Claude Code/SDK/API.                                              |
+| `webfetch` | primary    | yes       | A subagent **summarising fetched web-page content** (WebFetch).                                                                          |
+| `subagent` | primary    | yes       | A subagent we couldn't further identify (fallback).                                                                                      |
+| `recap`    | primary    | yes       | A short **mid-session catch-up summary** ("The user stepped away…"), injected when you return to an idle session. Disable via `/config`. |
+| `compact`  | primary    | yes       | **Context compaction** — full-history summarisation to shrink the context window.                                                        |
+| `title`    | small/fast | yes       | **Session-title generation** (3–7 word summary), a one-shot Haiku call.                                                                  |
+| `quota`    | —          | yes       | A quota / usage-limit check.                                                                                                             |
+| `unknown`  | —          | —         | No system prompt or last message available to classify.                                                                                  |
 
 "Non-user" calls are the ones worth watching: they cost real tokens but aren't
-your prompts. `search` is typically the biggest and the most *tunable* — its
+your prompts. `search` is typically the biggest and the most _tunable_ — its
 volume is driven by how often exploration is delegated and how broad each brief
 is ("very thorough over two repos" spawns a long agent loop).
 
@@ -47,13 +47,13 @@ You are a Claude agent, built on Anthropic's Claude Agent SDK.
 You are a file search specialist for Claude Code…      ← search
 ```
 
-| Kind | System-prompt marker |
-|------|----------------------|
-| `search` | `cc_is_subagent=true` + `file search specialist` |
-| `guide` | `cc_is_subagent=true` + `Claude guide agent` |
+| Kind       | System-prompt marker                               |
+| ---------- | -------------------------------------------------- |
+| `search`   | `cc_is_subagent=true` + `file search specialist`   |
+| `guide`    | `cc_is_subagent=true` + `Claude guide agent`       |
 | `subagent` | `cc_is_subagent=true` (no known specialist marker) |
-| `title` | `Generate a concise… title` + `session` |
-| `quota` | `quota` / `usage limit` |
+| `title`    | `Generate a concise… title` + `session`            |
+| `quota`    | `quota` / `usage limit`                            |
 
 ### 2. The last message text
 
@@ -61,11 +61,11 @@ You are a file search specialist for Claude Code…      ← search
 nothing in the system block distinguishes them from a user turn. They are only
 identifiable by their **final instruction**:
 
-| Kind | Last-message marker |
-|------|---------------------|
-| `recap` | `The user stepped away` + `recap` |
-| `compact` | `summary of the conversation` / `create a detailed summary` |
-| `webfetch` | (subagent +) `Web page content:` |
+| Kind       | Last-message marker                                         |
+| ---------- | ----------------------------------------------------------- |
+| `recap`    | `The user stepped away` + `recap`                           |
+| `compact`  | `summary of the conversation` / `create a detailed summary` |
+| `webfetch` | (subagent +) `Web page content:`                            |
 
 ## False-positive traps
 

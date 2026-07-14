@@ -426,8 +426,7 @@ function recommendationsHtml(recs) {
 // Break down a session's cost/tokens by request kind, so agent-initiated calls
 // (subagents, title-gen, compaction) are visible separately from user turns.
 function costByKind(requests) {
-  if (!requests || !requests.length)
-    return `<p class="empty">No requests.</p>`;
+  if (!requests || !requests.length) return `<p class="empty">No requests.</p>`;
   const order = [
     "main",
     "search",

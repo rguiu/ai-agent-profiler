@@ -671,10 +671,7 @@ export function classifyRequestKind(
   const last = lastMessageText.toLowerCase();
   // Recap: a short mid-session catch-up the client injects as the last user
   // message. Runs on the main model, so only the instruction identifies it.
-  if (
-    last.includes("the user stepped away") &&
-    last.includes("recap")
-  ) {
+  if (last.includes("the user stepped away") && last.includes("recap")) {
     return "recap";
   }
   // Compaction: full-history summarisation. The instruction is the last
