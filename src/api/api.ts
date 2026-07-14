@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { commandBreakdown, detectRegenerations } from "../analyze/index.js";
+import {
+  analyzeIdleGaps,
+  commandBreakdown,
+  detectRegenerations,
+  detectSearchReadChains,
+} from "../analyze/index.js";
 import { summarizeMessages, type TraceEvent } from "../parse/index.js";
 import { recommend } from "../recommend/index.js";
 import type { Store } from "../store/index.js";
@@ -13,6 +18,19 @@ export function handleApi(
 ): boolean {
   if (pathname === "/sessions") {
     if (requireGet(req, res)) writeJson(res, 200, store.listSessions());
+    return true;
+  }
+
+  const toolCallsMatch = pathname.match(/^\/sessions\/([^/]+)\/tool-calls$/);
+  if (toolCallsMatch) {
+    if (!requireGet(req, res)) return true;
+    const id = decodeURIComponent(toolCallsMatch[1] ?? "");
+    const s = store.resolveSessionId(id);
+    if (!s) {
+      writeError(res, 404, `session "${id}" not found`);
+      return true;
+    }
+    writeJson(res, 200, store.sessionToolCalls(s));
     return true;
   }
 
@@ -39,10 +57,13 @@ export function handleApi(
       })),
     );
     const regenerations = Object.fromEntries(regenMap);
+    const chainCalls = store.sessionToolCalls(id);
+    const chains = detectSearchReadChains(chainCalls);
     writeJson(res, 200, {
       ...detail,
-      recommendations: recommend(detail),
+      recommendations: recommend(detail, chains),
       regenerations,
+      searchReadChains: chains,
     });
     return true;
   }
@@ -112,6 +133,12 @@ export function handleApi(
       }
     }
     writeJson(res, 200, commandBreakdown(store.bashToolCalls(sessionId)));
+    return true;
+  }
+
+  if (pathname === "/stats/idle-gaps") {
+    if (!requireGet(req, res)) return true;
+    writeJson(res, 200, analyzeIdleGaps(store.requestTimestamps()));
     return true;
   }
 

@@ -271,6 +271,15 @@ export interface SessionContext {
   cached_input_tokens_total: number;
 }
 
+export interface SessionToolCall {
+  request_id: string;
+  started_at: string | null;
+  ordinal: number;
+  name: string;
+  arguments: string | null;
+  result_tokens: number | null;
+}
+
 export interface SessionAnalysis {
   toolUsage: ToolUsage[];
   repeated: RepeatedToolCall[];
@@ -305,6 +314,7 @@ export class Store {
   private readonly repeatedToolCallsStmt;
   private readonly contextGrowthStmt;
   private readonly sessionContextStmt;
+  private readonly sessionToolCallsStmt;
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
       INSERT INTO sessions (id, client, cwd, repo, started_at, first_seen_at, last_seen_at, meta)
@@ -492,6 +502,14 @@ export class Store {
       FROM requests r JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
     `);
+    this.sessionToolCallsStmt = db.prepare(`
+      SELECT tc.request_id, tc.ordinal, tc.name, tc.arguments, tc.result_tokens,
+             r.started_at
+      FROM tool_calls tc
+      JOIN requests r ON r.id = tc.request_id
+      WHERE r.session_id = ?
+      ORDER BY r.started_at, tc.ordinal
+    `);
   }
 
   upsertSession(info: SessionInfo): void {
@@ -656,6 +674,21 @@ export class Store {
       arguments: string | null;
       result_tokens: number | null;
     }>;
+  }
+
+  sessionToolCalls(sessionId: string): SessionToolCall[] {
+    return this.sessionToolCallsStmt.all(sessionId) as SessionToolCall[];
+  }
+
+  requestTimestamps(): Array<{ session_id: string; started_at: string }> {
+    return this.db
+      .prepare(
+        `SELECT r.session_id, r.started_at
+         FROM requests r
+         WHERE r.started_at IS NOT NULL AND r.keep_alive = 0
+         ORDER BY r.session_id, r.started_at`,
+      )
+      .all() as Array<{ session_id: string; started_at: string }>;
   }
 
   deleteSession(id: string): void {

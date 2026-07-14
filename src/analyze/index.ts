@@ -30,3 +30,10 @@ export {
   type TranscriptStats,
   type TranscriptUsage,
 } from "./claude-transcript.js";
+export { detectSearchReadChains, type SearchReadChain } from "./search-read.js";
+export {
+  analyzeIdleGaps,
+  type GapBucket,
+  type IdleGapsResult,
+  type SessionIdleGaps,
+} from "./idle-gaps.js";

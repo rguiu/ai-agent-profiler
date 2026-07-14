@@ -27,15 +27,11 @@ const shortId = (id) => {
   const s = String(id);
   return esc(s.length <= 16 ? s : `${s.slice(0, 8)}…${s.slice(-6)}`);
 };
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const shortPath = (p) => {
+const shortPath = (p, maxLen = 50) => {
   const full = String(p ?? "");
-  const short = full
-    .split("/")
-    .map((seg) => (UUID_RE.test(seg) ? seg.slice(0, 8) + "…" : seg))
-    .join("/");
-  return `<span title="${esc(full)}">${esc(short)}</span>`;
+  if (full.length <= maxLen)
+    return `<span title="${esc(full)}">${esc(full)}</span>`;
+  return `<span title="${esc(full)}">…${esc(full.slice(full.length - maxLen))}</span>`;
 };
 const dt = (s) => (s ? esc(String(s).replace("T", " ").slice(0, 19)) : "—");
 
@@ -83,13 +79,16 @@ function b64ToText(b64) {
 }
 
 async function dashboard() {
-  const [stats, sessions, tools, commands, kinds] = await Promise.all([
-    api("/stats"),
-    api("/sessions"),
-    api("/tools"),
-    api("/commands"),
-    api("/kinds"),
-  ]);
+  const [stats, sessions, tools, commands, kinds, idleGaps] = await Promise.all(
+    [
+      api("/stats"),
+      api("/sessions"),
+      api("/tools"),
+      api("/commands"),
+      api("/kinds"),
+      api("/stats/idle-gaps"),
+    ],
+  );
   const cacheRate =
     stats.input_tokens > 0
       ? Math.round((stats.cached_input_tokens / stats.input_tokens) * 100)
@@ -114,6 +113,8 @@ async function dashboard() {
         )
         .join("")}
     </div>
+    <h2>Cache idle gaps</h2>
+    ${idleGapsHtml(idleGaps)}
     <h2>Cost by kind</h2>
     ${kindBreakdownTable(kinds)}
     <h2>Tool usage</h2>
@@ -281,10 +282,31 @@ function sessionsTable(sessions) {
 
 async function sessions() {
   const list = await api("/sessions");
-  app.innerHTML = `<h2>Sessions</h2>${sessionsTable(list)}`;
+  let currentPage = 0;
+  const PAGE = 25;
+  const totalPages = Math.ceil(list.length / PAGE);
+
+  function renderPage() {
+    const start = currentPage * PAGE;
+    const pageItems = list.slice(start, start + PAGE);
+    const pagination =
+      totalPages > 1
+        ? `<div class="pagination" data-target="sessions-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === currentPage ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
+        : "";
+    app.innerHTML = `<h2>Sessions (${list.length})</h2>${pagination}${sessionsTable(pageItems)}${pagination}`;
+    document
+      .querySelectorAll(".pagination[data-target='sessions-page'] .page-btn")
+      .forEach((btn) => {
+        btn.addEventListener("click", () => {
+          currentPage = Number(btn.dataset.page);
+          renderPage();
+        });
+      });
+  }
+  renderPage();
 }
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 50;
 
 function paginatedRequestsTable(requests, page, regenerations) {
   if (!requests.length) return `<p class="empty">No requests.</p>`;
@@ -293,7 +315,7 @@ function paginatedRequestsTable(requests, page, regenerations) {
   const start = page * PAGE_SIZE;
   const pageItems = requests.slice(start, start + PAGE_SIZE);
   const rows = pageItems
-    .map((r) => {
+    .map((r, idx) => {
       const totalIn = (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
       const inDisplay =
         totalIn > 0
@@ -310,7 +332,9 @@ function paginatedRequestsTable(requests, page, regenerations) {
         ? `<span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
         : "";
       const kaCell = ka ? '<span class="ka-badge">♻ keep-alive</span>' : "";
+      const seq = start + idx + 1;
       return `<tr${rowCls}>
+      <td class="num muted">${seq}</td>
       <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a>${kaCell ? ` ${kaCell}` : ""}</td>
       <td>${kindBadge(r.kind)}</td>
       <td class="mono muted">${dt(r.started_at)}</td>
@@ -333,6 +357,7 @@ function paginatedRequestsTable(requests, page, regenerations) {
       ? `<div class="pagination" data-target="requests-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === page ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
       : "";
   return `<table><thead><tr>
+      <th class="num">#</th>
       <th>Request</th><th>Kind</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
       <th class="num">Latency</th><th>Model</th><th class="num">In</th><th class="num">Out</th>
       <th>Stop</th><th class="num">Tools</th><th class="num">Cost</th>
@@ -341,11 +366,20 @@ function paginatedRequestsTable(requests, page, regenerations) {
 
 async function sessionDetail(id) {
   const [
-    { session, requests, analysis, recommendations, regenerations },
+    {
+      session,
+      requests,
+      analysis,
+      recommendations,
+      regenerations,
+      searchReadChains,
+    },
     commands,
+    toolCalls,
   ] = await Promise.all([
     api(`/sessions/${encodeURIComponent(id)}`),
     api(`/commands?session=${encodeURIComponent(id)}`),
+    api(`/sessions/${encodeURIComponent(id)}/tool-calls`),
   ]);
 
   let currentPage = 0;
@@ -408,7 +442,9 @@ async function sessionDetail(id) {
     <h2>Shell commands</h2>
     ${commandsTable(commands)}
     <h2>Repeated tool calls</h2>
-    ${repeatedTable(analysis.repeated)}`;
+    ${repeatedTable(analysis.repeated)}
+    <h2>Conversation tree</h2>
+    ${conversationTreeHtml(requests, toolCalls, searchReadChains || [])}`;
   bindPagination();
 }
 
@@ -614,6 +650,89 @@ function toolCallsHtml(calls) {
     .join("")}</tbody></table>`;
 }
 
+function conversationTreeHtml(requests, toolCalls, chains) {
+  if (!requests || !requests.length)
+    return `<p class="empty">No requests in this session.</p>`;
+  const tcByRequest = {};
+  for (const tc of toolCalls || []) {
+    (tcByRequest[tc.request_id] = tcByRequest[tc.request_id] || []).push(tc);
+  }
+  const chainReadIds = new Set((chains || []).map((c) => c.readRequestId));
+  const chainSearchIds = new Set((chains || []).map((c) => c.searchRequestId));
+
+  return `<div class="tree">${requests
+    .map((r, i) => {
+      const tcs = tcByRequest[r.id] || [];
+      const hasTools = tcs.length > 0;
+      const totalIn = (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
+      const kind = r.kind || "unknown";
+      const isSearch = chainSearchIds.has(r.id);
+      const isRead = chainReadIds.has(r.id);
+      const chainBadge = isSearch
+        ? ' <span class="chain-badge chain-search" title="search→read chain: locate step">🔍 locate</span>'
+        : isRead
+          ? ' <span class="chain-badge chain-read" title="search→read chain: read step">📄 read</span>'
+          : "";
+      const ka = r.keep_alive
+        ? ' <span class="ka-badge">♻ keep-alive</span>'
+        : "";
+      return `<details class="tree-node${hasTools ? " has-tools" : ""}"${hasTools ? "" : ""}>
+        <summary class="tree-summary">
+          <span class="tree-seq">#${i + 1}</span>
+          ${kindBadge(kind)}
+          <span class="tree-provider mono">${esc(r.provider)}</span>
+          <span class="tree-model mono muted">${esc(r.model) || "?"}</span>
+          <span class="tree-tokens num">in ${num(totalIn)} / out ${num(r.output_tokens ?? 0)}</span>
+          <span class="tree-cost num">${cost(r.cost)}</span>
+          <span class="tree-tools num muted">${tcs.length} tool${tcs.length !== 1 ? "s" : ""}</span>
+          ${chainBadge}
+          ${ka}
+        </summary>
+        ${
+          hasTools
+            ? `<div class="tree-children">${tcs
+                .map((tc, j) => {
+                  let args = tc.arguments || "";
+                  try {
+                    if (args) args = JSON.stringify(JSON.parse(args));
+                  } catch {
+                    /* keep raw */
+                  }
+                  const maxArgs = 120;
+                  const argsDisplay =
+                    args.length > maxArgs ? args.slice(0, maxArgs) + "…" : args;
+                  return `<div class="tree-tool">
+            <span class="tree-tool-num muted">${j + 1}.</span>
+            <span class="tree-tool-name mono">${esc(tc.name)}</span>
+            <span class="tree-tool-args mono muted">${esc(argsDisplay) || "—"}</span>
+            ${tc.result_tokens != null ? `<span class="tree-tool-result num muted">~${num(tc.result_tokens)} tok result</span>` : ""}
+          </div>`;
+                })
+                .join("")}</div>`
+            : ""
+        }
+      </details>`;
+    })
+    .join("")}</div>`;
+}
+
+function idleGapsHtml(result) {
+  if (!result || !result.totalGaps)
+    return `<p class="empty">No idle gaps to show — need sessions with 2+ requests.</p>`;
+  const rows = result.globalBuckets
+    .map((b) => {
+      const label =
+        b.bucket === "<5m"
+          ? "&lt;5 min (cache alive)"
+          : b.bucket === "5m-1h"
+            ? "5 min–1h (1h TTL would help)"
+            : "&gt;1h (keep-alive needed)";
+      return `<tr><td>${label}</td><td class="num">${b.count}</td><td class="num">${b.percent.toFixed(1)}%</td></tr>`;
+    })
+    .join("");
+  return `<table><thead><tr><th>Bucket</th><th class="num">Gaps</th><th class="num">%</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">${result.totalGaps} total gaps across ${result.sessionsAnalyzed} session(s). ${result.globalBuckets.find((b) => b.bucket === "5m-1h")?.count || 0} gaps in the 5m–1h window would benefit from a 1h cache TTL upgrade.</p>`;
+}
 async function render() {
   const hash = location.hash.slice(1) || "/";
   try {
