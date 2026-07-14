@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionDetail } from "../store/index.js";
+import type { PrefixHistoryRow, SessionDetail } from "../store/index.js";
 import { recommend } from "../recommend/index.js";
 import { renderMarkdown } from "./export.js";
 
@@ -81,5 +81,30 @@ describe("renderMarkdown", () => {
     detail.analysis.toolUsage = [];
     const md = renderMarkdown(detail, recommend(detail));
     expect(md).toContain("_No issues detected._");
+  });
+
+  it("includes a prefix-stability section when prefix rows are provided", () => {
+    const detail = makeDetail();
+    const prefixRows: PrefixHistoryRow[] = [
+      {
+        request_id: "r1",
+        session_id: "sess-1",
+        system_hash: "sys1",
+        tools_hash: "tools1",
+        message_hashes: ["m1"],
+        message_count: 1,
+        started_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    const md = renderMarkdown(detail, recommend(detail), prefixRows);
+    expect(md).toContain("## Prefix stability");
+    expect(md).toContain("Longest stable (cache-preserving) run: 0 turn(s)");
+    expect(md).toContain("Prefix breaks: 0");
+  });
+
+  it("omits the prefix-stability section when no prefix rows are available", () => {
+    const detail = makeDetail();
+    const md = renderMarkdown(detail, recommend(detail));
+    expect(md).not.toContain("## Prefix stability");
   });
 });

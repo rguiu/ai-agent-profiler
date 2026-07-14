@@ -173,12 +173,50 @@ describe("read API", () => {
     ).json()) as {
       session: { id: string; client: string };
       requests: Array<{ id: string; model: string; status: number }>;
+      prefixStability: {
+        requests: number;
+        longestStableRun: number;
+        breakPoints: string[];
+        dominantBreakSegment: string | null;
+      };
     };
     expect(detail.session.id).toBe("s1");
     expect(detail.session.client).toBe("claude");
     expect(detail.requests).toHaveLength(1);
     expect(detail.requests[0]?.model).toBe("claude-3-5-sonnet-20241022");
     expect(detail.requests[0]?.status).toBe(200);
+    // No prefix rows persisted for this session yet (parse wasn't run) — the
+    // summary should be present but empty, never throw.
+    expect(detail.prefixStability).toEqual({
+      requests: 0,
+      longestStableRun: 0,
+      breakPoints: [],
+      dominantBreakSegment: null,
+    });
+  });
+
+  it("includes a non-empty prefix-stability summary once prefixes are persisted", async () => {
+    const { port, store } = await startStack();
+    store.upsertPrefix({
+      requestId: "r1",
+      sessionId: "s1",
+      systemHash: "sys1",
+      toolsHash: "tools1",
+      messageHashes: ["m1", "m2"],
+      messageCount: 2,
+    });
+    const detail = (await (
+      await fetch(`http://127.0.0.1:${port}/sessions/s1`)
+    ).json()) as {
+      prefixStability: {
+        requests: number;
+        longestStableRun: number;
+        breakPoints: string[];
+        dominantBreakSegment: string | null;
+      };
+    };
+    expect(detail.prefixStability.requests).toBe(1);
+    expect(detail.prefixStability.breakPoints).toEqual([]);
   });
 
   it("404s for an unknown session", async () => {

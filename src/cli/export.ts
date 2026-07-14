@@ -1,7 +1,30 @@
 import { loadConfig } from "../config/index.js";
 import { recommend, type Recommendation } from "../recommend/index.js";
-import { detectRegenerations } from "../analyze/index.js";
-import { openStore, type SessionDetail } from "../store/index.js";
+import {
+  analyzePrefixStability,
+  detectRegenerations,
+  summarizePrefixStability,
+  type PrefixInput,
+  type PrefixStabilitySummary,
+  type PrefixTransition,
+} from "../analyze/index.js";
+import {
+  openStore,
+  type PrefixHistoryRow,
+  type SessionDetail,
+} from "../store/index.js";
+
+// Converts stored prefix rows (SQL-shaped) into the classifier's input shape.
+// Shared shape with the read API's session-detail response (api.ts).
+function toPrefixInputs(rows: PrefixHistoryRow[]): PrefixInput[] {
+  return rows.map((row) => ({
+    requestId: row.request_id,
+    systemHash: row.system_hash,
+    toolsHash: row.tools_hash,
+    messageHashes: row.message_hashes,
+    messageCount: row.message_count,
+  }));
+}
 
 function num(value: number | null | undefined): string {
   return Math.round(value ?? 0)
@@ -20,6 +43,7 @@ function dt(value: string | null): string {
 export function renderMarkdown(
   detail: SessionDetail,
   recommendations: Recommendation[],
+  prefixRows: PrefixHistoryRow[] = [],
 ): string {
   const { session, requests, analysis, optimize } = detail;
   const inputTokens = requests.reduce((a, r) => a + (r.input_tokens ?? 0), 0);
@@ -55,6 +79,14 @@ export function renderMarkdown(
     lines.push("");
   }
 
+  const prefixInputs = toPrefixInputs(prefixRows);
+  const prefixResults = analyzePrefixStability(prefixInputs);
+  const prefixTransitions = new Map<string, PrefixTransition>(
+    prefixResults.map((r) => [r.requestId, r.transition]),
+  );
+  const prefixStability: PrefixStabilitySummary =
+    summarizePrefixStability(prefixResults);
+
   const regen = detectRegenerations(
     requests.map((r) => ({
       id: r.id,
@@ -64,7 +96,23 @@ export function renderMarkdown(
       cacheCreationInputTokens: r.cache_creation_input_tokens,
       outputTokens: r.output_tokens,
     })),
+    { prefixTransitions },
   );
+
+  if (prefixStability.requests > 0) {
+    lines.push("## Prefix stability", "");
+    lines.push(
+      `- Longest stable (cache-preserving) run: ${prefixStability.longestStableRun} turn(s)`,
+    );
+    lines.push(`- Prefix breaks: ${prefixStability.breakPoints.length}`);
+    if (prefixStability.dominantBreakSegment) {
+      lines.push(
+        `- Dominant break segment: \`${prefixStability.dominantBreakSegment}\``,
+      );
+    }
+    lines.push("");
+  }
+
   if (regen.size > 0) {
     lines.push("## Cache regenerations", "");
     lines.push(
@@ -142,10 +190,20 @@ export function exportSession(args: string[]): void {
       return;
     }
     const recommendations = recommend(detail);
+    const prefixRows = store.getSessionPrefixes(id);
     if (json) {
-      console.log(JSON.stringify({ ...detail, recommendations }, null, 2));
+      const prefixStability = summarizePrefixStability(
+        analyzePrefixStability(toPrefixInputs(prefixRows)),
+      );
+      console.log(
+        JSON.stringify(
+          { ...detail, recommendations, prefixStability },
+          null,
+          2,
+        ),
+      );
     } else {
-      console.log(renderMarkdown(detail, recommendations));
+      console.log(renderMarkdown(detail, recommendations, prefixRows));
     }
   } finally {
     store.close();

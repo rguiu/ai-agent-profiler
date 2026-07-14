@@ -1,9 +1,28 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { commandBreakdown, detectRegenerations } from "../analyze/index.js";
+import {
+  analyzePrefixStability,
+  commandBreakdown,
+  detectRegenerations,
+  summarizePrefixStability,
+  type PrefixInput,
+  type PrefixTransition,
+} from "../analyze/index.js";
 import { summarizeMessages, type TraceEvent } from "../parse/index.js";
 import { recommend } from "../recommend/index.js";
-import type { Store } from "../store/index.js";
+import type { PrefixHistoryRow, Store } from "../store/index.js";
+
+// Converts stored prefix rows (SQL-shaped) into the classifier's input shape.
+// Shared between the session detail response and `aap export`.
+function toPrefixInputs(rows: PrefixHistoryRow[]): PrefixInput[] {
+  return rows.map((row) => ({
+    requestId: row.request_id,
+    systemHash: row.system_hash,
+    toolsHash: row.tools_hash,
+    messageHashes: row.message_hashes,
+    messageCount: row.message_count,
+  }));
+}
 
 export function handleApi(
   req: IncomingMessage,
@@ -28,6 +47,13 @@ export function handleApi(
       writeError(res, 404, `session "${id}" not found`);
       return true;
     }
+    const prefixInputs = toPrefixInputs(store.getSessionPrefixes(id));
+    const prefixResults = analyzePrefixStability(prefixInputs);
+    const prefixTransitions = new Map<string, PrefixTransition>(
+      prefixResults.map((r) => [r.requestId, r.transition]),
+    );
+    const prefixStability = summarizePrefixStability(prefixResults);
+
     const regenMap = detectRegenerations(
       detail.requests.map((r) => ({
         id: r.id,
@@ -37,12 +63,14 @@ export function handleApi(
         cacheCreationInputTokens: r.cache_creation_input_tokens,
         outputTokens: r.output_tokens,
       })),
+      { prefixTransitions },
     );
     const regenerations = Object.fromEntries(regenMap);
     writeJson(res, 200, {
       ...detail,
       recommendations: recommend(detail),
       regenerations,
+      prefixStability,
     });
     return true;
   }
