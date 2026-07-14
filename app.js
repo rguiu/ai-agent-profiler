@@ -20,6 +20,7 @@ async function api(path) {
   return res.json();
 }
 // ---------------------------------------------------------------------------
+
 function esc(s) {
   return String(s ?? "").replace(
     /[&<>"']/g,
@@ -41,17 +42,33 @@ const shortId = (id) => {
   const s = String(id);
   return esc(s.length <= 16 ? s : `${s.slice(0, 8)}…${s.slice(-6)}`);
 };
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const shortPath = (p) => {
+const shortPath = (p, maxLen = 50) => {
   const full = String(p ?? "");
-  const short = full
-    .split("/")
-    .map((seg) => (UUID_RE.test(seg) ? seg.slice(0, 8) + "…" : seg))
-    .join("/");
-  return `<span title="${esc(full)}">${esc(short)}</span>`;
+  if (full.length <= maxLen)
+    return `<span title="${esc(full)}">${esc(full)}</span>`;
+  return `<span title="${esc(full)}">…${esc(full.slice(full.length - maxLen))}</span>`;
 };
 const dt = (s) => (s ? esc(String(s).replace("T", " ").slice(0, 19)) : "—");
+
+// Human labels for request kinds (see classifyRequestKind in parse.ts). "main"
+// is the user-driven loop; everything else is an agent-initiated call.
+const KIND_LABELS = {
+  main: "user",
+  subagent: "subagent",
+  search: "search",
+  guide: "guide",
+  webfetch: "webfetch",
+  title: "title",
+  compact: "compact",
+  recap: "recap",
+  quota: "quota",
+  unknown: "?",
+};
+const kindBadge = (kind) => {
+  const k = kind || "unknown";
+  const label = KIND_LABELS[k] || k;
+  return `<span class="kind-badge kind-${esc(k)}">${esc(label)}</span>`;
+};
 
 function fmtBytes(n) {
   if (!n) return "0";
@@ -77,11 +94,12 @@ function b64ToText(b64) {
 }
 
 async function dashboard() {
-  const [stats, sessions, tools, commands] = await Promise.all([
+  const [stats, sessions, tools, commands, kinds] = await Promise.all([
     api("/stats"),
     api("/sessions"),
     api("/tools"),
     api("/commands"),
+    api("/kinds"),
   ]);
   const cacheRate =
     stats.input_tokens > 0
@@ -107,6 +125,8 @@ async function dashboard() {
         )
         .join("")}
     </div>
+    <h2>Cost by kind</h2>
+    ${kindBreakdownTable(kinds)}
     <h2>Tool usage</h2>
     ${toolBars(tools)}
     <h2>Shell commands</h2>
@@ -114,6 +134,36 @@ async function dashboard() {
     <h2>Recent sessions</h2>
     ${sessionsTable(sessions.slice(0, 15))}
   `;
+}
+
+// Global cost/token breakdown by request kind, from the /kinds endpoint.
+function kindBreakdownTable(kinds) {
+  if (!kinds || !kinds.length)
+    return `<p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+  const totalCost = kinds.reduce((s, k) => s + (k.cost ?? 0), 0);
+  const rows = kinds
+    .map((k) => {
+      const pct = totalCost > 0 ? Math.round((k.cost / totalCost) * 100) : 0;
+      return `<tr>
+      <td>${kindBadge(k.kind)}</td>
+      <td class="num">${num(k.requests)}</td>
+      <td class="num">${num(k.input_tokens)}</td>
+      <td class="num">${num(k.output_tokens)}</td>
+      <td class="num">${cost(k.cost)}</td>
+      <td class="num">${pct}%</td>
+    </tr>`;
+    })
+    .join("");
+  const nonUser = kinds
+    .filter((k) => k.kind !== "main")
+    .reduce((s, k) => s + (k.cost ?? 0), 0);
+  const nonUserPct =
+    totalCost > 0 ? Math.round((nonUser / totalCost) * 100) : 0;
+  return `<table><thead><tr>
+      <th>Kind</th><th class="num">Requests</th><th class="num">In</th>
+      <th class="num">Out</th><th class="num">Cost</th><th class="num">% cost</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">Non-user-triggered calls: ${cost(nonUser)} (${nonUserPct}% of total cost).</p>`;
 }
 
 function commandsTable(rows) {
@@ -242,10 +292,31 @@ function sessionsTable(sessions) {
 
 async function sessions() {
   const list = await api("/sessions");
-  app.innerHTML = `<h2>Sessions</h2>${sessionsTable(list)}`;
+  let currentPage = 0;
+  const PAGE = 25;
+  const totalPages = Math.ceil(list.length / PAGE);
+
+  function renderPage() {
+    const start = currentPage * PAGE;
+    const pageItems = list.slice(start, start + PAGE);
+    const pagination =
+      totalPages > 1
+        ? `<div class="pagination" data-target="sessions-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === currentPage ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
+        : "";
+    app.innerHTML = `<h2>Sessions (${list.length})</h2>${pagination}${sessionsTable(pageItems)}${pagination}`;
+    document
+      .querySelectorAll(".pagination[data-target='sessions-page'] .page-btn")
+      .forEach((btn) => {
+        btn.addEventListener("click", () => {
+          currentPage = Number(btn.dataset.page);
+          renderPage();
+        });
+      });
+  }
+  renderPage();
 }
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 50;
 
 function paginatedRequestsTable(requests, page, regenerations) {
   if (!requests.length) return `<p class="empty">No requests.</p>`;
@@ -254,7 +325,7 @@ function paginatedRequestsTable(requests, page, regenerations) {
   const start = page * PAGE_SIZE;
   const pageItems = requests.slice(start, start + PAGE_SIZE);
   const rows = pageItems
-    .map((r) => {
+    .map((r, idx) => {
       const totalIn = (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
       const inDisplay =
         totalIn > 0
@@ -262,13 +333,20 @@ function paginatedRequestsTable(requests, page, regenerations) {
           : "—";
       const rg = regen[r.id];
       const ka = r.keep_alive;
-      const rowCls = ka ? ' class="keepalive"' : rg ? ` class="regen regen-${esc(rg.severity)}"` : "";
+      const rowCls = ka
+        ? ' class="keepalive"'
+        : rg
+          ? ` class="regen regen-${esc(rg.severity)}"`
+          : "";
       const regenCell = rg
         ? `<span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
         : "";
       const kaCell = ka ? '<span class="ka-badge">♻ keep-alive</span>' : "";
+      const seq = start + idx + 1;
       return `<tr${rowCls}>
+      <td class="num muted">${seq}</td>
       <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a>${kaCell ? ` ${kaCell}` : ""}</td>
+      <td>${kindBadge(r.kind)}</td>
       <td class="mono muted">${dt(r.started_at)}</td>
       <td>${esc(r.provider)}</td>
       <td>${esc(r.method)}</td>
@@ -289,7 +367,8 @@ function paginatedRequestsTable(requests, page, regenerations) {
       ? `<div class="pagination" data-target="requests-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === page ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
       : "";
   return `<table><thead><tr>
-      <th>Request</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
+      <th class="num">#</th>
+      <th>Request</th><th>Kind</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
       <th class="num">Latency</th><th>Model</th><th class="num">In</th><th class="num">Out</th>
       <th>Stop</th><th class="num">Tools</th><th class="num">Cost</th>
     </tr></thead><tbody>${rows}</tbody></table>${pagination}`;
@@ -297,11 +376,20 @@ function paginatedRequestsTable(requests, page, regenerations) {
 
 async function sessionDetail(id) {
   const [
-    { session, requests, analysis, recommendations, regenerations },
+    {
+      session,
+      requests,
+      analysis,
+      recommendations,
+      regenerations,
+      searchReadChains,
+    },
     commands,
+    toolCalls,
   ] = await Promise.all([
     api(`/sessions/${encodeURIComponent(id)}`),
     api(`/commands?session=${encodeURIComponent(id)}`),
+    api(`/sessions/${encodeURIComponent(id)}/tool-calls`),
   ]);
 
   let currentPage = 0;
@@ -351,6 +439,8 @@ async function sessionDetail(id) {
     </div>
     <h2>Recommendations</h2>
     ${recommendationsHtml(recommendations)}
+    <h2>Cost by kind</h2>
+    ${costByKind(requests)}
     <h2>Requests (${requests.length})</h2>
     <div id="requests-container">${paginatedRequestsTable(requests, currentPage, regenerations)}</div>
     <h2>Context growth</h2>
@@ -362,7 +452,9 @@ async function sessionDetail(id) {
     <h2>Shell commands</h2>
     ${commandsTable(commands)}
     <h2>Repeated tool calls</h2>
-    ${repeatedTable(analysis.repeated)}`;
+    ${repeatedTable(analysis.repeated)}
+    <h2>Conversation tree</h2>
+    ${conversationTreeHtml(requests, toolCalls, searchReadChains || [])}`;
   bindPagination();
 }
 
@@ -375,6 +467,62 @@ function recommendationsHtml(recs) {
         `<div class="rec rec-${esc(r.severity)}"><span class="rec-sev">${esc(r.severity)}</span><div class="rec-body"><div class="rec-title">${esc(r.title)}</div><div class="rec-detail muted">${esc(r.detail)}</div></div></div>`,
     )
     .join("")}</div>`;
+}
+
+// Break down a session's cost/tokens by request kind, so agent-initiated calls
+// (subagents, title-gen, compaction) are visible separately from user turns.
+function costByKind(requests) {
+  if (!requests || !requests.length) return `<p class="empty">No requests.</p>`;
+  const order = [
+    "main",
+    "search",
+    "subagent",
+    "guide",
+    "webfetch",
+    "recap",
+    "compact",
+    "title",
+    "quota",
+    "unknown",
+  ];
+  const agg = {};
+  let totalCost = 0;
+  for (const r of requests) {
+    const k = r.kind || "unknown";
+    const a = (agg[k] = agg[k] || { count: 0, cost: 0, inTok: 0, outTok: 0 });
+    a.count += 1;
+    a.cost += r.cost ?? 0;
+    a.inTok += (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
+    a.outTok += r.output_tokens ?? 0;
+    totalCost += r.cost ?? 0;
+  }
+  const kinds = Object.keys(agg).sort(
+    (a, b) => order.indexOf(a) - order.indexOf(b),
+  );
+  const rows = kinds
+    .map((k) => {
+      const a = agg[k];
+      const pct = totalCost > 0 ? Math.round((a.cost / totalCost) * 100) : 0;
+      return `<tr>
+      <td>${kindBadge(k)}</td>
+      <td class="num">${num(a.count)}</td>
+      <td class="num">${num(a.inTok)}</td>
+      <td class="num">${num(a.outTok)}</td>
+      <td class="num">${cost(a.cost)}</td>
+      <td class="num">${pct}%</td>
+    </tr>`;
+    })
+    .join("");
+  const nonUser = kinds
+    .filter((k) => k !== "main")
+    .reduce((s, k) => s + agg[k].cost, 0);
+  const nonUserPct =
+    totalCost > 0 ? Math.round((nonUser / totalCost) * 100) : 0;
+  return `<table><thead><tr>
+      <th>Kind</th><th class="num">Requests</th><th class="num">In</th>
+      <th class="num">Out</th><th class="num">Cost</th><th class="num">% cost</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">Non-user-triggered calls: ${cost(nonUser)} (${nonUserPct}% of session cost).</p>`;
 }
 
 function contextSummary(ctx) {
@@ -510,6 +658,72 @@ function toolCallsHtml(calls) {
       return `<tr><td class="num">${i}</td><td>${esc(t.name)}</td><td class="mono">${esc(args) || '<span class="muted">—</span>'}</td><td class="num">${result}</td></tr>`;
     })
     .join("")}</tbody></table>`;
+}
+
+function conversationTreeHtml(requests, toolCalls, chains) {
+  if (!requests || !requests.length)
+    return `<p class="empty">No requests in this session.</p>`;
+  const tcByRequest = {};
+  for (const tc of toolCalls || []) {
+    (tcByRequest[tc.request_id] = tcByRequest[tc.request_id] || []).push(tc);
+  }
+  const chainReadIds = new Set((chains || []).map((c) => c.readRequestId));
+  const chainSearchIds = new Set((chains || []).map((c) => c.searchRequestId));
+
+  return `<div class="tree">${requests
+    .map((r, i) => {
+      const tcs = tcByRequest[r.id] || [];
+      const hasTools = tcs.length > 0;
+      const totalIn = (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
+      const kind = r.kind || "unknown";
+      const isSearch = chainSearchIds.has(r.id);
+      const isRead = chainReadIds.has(r.id);
+      const chainBadge = isSearch
+        ? ' <span class="chain-badge chain-search" title="search→read chain: locate step">🔍 locate</span>'
+        : isRead
+          ? ' <span class="chain-badge chain-read" title="search→read chain: read step">📄 read</span>'
+          : "";
+      const ka = r.keep_alive
+        ? ' <span class="ka-badge">♻ keep-alive</span>'
+        : "";
+      return `<details class="tree-node${hasTools ? " has-tools" : ""}"${hasTools ? "" : ""}>
+        <summary class="tree-summary">
+          <span class="tree-seq">#${i + 1}</span>
+          ${kindBadge(kind)}
+          <span class="tree-provider mono">${esc(r.provider)}</span>
+          <span class="tree-model mono muted">${esc(r.model) || "?"}</span>
+          <span class="tree-tokens num">in ${num(totalIn)} / out ${num(r.output_tokens ?? 0)}</span>
+          <span class="tree-cost num">${cost(r.cost)}</span>
+          <span class="tree-tools num muted">${tcs.length} tool${tcs.length !== 1 ? "s" : ""}</span>
+          ${chainBadge}
+          ${ka}
+        </summary>
+        ${
+          hasTools
+            ? `<div class="tree-children">${tcs
+                .map((tc, j) => {
+                  let args = tc.arguments || "";
+                  try {
+                    if (args) args = JSON.stringify(JSON.parse(args));
+                  } catch {
+                    /* keep raw */
+                  }
+                  const maxArgs = 120;
+                  const argsDisplay =
+                    args.length > maxArgs ? args.slice(0, maxArgs) + "…" : args;
+                  return `<div class="tree-tool">
+            <span class="tree-tool-num muted">${j + 1}.</span>
+            <span class="tree-tool-name mono">${esc(tc.name)}</span>
+            <span class="tree-tool-args mono muted">${esc(argsDisplay) || "—"}</span>
+            ${tc.result_tokens != null ? `<span class="tree-tool-result num muted">~${num(tc.result_tokens)} tok result</span>` : ""}
+          </div>`;
+                })
+                .join("")}</div>`
+            : ""
+        }
+      </details>`;
+    })
+    .join("")}</div>`;
 }
 
 async function render() {

@@ -14,10 +14,12 @@ const BASE = process.env.BASE || "http://localhost:8299";
 const OUT = join(process.cwd(), "data");
 const RESP_LIMIT = 6000; // chars of reconstructed response text to keep
 
-// The two sessions behind the article's DeepSeek "twist" tables.
+// The demo sessions to include in the static build.
 const FEATURED = [
   "bench-opencode-iterative-fix-plus-20260710122817-1",
   "bench-opencode-iterative-fix-plus-20260710123727-1",
+  "b4727e53-e51b-42c9-a387-0e9725ad790c",
+  "e2ed38d9-b390-460c-b2c8-3ebe350a55e7",
 ];
 
 // Must mirror fileKey() in app.js exactly.
@@ -124,6 +126,7 @@ async function main() {
   await mkdir(OUT, { recursive: true });
   await write("/tools", await getJson("/tools"));
   await write("/commands", await getJson("/commands"));
+  await write("/kinds", await getJson("/kinds"));
 
   const allSessions = await getJson("/sessions");
   const featured = allSessions.filter((s) => FEATURED.includes(s.id));
@@ -146,6 +149,10 @@ async function main() {
     await write(
       `/commands?session=${id}`,
       await getJson(`/commands?session=${encodeURIComponent(id)}`),
+    );
+    await write(
+      `/sessions/${id}/tool-calls`,
+      await getJson(`/sessions/${encodeURIComponent(id)}/tool-calls`),
     );
     const requests = Array.isArray(detail.requests) ? detail.requests : [];
     for (const r of requests) {
