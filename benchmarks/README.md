@@ -145,7 +145,7 @@ Use `--dry-run` to print the exact commands (including the verify step) without 
 
 > **Results:** the consolidated, honest findings from these A/B runs (why in-flight
 > optimization mostly doesn't beat the provider's prompt cache, and the caveats) live in
-> [`../docs/OPTIMIZATION-FINDINGS.md`](../docs/OPTIMIZATION-FINDINGS.md). Earlier
+> [`../docs/optimization/FINDINGS.md`](../docs/optimization/FINDINGS.md). Earlier
 > per-run reports (with pre-cache-write-fix numbers) are retained locally only.
 
 ### One-shot: `iterative-fix-ab.sh`

@@ -29,7 +29,6 @@ function detail(overrides: Partial<SessionDetail["analysis"]>): SessionDetail {
       commands: [],
       ...overrides,
     },
-    optimize: [],
   };
 }
 

@@ -284,7 +284,7 @@ likely. The higher write cost is amortised across many more reads.
 > from the shrunk prefix we just cached → the whole prefix rebuilds → **two writes instead
 > of one**, strictly worse than doing nothing. Only deterministic edits could be sustained
 > across the following turns, and those are safe to run always — so gating them on "cold"
-> adds nothing. See docs/OPTIMIZATION-STRATEGIES.md ("Attempts that did not pay off").
+> adds nothing. See docs/optimization/STRATEGIES.md ("Attempts that did not pay off").
 > Original (now-invalidated) design notes preserved below for reference.
 
 When a user returns after the cache TTL has expired, the next request pays full cache-write

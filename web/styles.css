@@ -480,3 +480,20 @@ tr.regen-high td:first-child {
   background: color-mix(in srgb, var(--bad) 22%, transparent);
   color: var(--bad);
 }
+
+tr.keepalive td {
+  opacity: 0.55;
+}
+tr.keepalive:hover td {
+  opacity: 1;
+}
+.ka-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  font-family: var(--mono);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}

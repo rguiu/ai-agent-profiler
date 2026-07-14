@@ -1,12 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Config } from "../config/index.js";
 import { SessionRegistry } from "../session/index.js";
-import { openStore, type Store } from "../store/index.js";
 import { createProxyServer } from "./index.js";
 import type { RequestLogEntry } from "./index.js";
 
@@ -70,58 +66,10 @@ function buildConfig(upstreamPort: number): Config {
     server: { port: 0, host: "127.0.0.1" },
     sessions: { idleTimeoutMs: 300_000 },
     storage: { dir: "data" },
-    optimize: {
-      enabled: false,
-      profile: "auto",
-      dedup: true,
-      truncate: true,
-      stablePrefix: true,
-      pruneStale: true,
-      stableTruncate: false,
-      shapeTestOutput: false,
-      prefixProbe: false,
-      frozenCompact: false,
-      suppressReread: true,
-      collapseSystem: true,
-      truncateThreshold: 4096,
-      pruneAfterTurns: 6,
-      suppressWithinTurns: 2,
-      pruneUnusedTools: true,
-      insertBreakpoints: false,
-      reorderVolatile: false,
-      pruneUnusedToolsAfter: 10,
-      compactThreshold: 60000,
-      compactKeepTail: 20,
-      stripTools: [],
-      tailTruncate: true,
-      optimizeOnCold: true,
-      cacheTtlMs: 300_000,
-      upgradeCacheTtl: "off",
-    },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
     throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
   };
-}
-
-async function startOptimizeStack(
-  store: Store,
-): Promise<{ proxyPort: number }> {
-  const upstream = http.createServer(upstreamHandler);
-  const upstreamPort = await listen(upstream);
-  servers.push(upstream);
-
-  const proxy = createProxyServer(
-    buildConfig(upstreamPort),
-    new SessionRegistry(),
-    undefined,
-    store,
-    undefined,
-    { optimize: true },
-  );
-  const proxyPort = await listen(proxy);
-  servers.push(proxy);
-  return { proxyPort };
 }
 
 afterEach(async () => {
@@ -187,41 +135,6 @@ describe("proxy passthrough", () => {
     expect(entry?.status).toBe(200);
     expect(entry?.responseBytes).toBeGreaterThan(0);
     expect(entry?.latencyMs).toBeGreaterThanOrEqual(0);
-  });
-});
-
-describe("optimize recording", () => {
-  it("persists which strategies fired for a session", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "aap-proxy-"));
-    const store = openStore(dir);
-    try {
-      const { proxyPort } = await startOptimizeStack(store);
-      // tailTruncate is the always-on strategy: it truncates a large tool
-      // result in the last user message (the growing edge).
-      const bigResult = "x\n".repeat(3000); // >4096 bytes
-      const body = JSON.stringify({
-        system: "test",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "tool_result", tool_use_id: "tu1", content: bigResult },
-            ],
-          },
-        ],
-      });
-      const url = `http://127.0.0.1:${proxyPort}/sess-opt/test/echo`;
-      await (await fetch(url, { method: "POST", body })).text();
-
-      const actions = store.getOptimizeActions("sess-opt");
-      const truncate = actions.find((a) => a.type === "tail_truncate");
-      expect(truncate).toBeDefined();
-      expect(truncate!.count).toBeGreaterThanOrEqual(1);
-      expect(truncate!.tokens_saved).toBeGreaterThan(0);
-    } finally {
-      store.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });
 

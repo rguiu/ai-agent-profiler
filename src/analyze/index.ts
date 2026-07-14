@@ -12,3 +12,21 @@ export {
   type RegenResult,
   type RegenSeverity,
 } from "./cache-regen.js";
+export {
+  claudeProjectsDir,
+  computeStats,
+  locateTranscript,
+  newestTranscriptFor,
+  parseTranscript,
+  projectSavings,
+  projectSlug,
+  toolResults,
+  toolUseNames,
+  type ParsedTranscript,
+  type ReconstructedMessage,
+  type SavingsProjection,
+  type ToolResultInfo,
+  type TranscriptEvent,
+  type TranscriptStats,
+  type TranscriptUsage,
+} from "./claude-transcript.js";

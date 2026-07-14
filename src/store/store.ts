@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS requests (
   latency_ms     INTEGER,
   request_bytes  INTEGER,
   response_bytes INTEGER,
-  error          TEXT
+  error          TEXT,
+  keep_alive     INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_session ON requests (session_id);
@@ -67,13 +68,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls (request_id);
 
-CREATE TABLE IF NOT EXISTS optimize_actions (
-  session_id   TEXT NOT NULL,
-  type         TEXT NOT NULL,
-  count        INTEGER NOT NULL,
-  tokens_saved INTEGER NOT NULL,
-  PRIMARY KEY (session_id, type)
-);
+
 `;
 
 export interface RequestRow {
@@ -84,6 +79,7 @@ export interface RequestRow {
   path: string;
   traceFile: string;
   startedAt: string;
+  keepAlive?: number;
 }
 
 export interface RequestFinish {
@@ -174,13 +170,6 @@ export interface SessionDetail {
   session: SessionRow;
   requests: SessionRequest[];
   analysis: SessionAnalysis;
-  optimize: OptimizeActionSummary[];
-}
-
-export interface OptimizeActionSummary {
-  type: string;
-  count: number;
-  tokens_saved: number;
 }
 
 export interface ToolCall {
@@ -227,6 +216,7 @@ export interface RequestDetail {
   system_tokens: number | null;
   tools_defined: number | null;
   tools_tokens: number | null;
+  keep_alive: number | null;
   toolCalls: ToolCall[];
   events?: unknown[];
 }
@@ -302,14 +292,6 @@ export class Store {
   private readonly repeatedToolCallsStmt;
   private readonly contextGrowthStmt;
   private readonly sessionContextStmt;
-  private readonly deleteOptimizeStmt;
-  private readonly insertOptimizeStmt;
-  private readonly getOptimizeStmt;
-  private readonly replaceOptimizeTxn: (
-    sessionId: string,
-    rows: ReadonlyArray<{ type: string; count: number; tokens_saved: number }>,
-  ) => void;
-
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
       INSERT INTO sessions (id, client, cwd, repo, started_at, first_seen_at, last_seen_at, meta)
@@ -323,8 +305,8 @@ export class Store {
         meta         = COALESCE(excluded.meta, sessions.meta)
     `);
     this.insertRequestStmt = db.prepare(`
-      INSERT INTO requests (id, session_id, provider, method, path, trace_file, started_at)
-      VALUES (@id, @session_id, @provider, @method, @path, @trace_file, @started_at)
+      INSERT INTO requests (id, session_id, provider, method, path, trace_file, started_at, keep_alive)
+      VALUES (@id, @session_id, @provider, @method, @path, @trace_file, @started_at, @keep_alive)
     `);
     this.finishRequestStmt = db.prepare(`
       UPDATE requests SET
@@ -415,6 +397,7 @@ export class Store {
     this.getSessionRequestsStmt = db.prepare(`
       SELECT r.id, r.provider, r.method, r.path, r.status, r.latency_ms,
              r.started_at, r.ended_at, r.request_bytes, r.response_bytes, r.error,
+             r.keep_alive,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.cost, m.tool_call_count, m.cached_input_tokens,
              m.cache_creation_input_tokens
@@ -426,7 +409,7 @@ export class Store {
     this.getRequestStmt = db.prepare(`
       SELECT r.id, r.session_id, r.provider, r.method, r.path, r.trace_file,
              r.started_at, r.ended_at, r.status, r.latency_ms,
-             r.request_bytes, r.response_bytes, r.error,
+             r.request_bytes, r.response_bytes, r.error, r.keep_alive,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.streaming, m.tool_call_count, m.cost, m.parsed_at,
              m.message_count, m.system_tokens, m.tools_defined, m.tools_tokens,
@@ -485,32 +468,6 @@ export class Store {
       FROM requests r JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
     `);
-    this.deleteOptimizeStmt = db.prepare(
-      `DELETE FROM optimize_actions WHERE session_id = ?`,
-    );
-    this.insertOptimizeStmt = db.prepare(`
-      INSERT INTO optimize_actions (session_id, type, count, tokens_saved)
-      VALUES (@session_id, @type, @count, @tokens_saved)
-    `);
-    this.getOptimizeStmt = db.prepare(`
-      SELECT type, count, tokens_saved FROM optimize_actions
-      WHERE session_id = ? ORDER BY tokens_saved DESC, type
-    `);
-    this.replaceOptimizeTxn = db.transaction(
-      (
-        sessionId: string,
-        rows: ReadonlyArray<{
-          type: string;
-          count: number;
-          tokens_saved: number;
-        }>,
-      ) => {
-        this.deleteOptimizeStmt.run(sessionId);
-        for (const row of rows) {
-          this.insertOptimizeStmt.run({ session_id: sessionId, ...row });
-        }
-      },
-    );
   }
 
   upsertSession(info: SessionInfo): void {
@@ -537,6 +494,7 @@ export class Store {
       path: row.path,
       trace_file: row.traceFile,
       started_at: row.startedAt,
+      keep_alive: row.keepAlive ?? 0,
     });
   }
 
@@ -586,32 +544,6 @@ export class Store {
     this.recordToolResultStmt.run({ tool_id: toolId, bytes, tokens });
   }
 
-  // Persist the optimize layer's cumulative actions for a session as per-type
-  // totals. Called live on each optimized request; getActions() is cumulative,
-  // so replacing the session's rows keeps the totals current.
-  recordOptimizeActions(
-    sessionId: string,
-    actions: ReadonlyArray<{ type: string; tokensSaved: number }>,
-  ): void {
-    const byType = new Map<string, { count: number; tokens_saved: number }>();
-    for (const action of actions) {
-      const entry = byType.get(action.type) ?? { count: 0, tokens_saved: 0 };
-      entry.count++;
-      entry.tokens_saved += action.tokensSaved;
-      byType.set(action.type, entry);
-    }
-    const rows = [...byType.entries()].map(([type, v]) => ({
-      type,
-      count: v.count,
-      tokens_saved: v.tokens_saved,
-    }));
-    this.replaceOptimizeTxn(sessionId, rows);
-  }
-
-  getOptimizeActions(sessionId: string): OptimizeActionSummary[] {
-    return this.getOptimizeStmt.all(sessionId) as OptimizeActionSummary[];
-  }
-
   listSessions(): SessionSummary[] {
     const rows = this.listSessionsStmt.all() as Array<
       Omit<SessionSummary, "meta"> & { meta: string | null }
@@ -636,7 +568,6 @@ export class Store {
       session,
       requests,
       analysis,
-      optimize: this.getOptimizeActions(id),
     };
   }
 
@@ -715,9 +646,6 @@ export class Store {
         )
         .run(sid);
       this.db.prepare("DELETE FROM requests WHERE session_id = ?").run(sid);
-      this.db
-        .prepare("DELETE FROM optimize_actions WHERE session_id = ?")
-        .run(sid);
       this.db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
     });
     txn(id);
@@ -787,6 +715,7 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "tools_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cached_input_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cache_creation_input_tokens", "INTEGER");
+  ensureColumn(db, "requests", "keep_alive", "INTEGER");
   ensureColumn(db, "sessions", "meta", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,
   // otherwise pre-existing databases fail before ensureColumn can run.

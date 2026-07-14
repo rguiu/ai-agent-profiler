@@ -1,12 +1,13 @@
 # DeepSeek (prefix cache) — agent notes
 
 How the profiler treats DeepSeek / OpenAI-compatible traffic, why prompt-editing
-optimizations backfire on it, and what remains open.
+optimizations backfire on it, the cache-point observability we added, and why the
+wrapper approach changes the math.
 
 > **Cache family:** `prefix` (automatic token-prefix cache).
 > **Optimizer stance:** prefix-editing strategies are **disabled**; only content
 > transforms that keep the byte-prefix stable are allowed. In practice the layer is
-> off by default. See [`../OPTIMIZATION-FINDINGS.md`](../OPTIMIZATION-FINDINGS.md).
+> off by default. See [`../optimization/FINDINGS.md`](../optimization/FINDINGS.md).
 
 This document consolidates our earlier DeepSeek caching and findings notes.
 
@@ -87,7 +88,25 @@ estimate — corrected.)
 
 ---
 
-## 3. What this means for the optimizer
+## 3. Cache-point observability (new)
+
+The live proxy now logs per-request cache efficiency using `commonPrefixTokens()`:
+
+```
+[cache] <session> hit=85% hitT=41000 missT=7000 totalT=48000
+```
+
+This is computed by comparing the current request body bytes against the previous
+request's body. The function already existed in `src/optimize/cache-cost.ts` for the
+simulator but was wired into the live hot path on `feat/optimize-wave2`.
+
+For the dashboard, we could surface this as a per-request metric: "85% cache hit,
+divergence at token 41,000." This would give users visibility into actual cache
+behavior without waiting for the background parse phase.
+
+---
+
+## 4. What this means for the optimizer
 
 Because a cached token is already ~10× cheaper than a fresh one, **removing tokens from
 the prompt rarely pays off**: deleting `R` tokens at position `P` saves the cheap cached
@@ -99,7 +118,7 @@ net-negative on DeepSeek.
 The only prompt edits that are safe are ones that keep the byte-prefix identical and only
 ever touch content at (or after) the tail — i.e. transform a tool result the first time it
 appears and never rewrite earlier turns. See
-[`../OPTIMIZATION-STRATEGIES.md`](../OPTIMIZATION-STRATEGIES.md) for the per-strategy
+[`../optimization/STRATEGIES.md`](../optimization/STRATEGIES.md) for the per-strategy
 safety table.
 
 The profiler encodes this by mapping DeepSeek/OpenAI to the `prefix` cache family
@@ -107,15 +126,41 @@ The profiler encodes this by mapping DeepSeek/OpenAI to the `prefix` cache famil
 
 ---
 
-## 4. Open questions
+## 5. Wrapper approach: why it changes the math
 
-- **Cold vs warm cache.** We explored cold/warm-start effects on Claude (see
-  [`anthropic.md`](anthropic.md)). The equivalent behaviour on DeepSeek — TTL, eviction
-  timing, and whether a returning/idle session is worth a one-time prompt rewrite — is
-  **not yet known** and remains to be measured.
-- **Cost verification.** Cost figures produced before the cache-write accounting fix have
-  not been recomputed for DeepSeek; treat any historical dollar figures in archived docs
-  as unverified.
-- **Batch validation.** Any future claim of a real improvement needs repeated runs (agent
-behaviour is non-deterministic) with the cache warmed equally across arms.
-</content>
+With JSONL compaction ([`../wrapper/CLAUDE-JSONL.md`](../wrapper/CLAUDE-JSONL.md)),
+the optimization is applied **once** to Claude's local conversation file. Claude then
+stores the compacted version and re-sends it identically every turn.
+
+On DeepSeek this means:
+
+- The first turn after compaction pays a full cache write (first request with new bytes).
+- Every subsequent turn hits the cache at the compacted size — 99% hit rate.
+- Net savings = (reduction per turn) × (turns after compaction) - (one write cost at
+  the compacted size).
+
+This is viable because the compacted bytes are **genuinely stable** — Claude owns them
+and doesn't undo the compaction on the next turn. The previous approach (proxy rewriting)
+failed because the client re-sent pristine history, undoing every edit.
+
+The compaction strategies that make sense for DeepSeek via JSONL:
+
+- `stableTruncate` — deterministic, same output every time
+- `shapeTestOutput` — deterministic
+- `stripTools` — removes unused tool defs from turn 1
+- `pruneStale` / `pruneUnusedTools` — applied once at compaction, stable thereafter
+
+---
+
+## 6. Open questions
+
+- **Cache TTL.** DeepSeek doesn't publish TTL. The idle-gap distribution analysis
+  (planned) would measure real expiry behavior.
+- **Cache write cost on DeepSeek.** Unlike Anthropic (1.25× for 5m, 2× for 1h),
+  DeepSeek has no write premium — cached and uncached tokens are just priced differently.
+  A full rebuild is cheaper on DeepSeek than on Claude, making compaction MORE viable.
+- **Cost verification.** Cost figures produced before the cache-write accounting fix
+  have not been recomputed for DeepSeek; treat any historical dollar figures in
+  archived docs as unverified.
+- **Batch validation.** Future compaction claims need repeated runs with the cache
+  warmed equally across arms.
