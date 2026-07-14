@@ -3,6 +3,7 @@
 
 case "$1" in
   test)
+    shift
     __REAL_BIN__ test "$@" 2>&1 | \
       grep -E "^(test |running |failures|error\[|   -->)" | head -60
     rc=${PIPESTATUS[0]}

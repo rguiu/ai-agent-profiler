@@ -647,7 +647,6 @@ export class Store {
         )
         .run(sid);
       this.db.prepare("DELETE FROM requests WHERE session_id = ?").run(sid);
-      this.db
       this.db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
     });
     txn(id);

@@ -1,12 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Config } from "../config/index.js";
 import { SessionRegistry } from "../session/index.js";
-import { openStore, type Store } from "../store/index.js";
 import { createProxyServer } from "./index.js";
 import type { RequestLogEntry } from "./index.js";
 

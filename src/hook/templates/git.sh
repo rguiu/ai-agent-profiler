@@ -5,15 +5,19 @@
 
 case "$1" in
   status)
-    __REAL_BIN__ status --short --branch 2>&1 | tail -40
+    shift
+    __REAL_BIN__ status --short --branch "$@" 2>&1 | tail -40
     ;;
   diff)
+    shift
     __REAL_BIN__ diff "$@" 2>&1 | tail -80
     ;;
   log)
+    shift
     __REAL_BIN__ log --oneline --decorate -15 "$@" 2>&1
     ;;
   show)
+    shift
     __REAL_BIN__ show --stat "$@" 2>&1
     ;;
   *)
