@@ -1,4 +1,5 @@
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
+import { fnv1a } from "./fingerprint.js";
 
 export interface TraceEvent {
   type: string;
@@ -27,6 +28,16 @@ export interface ParsedContext {
   toolsTokens: number;
 }
 
+// Prefix fingerprints for cache-stability analysis (see
+// docs/PREFIX-FINGERPRINTING.md). Content-only, no timestamps — identical
+// prefixes across requests hash identically. No message content is retained,
+// only its hash.
+export interface PrefixFingerprint {
+  systemHash: string;
+  toolsHash: string;
+  messageHashes: string[];
+}
+
 export interface ParsedTrace {
   format: "anthropic" | "openai" | "bedrock" | "ollama" | "unknown";
   model: string | null;
@@ -39,6 +50,7 @@ export interface ParsedTrace {
   toolResults: ParsedToolResult[];
   context: ParsedContext;
   streaming: boolean;
+  fingerprint: PrefixFingerprint;
 }
 
 interface ModelPricing {
@@ -609,34 +621,15 @@ function parseRequestJson(
   }
 }
 
-function parseRequestBody(events: TraceEvent[]): {
-  toolResults: ParsedToolResult[];
-  context: ParsedContext;
+// Extracts the system-prompt text, tool-definitions array, and raw messages
+// array from a decoded request body. Shared by parseRequestBody's context/
+// fingerprint computation so the two never drift apart.
+function extractPrefixSegments(record: Record<string, unknown>): {
+  systemText: string;
+  tools: unknown[];
+  messages: unknown[];
 } {
-  const empty = {
-    toolResults: [] as ParsedToolResult[],
-    context: {
-      messageCount: 0,
-      systemTokens: 0,
-      toolsDefined: 0,
-      toolsTokens: 0,
-    },
-  };
-
-  const record = parseRequestJson(events);
-  if (!record) return empty;
-
   const messages = asArray(record.messages);
-  const toolResults: ParsedToolResult[] = [];
-  const add = (id: string | null, content: unknown): void => {
-    if (!id) return;
-    const text = extractResultText(content);
-    toolResults.push({
-      id,
-      bytes: Buffer.byteLength(text),
-      tokens: estimateTokens(text),
-    });
-  };
 
   // Handle system prompt: Anthropic uses string/array, Bedrock uses [{text:"..."}]
   let systemText = "";
@@ -654,7 +647,6 @@ function parseRequestBody(events: TraceEvent[]): {
       }
     }
   }
-
   for (const message of messages) {
     const msg = asRecord(message);
     if (!msg) continue;
@@ -662,6 +654,80 @@ function parseRequestBody(events: TraceEvent[]): {
     if (role === "system" || role === "developer") {
       systemText += extractResultText(msg.content);
     }
+  }
+
+  // Tools: Anthropic uses record.tools, Bedrock uses record.toolConfig.tools
+  let tools = asArray(record.tools);
+  if (tools.length === 0) {
+    const toolConfig = asRecord(record.toolConfig);
+    if (toolConfig) tools = asArray(toolConfig.tools);
+  }
+
+  return { systemText, tools, messages };
+}
+
+// Stable serialization of a message for hashing: role + content only, so
+// unrelated fields (ids, cache_control flags, etc.) don't cause false breaks.
+function hashMessage(message: unknown): string {
+  const msg = asRecord(message);
+  if (!msg) return fnv1a(JSON.stringify(message ?? null));
+  const role = asString(msg.role) ?? "";
+  const content = extractResultText(msg.content ?? "");
+  return fnv1a(`${role}:${content}`);
+}
+
+function computeFingerprint(
+  systemText: string,
+  tools: unknown[],
+  messages: unknown[],
+): PrefixFingerprint {
+  return {
+    systemHash: fnv1a(systemText),
+    toolsHash: fnv1a(JSON.stringify(tools)),
+    messageHashes: messages.map(hashMessage),
+  };
+}
+
+function emptyFingerprint(): PrefixFingerprint {
+  return { systemHash: fnv1a(""), toolsHash: fnv1a("[]"), messageHashes: [] };
+}
+
+function parseRequestBody(events: TraceEvent[]): {
+  toolResults: ParsedToolResult[];
+  context: ParsedContext;
+  fingerprint: PrefixFingerprint;
+} {
+  const empty = {
+    toolResults: [] as ParsedToolResult[],
+    context: {
+      messageCount: 0,
+      systemTokens: 0,
+      toolsDefined: 0,
+      toolsTokens: 0,
+    },
+    fingerprint: emptyFingerprint(),
+  };
+
+  const record = parseRequestJson(events);
+  if (!record) return empty;
+
+  const { systemText, tools, messages } = extractPrefixSegments(record);
+
+  const toolResults: ParsedToolResult[] = [];
+  const add = (id: string | null, content: unknown): void => {
+    if (!id) return;
+    const text = extractResultText(content);
+    toolResults.push({
+      id,
+      bytes: Buffer.byteLength(text),
+      tokens: estimateTokens(text),
+    });
+  };
+
+  for (const message of messages) {
+    const msg = asRecord(message);
+    if (!msg) continue;
+    const role = asString(msg.role);
     if (role === "tool") {
       add(asString(msg.tool_call_id), msg.content);
       continue;
@@ -680,19 +746,14 @@ function parseRequestBody(events: TraceEvent[]): {
     }
   }
 
-  // Tools: Anthropic uses record.tools, Bedrock uses record.toolConfig.tools
-  let tools = asArray(record.tools);
-  if (tools.length === 0) {
-    const toolConfig = asRecord(record.toolConfig);
-    if (toolConfig) tools = asArray(toolConfig.tools);
-  }
   const context: ParsedContext = {
     messageCount: messages.length,
     systemTokens: estimateTokens(systemText),
     toolsDefined: tools.length,
     toolsTokens: tools.length > 0 ? estimateTokens(JSON.stringify(tools)) : 0,
   };
-  return { toolResults, context };
+  const fingerprint = computeFingerprint(systemText, tools, messages);
+  return { toolResults, context, fingerprint };
 }
 
 export interface MessageSummary {
@@ -827,7 +888,7 @@ function extractBedrockModel(events: TraceEvent[]): string | null {
 }
 
 export function parseTrace(events: TraceEvent[]): ParsedTrace {
-  const { toolResults, context } = parseRequestBody(events);
+  const { toolResults, context, fingerprint } = parseRequestBody(events);
   const base: ParsedTrace = {
     format: "unknown",
     model: null,
@@ -839,6 +900,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
     toolCalls: [],
     toolResults,
     context,
+    fingerprint,
     streaming: false,
   };
 
@@ -900,6 +962,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
       format: "anthropic",
       toolResults,
       context,
+      fingerprint,
       streaming,
     };
   }
@@ -909,6 +972,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
       format: "openai",
       toolResults,
       context,
+      fingerprint,
       streaming,
     };
   }
@@ -920,6 +984,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
       format: "bedrock",
       toolResults,
       context,
+      fingerprint,
       streaming,
     };
   }
@@ -929,6 +994,7 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
       format: "ollama",
       toolResults,
       context,
+      fingerprint,
       streaming,
     };
   }

@@ -7,5 +7,6 @@ export {
   type MessageStack,
   type MessageSummary,
   type RoleTotal,
+  type PrefixFingerprint,
 } from "./parse.js";
 export { runParse, type ParseSummary } from "./run.js";

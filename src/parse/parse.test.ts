@@ -231,6 +231,92 @@ describe("parseTrace", () => {
     expect(result.toolCalls).toEqual([]);
   });
 
+  describe("prefix fingerprinting", () => {
+    function eventsFor(requestBody: Record<string, unknown>): TraceEvent[] {
+      return [
+        { type: "request", headers: {} },
+        {
+          type: "request_body",
+          data: Buffer.from(JSON.stringify(requestBody)).toString("base64"),
+        },
+        {
+          type: "response",
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+        {
+          type: "response_body",
+          data: Buffer.from(ANTHROPIC_JSON).toString("base64"),
+        },
+        { type: "end" },
+      ];
+    }
+
+    it("produces identical hashes for identical bodies", () => {
+      const body = {
+        system: "You are a helpful assistant",
+        tools: [{ name: "read" }, { name: "write" }],
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "assistant", content: "hello" },
+        ],
+      };
+      const a = parseTrace(eventsFor(body)).fingerprint;
+      const b = parseTrace(eventsFor(body)).fingerprint;
+      expect(a).toEqual(b);
+      expect(a.messageHashes).toHaveLength(2);
+    });
+
+    it("keeps earlier messageHashes stable when a message is appended", () => {
+      const base = {
+        system: "sys",
+        tools: [{ name: "read" }],
+        messages: [
+          { role: "user", content: "first" },
+          { role: "assistant", content: "second" },
+        ],
+      };
+      const appended = {
+        ...base,
+        messages: [...base.messages, { role: "user", content: "third" }],
+      };
+      const baseFp = parseTrace(eventsFor(base)).fingerprint;
+      const appendedFp = parseTrace(eventsFor(appended)).fingerprint;
+      expect(appendedFp.messageHashes.slice(0, 2)).toEqual(
+        baseFp.messageHashes,
+      );
+      expect(appendedFp.messageHashes).toHaveLength(3);
+      expect(appendedFp.systemHash).toBe(baseFp.systemHash);
+      expect(appendedFp.toolsHash).toBe(baseFp.toolsHash);
+    });
+
+    it("changes toolsHash when tool order is reordered", () => {
+      const body = (tools: unknown[]) => ({
+        system: "sys",
+        tools,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      const original = parseTrace(
+        eventsFor(body([{ name: "read" }, { name: "write" }])),
+      ).fingerprint;
+      const reordered = parseTrace(
+        eventsFor(body([{ name: "write" }, { name: "read" }])),
+      ).fingerprint;
+      expect(reordered.toolsHash).not.toBe(original.toolsHash);
+    });
+
+    it("changes systemHash when system text changes", () => {
+      const body = (system: string) => ({
+        system,
+        tools: [{ name: "read" }],
+        messages: [{ role: "user", content: "hi" }],
+      });
+      const a = parseTrace(eventsFor(body("You are helpful"))).fingerprint;
+      const b = parseTrace(eventsFor(body("You are very helpful"))).fingerprint;
+      expect(a.systemHash).not.toBe(b.systemHash);
+    });
+  });
+
   it("extracts DeepSeek prompt-cache hit tokens", () => {
     const body = JSON.stringify({
       object: "chat.completion",
