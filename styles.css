@@ -74,6 +74,26 @@ main {
   padding: 20px;
 }
 
+.demo-note {
+  margin: 0;
+  padding: 12px 20px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.demo-note::before {
+  content: "\2139\FE0F  ";
+}
+.demo-note code {
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
 footer {
   padding: 16px 20px;
   color: var(--muted);
