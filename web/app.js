@@ -39,6 +39,26 @@ const shortPath = (p) => {
 };
 const dt = (s) => (s ? esc(String(s).replace("T", " ").slice(0, 19)) : "—");
 
+// Human labels for request kinds (see classifyRequestKind in parse.ts). "main"
+// is the user-driven loop; everything else is an agent-initiated call.
+const KIND_LABELS = {
+  main: "user",
+  subagent: "subagent",
+  search: "search",
+  guide: "guide",
+  webfetch: "webfetch",
+  title: "title",
+  compact: "compact",
+  recap: "recap",
+  quota: "quota",
+  unknown: "?",
+};
+const kindBadge = (kind) => {
+  const k = kind || "unknown";
+  const label = KIND_LABELS[k] || k;
+  return `<span class="kind-badge kind-${esc(k)}">${esc(label)}</span>`;
+};
+
 function fmtBytes(n) {
   if (!n) return "0";
   if (n < 1024) return `${n} B`;
@@ -63,11 +83,12 @@ function b64ToText(b64) {
 }
 
 async function dashboard() {
-  const [stats, sessions, tools, commands] = await Promise.all([
+  const [stats, sessions, tools, commands, kinds] = await Promise.all([
     api("/stats"),
     api("/sessions"),
     api("/tools"),
     api("/commands"),
+    api("/kinds"),
   ]);
   const cacheRate =
     stats.input_tokens > 0
@@ -93,6 +114,8 @@ async function dashboard() {
         )
         .join("")}
     </div>
+    <h2>Cost by kind</h2>
+    ${kindBreakdownTable(kinds)}
     <h2>Tool usage</h2>
     ${toolBars(tools)}
     <h2>Shell commands</h2>
@@ -100,6 +123,36 @@ async function dashboard() {
     <h2>Recent sessions</h2>
     ${sessionsTable(sessions.slice(0, 15))}
   `;
+}
+
+// Global cost/token breakdown by request kind, from the /kinds endpoint.
+function kindBreakdownTable(kinds) {
+  if (!kinds || !kinds.length)
+    return `<p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+  const totalCost = kinds.reduce((s, k) => s + (k.cost ?? 0), 0);
+  const rows = kinds
+    .map((k) => {
+      const pct = totalCost > 0 ? Math.round((k.cost / totalCost) * 100) : 0;
+      return `<tr>
+      <td>${kindBadge(k.kind)}</td>
+      <td class="num">${num(k.requests)}</td>
+      <td class="num">${num(k.input_tokens)}</td>
+      <td class="num">${num(k.output_tokens)}</td>
+      <td class="num">${cost(k.cost)}</td>
+      <td class="num">${pct}%</td>
+    </tr>`;
+    })
+    .join("");
+  const nonUser = kinds
+    .filter((k) => k.kind !== "main")
+    .reduce((s, k) => s + (k.cost ?? 0), 0);
+  const nonUserPct =
+    totalCost > 0 ? Math.round((nonUser / totalCost) * 100) : 0;
+  return `<table><thead><tr>
+      <th>Kind</th><th class="num">Requests</th><th class="num">In</th>
+      <th class="num">Out</th><th class="num">Cost</th><th class="num">% cost</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">Non-user-triggered calls: ${cost(nonUser)} (${nonUserPct}% of total cost).</p>`;
 }
 
 function commandsTable(rows) {
@@ -259,6 +312,7 @@ function paginatedRequestsTable(requests, page, regenerations) {
       const kaCell = ka ? '<span class="ka-badge">♻ keep-alive</span>' : "";
       return `<tr${rowCls}>
       <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a>${kaCell ? ` ${kaCell}` : ""}</td>
+      <td>${kindBadge(r.kind)}</td>
       <td class="mono muted">${dt(r.started_at)}</td>
       <td>${esc(r.provider)}</td>
       <td>${esc(r.method)}</td>
@@ -279,7 +333,7 @@ function paginatedRequestsTable(requests, page, regenerations) {
       ? `<div class="pagination" data-target="requests-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === page ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
       : "";
   return `<table><thead><tr>
-      <th>Request</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
+      <th>Request</th><th>Kind</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
       <th class="num">Latency</th><th>Model</th><th class="num">In</th><th class="num">Out</th>
       <th>Stop</th><th class="num">Tools</th><th class="num">Cost</th>
     </tr></thead><tbody>${rows}</tbody></table>${pagination}`;
@@ -341,6 +395,8 @@ async function sessionDetail(id) {
     </div>
     <h2>Recommendations</h2>
     ${recommendationsHtml(recommendations)}
+    <h2>Cost by kind</h2>
+    ${costByKind(requests)}
     <h2>Requests (${requests.length})</h2>
     <div id="requests-container">${paginatedRequestsTable(requests, currentPage, regenerations)}</div>
     <h2>Context growth</h2>
@@ -365,6 +421,63 @@ function recommendationsHtml(recs) {
         `<div class="rec rec-${esc(r.severity)}"><span class="rec-sev">${esc(r.severity)}</span><div class="rec-body"><div class="rec-title">${esc(r.title)}</div><div class="rec-detail muted">${esc(r.detail)}</div></div></div>`,
     )
     .join("")}</div>`;
+}
+
+// Break down a session's cost/tokens by request kind, so agent-initiated calls
+// (subagents, title-gen, compaction) are visible separately from user turns.
+function costByKind(requests) {
+  if (!requests || !requests.length)
+    return `<p class="empty">No requests.</p>`;
+  const order = [
+    "main",
+    "search",
+    "subagent",
+    "guide",
+    "webfetch",
+    "recap",
+    "compact",
+    "title",
+    "quota",
+    "unknown",
+  ];
+  const agg = {};
+  let totalCost = 0;
+  for (const r of requests) {
+    const k = r.kind || "unknown";
+    const a = (agg[k] = agg[k] || { count: 0, cost: 0, inTok: 0, outTok: 0 });
+    a.count += 1;
+    a.cost += r.cost ?? 0;
+    a.inTok += (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
+    a.outTok += r.output_tokens ?? 0;
+    totalCost += r.cost ?? 0;
+  }
+  const kinds = Object.keys(agg).sort(
+    (a, b) => order.indexOf(a) - order.indexOf(b),
+  );
+  const rows = kinds
+    .map((k) => {
+      const a = agg[k];
+      const pct = totalCost > 0 ? Math.round((a.cost / totalCost) * 100) : 0;
+      return `<tr>
+      <td>${kindBadge(k)}</td>
+      <td class="num">${num(a.count)}</td>
+      <td class="num">${num(a.inTok)}</td>
+      <td class="num">${num(a.outTok)}</td>
+      <td class="num">${cost(a.cost)}</td>
+      <td class="num">${pct}%</td>
+    </tr>`;
+    })
+    .join("");
+  const nonUser = kinds
+    .filter((k) => k !== "main")
+    .reduce((s, k) => s + agg[k].cost, 0);
+  const nonUserPct =
+    totalCost > 0 ? Math.round((nonUser / totalCost) * 100) : 0;
+  return `<table><thead><tr>
+      <th>Kind</th><th class="num">Requests</th><th class="num">In</th>
+      <th class="num">Out</th><th class="num">Cost</th><th class="num">% cost</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">Non-user-triggered calls: ${cost(nonUser)} (${nonUserPct}% of session cost).</p>`;
 }
 
 function contextSummary(ctx) {

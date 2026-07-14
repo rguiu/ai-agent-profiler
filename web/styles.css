@@ -497,3 +497,35 @@ tr.keepalive:hover td {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
+
+.kind-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  font-family: var(--mono);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  color: var(--muted);
+}
+/* user turns are the baseline — keep them quiet */
+.kind-badge.kind-main {
+  background: color-mix(in srgb, var(--good) 16%, transparent);
+  color: var(--good);
+}
+/* subagent-family calls (search is the tunable cost driver) */
+.kind-badge.kind-search,
+.kind-badge.kind-subagent,
+.kind-badge.kind-guide,
+.kind-badge.kind-webfetch {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+/* client-injected utility calls on the main model */
+.kind-badge.kind-recap,
+.kind-badge.kind-compact,
+.kind-badge.kind-title,
+.kind-badge.kind-quota {
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { gzipSync } from "node:zlib";
 import {
+  classifyRequestKind,
   computeCost,
   parseTrace,
   summarizeMessages,
@@ -826,5 +827,106 @@ describe("computeCost", () => {
     expect(computeCost("provider/DeepSeek-Chat", 1000, 500, deepseek)).toBe(
       base,
     );
+  });
+});
+
+describe("classifyRequestKind", () => {
+  const SUB = "x-anthropic-billing-header: cc_version=2.1; cc_is_subagent=true;";
+
+  it("splits the file-search subagent", () => {
+    expect(
+      classifyRequestKind(`${SUB} You are a file search specialist for Claude`),
+    ).toBe("search");
+  });
+
+  it("splits the guide subagent", () => {
+    expect(
+      classifyRequestKind(`${SUB} You are the Claude guide agent.`),
+    ).toBe("guide");
+  });
+
+  it("splits the webfetch subagent (identity in the message body)", () => {
+    expect(
+      classifyRequestKind(`${SUB} You are Claude Code.`, "Web page content:\n---"),
+    ).toBe("webfetch");
+  });
+
+  it("falls back to generic subagent when identity is unknown", () => {
+    expect(classifyRequestKind(`${SUB} You are Claude Code.`)).toBe("subagent");
+  });
+
+  it("detects the title-generation utility prompt", () => {
+    expect(
+      classifyRequestKind(
+        "Generate a concise, sentence-case title (3-7 words) for this coding session.",
+      ),
+    ).toBe("title");
+  });
+
+  it("detects a recap from the last message", () => {
+    expect(
+      classifyRequestKind(
+        "You are an interactive agent.",
+        "The user stepped away and is coming back. Recap in under 40 words, 1-2 plain sentences.",
+      ),
+    ).toBe("recap");
+  });
+
+  it("detects compaction from the last message", () => {
+    expect(
+      classifyRequestKind(
+        "You are an interactive agent.",
+        "Provide a detailed summary of the conversation so far.",
+      ),
+    ).toBe("compact");
+  });
+
+  it("does NOT flag a normal turn whose history echoes an old summary", () => {
+    // The phrase appears earlier in context but the last message is a real
+    // instruction — must stay "main", not "compact".
+    expect(
+      classifyRequestKind(
+        "You are an interactive agent that mentions detailed summary of the conversation.",
+        "fix the failing test",
+      ),
+    ).toBe("main");
+  });
+
+  it("treats a normal interactive system prompt as main", () => {
+    expect(
+      classifyRequestKind("You are an interactive agent that helps users."),
+    ).toBe("main");
+  });
+
+  it("returns unknown when there is no system prompt or last message", () => {
+    expect(classifyRequestKind("")).toBe("unknown");
+  });
+
+  it("populates context.kind (recap) on a parsed trace", () => {
+    const events: TraceEvent[] = [
+      { type: "request", headers: { "content-type": "application/json" } },
+      {
+        type: "request_body",
+        data: Buffer.from(
+          JSON.stringify({
+            system: [{ text: "You are Claude Code." }],
+            messages: [
+              { role: "user", content: "earlier turn" },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: "The user stepped away and is coming back. Recap in under 40 words.",
+                  },
+                ],
+              },
+            ],
+          }),
+        ).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    expect(parseTrace(events).context.kind).toBe("recap");
   });
 });

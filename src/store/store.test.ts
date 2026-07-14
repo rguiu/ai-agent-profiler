@@ -341,6 +341,7 @@ describe("Store", () => {
         systemTokens: 30,
         toolsDefined: 2,
         toolsTokens: 200,
+        kind: "main",
       });
       store.replaceToolCalls(id, [
         { id: `tool-${id}`, name: "read", arguments: '{"file":"/x"}' },

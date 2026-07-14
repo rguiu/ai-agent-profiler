@@ -20,11 +20,38 @@ export interface ParsedToolResult {
   tokens: number;
 }
 
+// What triggered a request. "main" is the user-driven interactive loop; every
+// other kind is an agent-initiated (non-user) call whose cost we want to break
+// out separately. Detected from the request body — see classifyRequestKind.
+//
+// Subagent flavours (all carry cc_is_subagent=true in the billing header):
+//   search   — the file-search/Explore specialist grepping the repo
+//   guide    — the Claude docs/help agent answering "how do I…"
+//   webfetch — summarising fetched web-page content
+//   subagent — a subagent we couldn't further identify
+//
+// recap/compact/title/quota run on the main model with a normal system prompt;
+// their trigger is in the LAST message, not the system block:
+//   recap    — "The user stepped away…": a short mid-session catch-up summary
+//   compact  — full-history summarisation for context compaction
+export type RequestKind =
+  | "main"
+  | "subagent"
+  | "search"
+  | "guide"
+  | "webfetch"
+  | "title"
+  | "compact"
+  | "recap"
+  | "quota"
+  | "unknown";
+
 export interface ParsedContext {
   messageCount: number;
   systemTokens: number;
   toolsDefined: number;
   toolsTokens: number;
+  kind: RequestKind;
 }
 
 export interface ParsedTrace {
@@ -577,6 +604,24 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+// Extract only the human/prompt TEXT of a message, ignoring tool_result and
+// other structured blocks. Used for kind classification: recap/compaction
+// instructions arrive as plain text, and a tool_result echoing those phrases
+// (e.g. captured command output) must not trigger a false positive.
+function lastMessagePromptText(content: unknown): string {
+  const asStr = asString(content);
+  if (asStr !== null) return asStr;
+  let out = "";
+  for (const block of asArray(content)) {
+    const record = asRecord(block);
+    if (!record) continue;
+    if (record.type !== undefined && record.type !== "text") continue;
+    const text = asString(record.text);
+    if (text !== null) out += text;
+  }
+  return out;
+}
+
 function extractResultText(content: unknown): string {
   const asStr = asString(content);
   if (asStr !== null) return asStr;
@@ -609,6 +654,63 @@ function parseRequestJson(
   }
 }
 
+// Classify what triggered a request. Two signal sources:
+//   1. The top-level system prompt — carries the `x-anthropic-billing-header`
+//      (subagents set `cc_is_subagent=true`) and the identity of one-shot
+//      utility agents (title-gen, file search, guide, webfetch).
+//   2. The LAST message — recap/compaction/quota run on the MAIN model with a
+//      normal system prompt, so they're only distinguishable by their final
+//      instruction ("The user stepped away…", "detailed summary…").
+// `lastMessageText` is the text of the final message (any role); pass "" when
+// unavailable. Classifying from the last message (not the whole transcript)
+// avoids false positives from prior summaries echoed back in history.
+export function classifyRequestKind(
+  systemText: string,
+  lastMessageText = "",
+): RequestKind {
+  const last = lastMessageText.toLowerCase();
+  // Recap: a short mid-session catch-up the client injects as the last user
+  // message. Runs on the main model, so only the instruction identifies it.
+  if (
+    last.includes("the user stepped away") &&
+    last.includes("recap")
+  ) {
+    return "recap";
+  }
+  // Compaction: full-history summarisation. The instruction is the last
+  // message; matching it there (not anywhere in history) prevents a prior
+  // summary echoed into context from mislabelling a normal turn.
+  if (
+    last.includes("summary of the conversation") ||
+    last.includes("detailed summary of our conversation") ||
+    last.includes("create a detailed summary")
+  ) {
+    return "compact";
+  }
+
+  if (!systemText) return "unknown";
+  const s = systemText.toLowerCase();
+  // Subagents carry cc_is_subagent=true. Split by their specialist identity so
+  // the file-search agent (the tunable cost driver) is visible on its own.
+  if (/cc_is_subagent\s*=\s*true/.test(s)) {
+    if (s.includes("file search specialist")) return "search";
+    if (s.includes("claude guide agent")) return "guide";
+    // WebFetch's identity is in the message body ("Web page content:"), not the
+    // system prompt, so check the last message here too.
+    if (last.includes("web page content")) return "webfetch";
+    return "subagent";
+  }
+  if (
+    s.includes("generate a concise") &&
+    s.includes("title") &&
+    s.includes("session")
+  ) {
+    return "title";
+  }
+  if (s.includes("quota") || s.includes("usage limit")) return "quota";
+  return "main";
+}
+
 function parseRequestBody(events: TraceEvent[]): {
   toolResults: ParsedToolResult[];
   context: ParsedContext;
@@ -620,6 +722,7 @@ function parseRequestBody(events: TraceEvent[]): {
       systemTokens: 0,
       toolsDefined: 0,
       toolsTokens: 0,
+      kind: "unknown" as RequestKind,
     },
   };
 
@@ -654,6 +757,16 @@ function parseRequestBody(events: TraceEvent[]): {
       }
     }
   }
+  // Classify from the top-level system prompt (billing header + utility-agent
+  // identity live here) plus the LAST message's text — recap/compaction run on
+  // the main model and are only identifiable by their final instruction.
+  // Using the last message ONLY (not the whole transcript) avoids false
+  // positives from prior summaries echoed back into context.
+  const lastMessage = asRecord(messages[messages.length - 1]);
+  const lastMessageText = lastMessage
+    ? lastMessagePromptText(lastMessage.content)
+    : "";
+  const kind = classifyRequestKind(systemText, lastMessageText);
 
   for (const message of messages) {
     const msg = asRecord(message);
@@ -691,6 +804,7 @@ function parseRequestBody(events: TraceEvent[]): {
     systemTokens: estimateTokens(systemText),
     toolsDefined: tools.length,
     toolsTokens: tools.length > 0 ? estimateTokens(JSON.stringify(tools)) : 0,
+    kind,
   };
   return { toolResults, context };
 }

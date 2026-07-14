@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS metrics (
   tools_defined   INTEGER,
   tools_tokens    INTEGER,
   cached_input_tokens INTEGER,
-  cache_creation_input_tokens INTEGER
+  cache_creation_input_tokens INTEGER,
+  kind            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -113,6 +114,7 @@ export interface MetricsRow {
   systemTokens: number;
   toolsDefined: number;
   toolsTokens: number;
+  kind: string;
 }
 
 export interface SessionSummary {
@@ -164,6 +166,7 @@ export interface SessionRequest {
   stop_reason: string | null;
   cost: number | null;
   tool_call_count: number | null;
+  kind: string | null;
 }
 
 export interface SessionDetail {
@@ -216,6 +219,7 @@ export interface RequestDetail {
   system_tokens: number | null;
   tools_defined: number | null;
   tools_tokens: number | null;
+  kind: string | null;
   keep_alive: number | null;
   toolCalls: ToolCall[];
   events?: unknown[];
@@ -226,6 +230,14 @@ export interface Stats {
   requests: number;
   input_tokens: number;
   cached_input_tokens: number;
+  output_tokens: number;
+  cost: number;
+}
+
+export interface KindBreakdown {
+  kind: string;
+  requests: number;
+  input_tokens: number;
   output_tokens: number;
   cost: number;
 }
@@ -287,6 +299,7 @@ export class Store {
   private readonly getRequestStmt;
   private readonly getToolCallsStmt;
   private readonly statsStmt;
+  private readonly kindBreakdownStmt;
   private readonly toolUsageGlobalStmt;
   private readonly toolUsageSessionStmt;
   private readonly repeatedToolCallsStmt;
@@ -332,11 +345,11 @@ export class Store {
       INSERT INTO metrics (request_id, format, model, input_tokens, output_tokens,
                            stop_reason, streaming, tool_call_count, cost, parsed_at,
                            message_count, system_tokens, tools_defined, tools_tokens,
-                           cached_input_tokens, cache_creation_input_tokens)
+                           cached_input_tokens, cache_creation_input_tokens, kind)
       VALUES (@request_id, @format, @model, @input_tokens, @output_tokens,
               @stop_reason, @streaming, @tool_call_count, @cost, @parsed_at,
               @message_count, @system_tokens, @tools_defined, @tools_tokens,
-              @cached_input_tokens, @cache_creation_input_tokens)
+              @cached_input_tokens, @cache_creation_input_tokens, @kind)
       ON CONFLICT(request_id) DO UPDATE SET
         format          = excluded.format,
         model           = excluded.model,
@@ -352,7 +365,8 @@ export class Store {
         tools_defined   = excluded.tools_defined,
         tools_tokens    = excluded.tools_tokens,
         cached_input_tokens = excluded.cached_input_tokens,
-        cache_creation_input_tokens = excluded.cache_creation_input_tokens
+        cache_creation_input_tokens = excluded.cache_creation_input_tokens,
+        kind            = excluded.kind
     `);
     this.deleteToolCallsStmt = db.prepare(
       `DELETE FROM tool_calls WHERE request_id = ?`,
@@ -400,7 +414,7 @@ export class Store {
              r.keep_alive,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.cost, m.tool_call_count, m.cached_input_tokens,
-             m.cache_creation_input_tokens
+             m.cache_creation_input_tokens, m.kind
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
@@ -413,7 +427,7 @@ export class Store {
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.streaming, m.tool_call_count, m.cost, m.parsed_at,
              m.message_count, m.system_tokens, m.tools_defined, m.tools_tokens,
-             m.cached_input_tokens, m.cache_creation_input_tokens
+             m.cached_input_tokens, m.cache_creation_input_tokens, m.kind
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.id = ?
@@ -429,6 +443,16 @@ export class Store {
         COALESCE((SELECT SUM(cached_input_tokens) FROM metrics), 0) AS cached_input_tokens,
         COALESCE((SELECT SUM(output_tokens) FROM metrics), 0) AS output_tokens,
         COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost
+    `);
+    this.kindBreakdownStmt = db.prepare(`
+      SELECT COALESCE(kind, 'unknown') AS kind,
+             COUNT(*) AS requests,
+             COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(cached_input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(cost), 0) AS cost
+      FROM metrics
+      GROUP BY COALESCE(kind, 'unknown')
+      ORDER BY cost DESC
     `);
     this.toolUsageGlobalStmt = db.prepare(`
       SELECT name, COUNT(*) AS count,
@@ -533,6 +557,7 @@ export class Store {
       tools_tokens: row.toolsTokens,
       cached_input_tokens: row.cachedInputTokens,
       cache_creation_input_tokens: row.cacheCreationTokens,
+      kind: row.kind,
     });
   }
 
@@ -663,6 +688,10 @@ export class Store {
     return this.statsStmt.get() as Stats;
   }
 
+  kindBreakdown(): KindBreakdown[] {
+    return this.kindBreakdownStmt.all() as KindBreakdown[];
+  }
+
   rawQuery(sql: string, ...params: Array<string | number | null>): unknown[] {
     if (!isReadOnlyQuery(sql)) {
       throw new Error("Only read-only SELECT statements are allowed");
@@ -715,6 +744,7 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "tools_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cached_input_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cache_creation_input_tokens", "INTEGER");
+  ensureColumn(db, "metrics", "kind", "TEXT");
   ensureColumn(db, "requests", "keep_alive", "INTEGER");
   ensureColumn(db, "sessions", "meta", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,

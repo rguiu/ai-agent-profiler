@@ -35,6 +35,7 @@ function makeDetail(id: string, requests: number): SessionDetail {
       stop_reason: "end_turn",
       cost: 0.001,
       tool_call_count: 1,
+      kind: "main",
     })),
     analysis: {
       toolUsage: [{ name: "read", count: requests, result_tokens: 500 }],

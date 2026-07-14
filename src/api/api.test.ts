@@ -73,6 +73,7 @@ function seed(store: Store, dir: string): void {
     systemTokens: 40,
     toolsDefined: 2,
     toolsTokens: 120,
+    kind: "main",
   });
   store.replaceToolCalls("r1", [
     { id: "call_1", name: "run_bash", arguments: '{"cmd":"ls"}' },

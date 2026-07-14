@@ -53,6 +53,7 @@ export async function runParse(
         systemTokens: result.context.systemTokens,
         toolsDefined: result.context.toolsDefined,
         toolsTokens: result.context.toolsTokens,
+        kind: result.context.kind,
       });
       store.replaceToolCalls(target.id, result.toolCalls);
       for (const toolResult of result.toolResults) toolResults.push(toolResult);
