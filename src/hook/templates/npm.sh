@@ -1,8 +1,7 @@
 #!/bin/bash
 # aap-hook: npm wrapper — installed to ~/.aap/bin/npm
-HOOK_MODE="normal"
+
 REAL_NPM="__REAL_BIN__"
-[ -r "$HOME/.aap/hook-mode" ] && HOOK_MODE=$(cat "$HOME/.aap/hook-mode" 2>/dev/null | tr -d '\n')
 
 is_filtered=0
 case "$1" in
@@ -14,7 +13,7 @@ case "$1" in
     ;;
 esac
 
-if [ "$is_filtered" = "0" ] || [ "$HOOK_MODE" = "off" ]; then
+if [ "$is_filtered" = "0" ]; then
   exec "$REAL_NPM" "$@"
 fi
 

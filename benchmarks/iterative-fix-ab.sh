@@ -4,7 +4,7 @@
 #
 # Tests:
 #   1. Baseline — no hooks, raw tool output
-#   2. Hooks — tool output filtered (aap hook mode aggressive)
+#   2. Hooks — tool output filtered (aap run --hooks)
 #
 # Usage:
 #   ./benchmarks/iterative-fix-ab.sh [agent] [--fixture NAME] [--port N] [--keep-serve]
@@ -66,9 +66,9 @@ trap cleanup EXIT INT TERM
 # Install hooks once before all runs
 aap hook install >/dev/null 2>&1 || true
 
-start_serve() { # $1 = extra serve args
-  local label="${1:-baseline}"
-  aap serve $1 >"$LOGDIR/serve-${label}.log" 2>&1 &
+start_serve() {
+  local label="${1:-serve}"
+  aap serve >"$LOGDIR/serve-${label}.log" 2>&1 &
   SERVE_PID=$!
   i=0
   while [ $i -lt 100 ]; do
@@ -80,11 +80,10 @@ start_serve() { # $1 = extra serve args
   echo "serve did not become healthy on $BASE — see $LOGDIR" >&2; exit 1
 }
 
-run_phase() { # $1 = scenario tag, $2 = hook env, $3 = serve args
+run_phase() { # $1 = scenario tag, $2 = enable hooks (true|"")
   printf '\n\033[1m=== phase: %s (hooks=%s) ===\033[0m\n' "$1" "${2:-off}"
-  start_serve "$3"
-
-  export AAP_HOOK_MODE="${2:-off}"
+  start_serve "${1:-serve}"
+  [ -n "$2" ] && export AAP_HOOK_MODE="true" || unset AAP_HOOK_MODE
 
   "$HERE/run.sh" "$AGENT" \
     --fixture "$FIXTURE" \
@@ -100,7 +99,7 @@ IFS=','; for scenario in $SCENARIOS; do
       run_phase baseline ""
       ;;
     hooks)
-      run_phase hooks aggressive
+      run_phase hooks true
       ;;
     *)
       echo "unknown scenario: $scenario (valid: baseline, hooks)" >&2

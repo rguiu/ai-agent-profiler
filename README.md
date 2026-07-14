@@ -14,8 +14,8 @@ dashboard, not an enterprise proxy. See [`VISION.md`](VISION.md).
 On top of profiling, there are **shell hooks** that filter tool output before it
 enters context — `git status`, `grep`, `ls`, `find`, `node --test`, `npm test`.
 Unlike request rewriting (which destroys the provider's prompt cache), hooks never
-touch the API request body. Enable with `aap hook mode aggressive`. See
-`aap hook help` for details.
+touch the API request body. Enable per session with `aap run --hooks`.
+See `aap hook help` for details.
 
 **Live demo:** explore real captured sessions in a static, read-only clone of the
 dashboard — no install required: **https://rguiu.github.io/ai-agent-profiler/**
@@ -237,25 +237,21 @@ works — and its caveats — differ per provider:
 ## Shell hooks (tool output filtering)
 
 Path-based wrappers in `~/.aap/bin/` that filter tool output before it enters the
-agent context. Never touches the API request body or the prompt cache.
+agent context. Never touches the API request body or the prompt cache. Hooks are
+on/off per session — pass `--hooks` to `aap run` to activate.
 
 ```
 aap hook install          # install 7 wrappers (git, ls, grep, node, find, cat, npm)
-aap hook mode aggressive  # max filtering (cold cache / tight budget)
-aap hook mode normal      # moderate filtering (default)
-aap hook mode off         # pass through, zero overhead
-aap hook status           # show installed hooks + current mode
+aap hook status           # show installed hooks
 ```
 
-Wrappers filter output based on the subcommand:
-- **git** — `status` (short), `diff` (tail -80), `log` (oneline), `show` (stat)
+When hooks are active (`aap run --hooks` or `AAP_HOOK_MODE=true`), `~/.aap/bin`
+is prepended to PATH. The wrappers filter output:
+- **git** — `status` (short), `diff` (tail -80), `log` (oneline -15), `show` (stat)
 - **node** — `--test` strips passing tests, keeps failure details + diagnostics
-- **npm** — `test`/`run build`/`run lint` → errors only, tail -40 on failure
-- **grep/rg** — tail -40 lines, aggressive mode groups by file
-- **ls, find, cat** — truncated output
-
-Hooks read `~/.aap/hook-mode` at execution time — mode can change mid-session.
-`aap run` prepends `~/.aap/bin` to PATH automatically.
+- **npm** — `test`/`run build`/`run lint`/`run typecheck` → errors only, tail -10 on failure
+- **grep/rg** — tail -40 lines
+- **ls, find, cat** — truncated output (head -40 / head -60)
 
 ## Cache maintenance
 

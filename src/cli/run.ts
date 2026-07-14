@@ -78,8 +78,7 @@ export function parseRunArgs(
   }
   if (env.ARMADA_NODE_NAME) meta.armada_node = env.ARMADA_NODE_NAME;
   if (env.AAP_CACHE_TTL === "1h") cacheTtl = "1h";
-  if (env.AAP_HOOK_MODE === "off") hooks = false;
-  if (env.AAP_HOOK_MODE && env.AAP_HOOK_MODE !== "off") hooks = true;
+  if (env.AAP_HOOK_MODE === "1" || env.AAP_HOOK_MODE === "true") hooks = true;
 
   let i = 0;
   while (i < args.length) {
@@ -137,6 +136,9 @@ export async function run(args: string[]): Promise<void> {
     meta.cache_ttl = "1h";
     console.error(`aap: cache TTL upgraded to 1h (from 5m)`);
   }
+  if (hooks) {
+    meta.hooks = "1";
+  }
 
   const session: SessionInfo = {
     id: sessionId,
@@ -176,7 +178,7 @@ export async function run(args: string[]): Promise<void> {
   ensureHooksInstalled();
   if (hooks) {
     env.PATH = `${hooksPath()}:${env.PATH || "/usr/local/bin:/usr/bin:/bin"}`;
-    console.error("aap: shell hooks active (PATH: ~/.aap/bin)");
+    console.error("aap: shell hooks active");
   }
 
   const child = spawn(agent, agentArgs, { stdio: "inherit", env });

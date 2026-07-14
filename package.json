@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "dev": "tsx src/cli/aap.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cp -r src/hook/templates dist/hook/templates",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

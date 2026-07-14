@@ -293,11 +293,6 @@ export class Store {
   private readonly repeatedToolCallsStmt;
   private readonly contextGrowthStmt;
   private readonly sessionContextStmt;
-  private readonly replaceOptimizeTxn: (
-    sessionId: string,
-    rows: ReadonlyArray<{ type: string; count: number; tokens_saved: number }>,
-  ) => void;
-
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
       INSERT INTO sessions (id, client, cwd, repo, started_at, first_seen_at, last_seen_at, meta)
@@ -549,9 +544,6 @@ export class Store {
   recordToolResult(toolId: string, bytes: number, tokens: number): void {
     this.recordToolResultStmt.run({ tool_id: toolId, bytes, tokens });
   }
-
-  // Persist the optimize layer's cumulative actions for a session as per-type
-  // totals. Called live on each optimized request; getActions() is cumulative,
 
   listSessions(): SessionSummary[] {
     const rows = this.listSessionsStmt.all() as Array<

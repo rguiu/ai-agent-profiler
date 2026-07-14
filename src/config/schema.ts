@@ -18,12 +18,6 @@ export const storageSchema = z.object({
   dir: z.string().default("data"),
 });
 
-export const optimizeSchema = z.object({
-  enabled: z.boolean().default(false),
-  cacheTtlMs: z.number().int().positive().default(300_000),
-  upgradeCacheTtl: z.enum(["off", "1h"]).default("off"),
-}).passthrough(); // ignore unknown fields — legacy strategies are removed
-
 export const modelPricingSchema = z.object({
   inputPerMTok: z.number().nonnegative(),
   outputPerMTok: z.number().nonnegative(),
@@ -41,7 +35,6 @@ export const configSchema = z.object({
   server: serverSchema.prefault({}),
   sessions: sessionsSchema.prefault({}),
   storage: storageSchema.prefault({}),
-  optimize: optimizeSchema.prefault({}),
   throttle: throttleSchema.prefault({}),
   providers: z
     .record(z.string(), providerSchema)
@@ -54,5 +47,3 @@ export const configSchema = z.object({
 export type Config = z.infer<typeof configSchema>;
 export type ProviderConfig = z.infer<typeof providerSchema>;
 export type ModelPricing = z.infer<typeof modelPricingSchema>;
-/** @deprecated Use aap hook instead. Only cacheTtlMs + upgradeCacheTtl remain active. */
-export type OptimizeSettings = z.infer<typeof optimizeSchema>;

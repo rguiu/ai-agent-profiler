@@ -49,7 +49,6 @@ function makeDetail(id: string, requests: number): SessionDetail {
       },
       commands: [],
     },
-    optimize: [],
   };
 }
 

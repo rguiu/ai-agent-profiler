@@ -70,58 +70,10 @@ function buildConfig(upstreamPort: number): Config {
     server: { port: 0, host: "127.0.0.1" },
     sessions: { idleTimeoutMs: 300_000 },
     storage: { dir: "data" },
-    optimize: {
-      enabled: false,
-      profile: "auto",
-      dedup: true,
-      truncate: true,
-      stablePrefix: true,
-      pruneStale: true,
-      stableTruncate: false,
-      shapeTestOutput: false,
-      prefixProbe: false,
-      frozenCompact: false,
-      suppressReread: true,
-      collapseSystem: true,
-      truncateThreshold: 4096,
-      pruneAfterTurns: 6,
-      suppressWithinTurns: 2,
-      pruneUnusedTools: true,
-      insertBreakpoints: false,
-      reorderVolatile: false,
-      pruneUnusedToolsAfter: 10,
-      compactThreshold: 60000,
-      compactKeepTail: 20,
-      stripTools: [],
-      tailTruncate: true,
-      optimizeOnCold: true,
-      cacheTtlMs: 300_000,
-      upgradeCacheTtl: "off",
-    },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
     throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
   };
-}
-
-async function startOptimizeStack(
-  store: Store,
-): Promise<{ proxyPort: number }> {
-  const upstream = http.createServer(upstreamHandler);
-  const upstreamPort = await listen(upstream);
-  servers.push(upstream);
-
-  const proxy = createProxyServer(
-    buildConfig(upstreamPort),
-    new SessionRegistry(),
-    undefined,
-    store,
-    undefined,
-    { optimize: true },
-  );
-  const proxyPort = await listen(proxy);
-  servers.push(proxy);
-  return { proxyPort };
 }
 
 afterEach(async () => {
