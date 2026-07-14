@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { ensureClaudeMd, introspectionsDir } from "./intro.js";
 
 function defaultExamplePath(): string {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -109,6 +110,10 @@ export function install(opts?: {
 
   mkdirSync(aapHome, { recursive: true });
   mkdirSync(dataDir, { recursive: true });
+
+  const introDir = introspectionsDir(home);
+  ensureClaudeMd(introDir);
+  console.log(`created ${introDir}/CLAUDE.md`);
 
   const exampleRaw = readFileSync(examplePath, "utf8");
   let example: Record<string, unknown>;

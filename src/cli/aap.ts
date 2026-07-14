@@ -7,6 +7,7 @@ import { exportSession } from "./export.js";
 import { hook } from "./hook.js";
 import { idleGaps } from "./idle-gaps.js";
 import { install } from "./install.js";
+import { intro } from "./intro.js";
 import { mcp } from "./mcp.js";
 import { parse } from "./parse.js";
 import { run } from "./run.js";
@@ -30,6 +31,7 @@ Usage:
   aap analyze-claude <id>  Inspect a Claude Code transcript (read-only; savings)
   aap hook install     Install tool-output filtering wrappers
   aap idle-gaps [--json] Bucket request idle gaps to assess cache TTL upgrade viability
+  aap intro <agent>    Introspect captured sessions through an agent with MCP tools
   aap mcp              Start an MCP server for agent introspection
   aap config           Print the resolved configuration
   aap help             Show this help
@@ -74,6 +76,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "idle-gaps":
       idleGaps(argv.slice(1));
+      return;
+    case "intro":
+      await intro(argv.slice(1));
       return;
     case "mcp":
       await mcp();

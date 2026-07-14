@@ -646,3 +646,83 @@ tr.keepalive:hover td {
   background: color-mix(in srgb, var(--good) 18%, transparent);
   color: var(--good);
 }
+
+.intro-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.intro-card {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+.intro-card:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.intro-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.intro-card-date {
+  font-size: 13px;
+  color: var(--accent);
+}
+.intro-card-scope {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.intro-card-summary {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.intro-card-cost {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--good);
+}
+
+.intro-card-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+}
+.intro-card-wrap .intro-card {
+  flex: 1;
+}
+.intro-card-wrap .del-btn {
+  margin: 12px 8px 0 4px;
+  flex-shrink: 0;
+}
+
+.del-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: 1.4;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.del-btn:hover {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+.del-btn.del-sm {
+  font-size: 13px;
+  padding: 0 4px;
+}

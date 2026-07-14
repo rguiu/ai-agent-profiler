@@ -691,6 +691,95 @@ export class Store {
       .all() as Array<{ session_id: string; started_at: string }>;
   }
 
+  projects(): Array<{
+    cwd: string;
+    repo: string | null;
+    session_count: number;
+    total_cost: number;
+    total_tokens: number;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT COALESCE(s.cwd, '') AS cwd,
+                s.repo,
+                COUNT(DISTINCT s.id) AS session_count,
+                COALESCE(SUM(m.cost), 0) AS total_cost,
+                COALESCE(SUM(m.input_tokens + m.output_tokens), 0) AS total_tokens
+         FROM sessions s
+         LEFT JOIN requests r ON r.session_id = s.id
+         LEFT JOIN metrics m ON m.request_id = r.id
+         WHERE s.last_seen_at IS NOT NULL
+         GROUP BY s.cwd, s.repo
+         HAVING session_count > 0
+         ORDER BY total_cost DESC`,
+      )
+      .all() as Array<{
+      cwd: string;
+      repo: string | null;
+      session_count: number;
+      total_cost: number;
+      total_tokens: number;
+    }>;
+  }
+
+  sessionTimeline(
+    days?: number,
+  ): Array<{ date: string; sessions: number; requests: number; cost: number }> {
+    const limit =
+      days !== undefined
+        ? `AND s.started_at >= datetime('now', '-${days} days')`
+        : "";
+    return this.db
+      .prepare(
+        `SELECT DATE(s.started_at) AS date,
+                COUNT(DISTINCT s.id) AS sessions,
+                COUNT(DISTINCT r.id) AS requests,
+                COALESCE(SUM(m.cost), 0) AS cost
+         FROM sessions s
+         LEFT JOIN requests r ON r.session_id = s.id
+         LEFT JOIN metrics m ON m.request_id = r.id
+         WHERE s.started_at IS NOT NULL ${limit}
+         GROUP BY DATE(s.started_at)
+         ORDER BY date DESC`,
+      )
+      .all() as Array<{
+      date: string;
+      sessions: number;
+      requests: number;
+      cost: number;
+    }>;
+  }
+
+  sessionLengths(): Array<{
+    session_id: string;
+    cwd: string;
+    request_count: number;
+    cost: number;
+    input_tokens: number;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT s.id AS session_id,
+                COALESCE(s.cwd, '') AS cwd,
+                COUNT(r.id) AS request_count,
+                COALESCE(SUM(m.cost), 0) AS cost,
+                COALESCE(SUM(m.input_tokens), 0) + COALESCE(SUM(m.output_tokens), 0) AS input_tokens
+         FROM sessions s
+         LEFT JOIN requests r ON r.session_id = s.id
+         LEFT JOIN metrics m ON m.request_id = r.id
+         WHERE r.id IS NOT NULL
+         GROUP BY s.id
+         ORDER BY request_count DESC`,
+      )
+      .all() as Array<{
+      session_id: string;
+      cwd: string;
+      request_count: number;
+      cost: number;
+      input_tokens: number;
+    }>;
+  }
+
   deleteSession(id: string): void {
     const txn = this.db.transaction((sid: string) => {
       this.db

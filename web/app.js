@@ -68,6 +68,18 @@ function statusCell(s) {
   return `<span class="${cls}">${s}</span>`;
 }
 
+async function deleteResource(url, label) {
+  if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return false;
+  const res = await fetch(url, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status} for ${url}`);
+  return true;
+}
+window._deleteResource = deleteResource;
+
+function deleteBtn(url, label, small) {
+  return `<button class="del-btn${small ? " del-sm" : ""}" onclick="event.stopPropagation();(async()=>{try{if(await window._deleteResource('${esc(url)}','${esc(label)}'))location.reload();}catch(e){alert(e.message)}})()" title="Delete ${esc(label)}">×</button>`;
+}
+
 function b64ToText(b64) {
   try {
     const bin = atob(b64);
@@ -256,6 +268,7 @@ function sessionsTable(sessions) {
       <th>Session</th><th>Node</th><th>cwd</th>
       <th class="num">Reqs</th><th class="num">In (total)</th><th class="num">Out</th>
       <th class="num">Tools</th><th class="num">Cost</th><th>Last seen</th>
+      <th></th>
     </tr></thead>
     <tbody>
     ${sessions
@@ -274,6 +287,7 @@ function sessionsTable(sessions) {
       <td class="num">${num(s.tool_calls)}</td>
       <td class="num">${cost(s.cost)}</td>
       <td class="mono muted">${esc((s.last_seen_at || "").replace("T", " ").slice(0, 19))}</td>
+      <td>${deleteBtn(`/sessions/${encodeURIComponent(s.id)}`, `session ${shortId(s.id)}`, true)}</td>
     </tr>`;
       })
       .join("")}
@@ -409,7 +423,7 @@ async function sessionDetail(id) {
 
   app.innerHTML = `
     <div class="crumb"><a href="#/sessions">Sessions</a> / ${shortId(session.id)}</div>
-    <h2>Session ${shortId(session.id)}</h2>
+    <h2>Session ${shortId(session.id)} ${deleteBtn(`/sessions/${encodeURIComponent(session.id)}`, `session ${shortId(session.id)}`, false)}</h2>
     <div class="kv">
       <div class="k">id</div><div class="v">${esc(session.id)}</div>
       <div class="k">client</div><div class="v">${esc(session.client) || "—"}</div>
@@ -733,6 +747,180 @@ function idleGapsHtml(result) {
   return `<table><thead><tr><th>Bucket</th><th class="num">Gaps</th><th class="num">%</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="muted">${result.totalGaps} total gaps across ${result.sessionsAnalyzed} session(s). ${result.globalBuckets.find((b) => b.bucket === "5m-1h")?.count || 0} gaps in the 5m–1h window would benefit from a 1h cache TTL upgrade.</p>`;
 }
+async function introspections() {
+  let list;
+  try {
+    list = await api("/introspections");
+  } catch {
+    app.innerHTML = `<p class="empty">No introspections yet — run <code>aap intro opencode</code> to start one.</p>`;
+    return;
+  }
+  if (!list || !list.length) {
+    app.innerHTML = `<p class="empty">No introspections yet — run <code>aap intro opencode</code> to start one.</p>`;
+    return;
+  }
+  app.innerHTML = `<h2>Introspections (${list.length})</h2>
+    <div class="intro-list">${list
+      .map((r) => {
+        const scope = r.report?.scope || "—";
+        const summary = r.report?.summary || "";
+        const totalCost = r.report?.cost_profile?.total_cost;
+        const badge = r.hasReport
+          ? '<span class="pill ok">report</span>'
+          : '<span class="pill muted">pending</span>';
+        return `<div class="intro-card-wrap">
+          <a class="intro-card" href="#/introspections/${encodeURIComponent(r.id)}">
+            <div class="intro-card-header">
+              <span class="intro-card-date mono">${esc(r.created)}</span>
+              ${badge}
+            </div>
+            <div class="intro-card-scope">${esc(scope)}</div>
+            ${summary ? `<div class="intro-card-summary muted">${esc(summary.slice(0, 200))}${summary.length > 200 ? "…" : ""}</div>` : ""}
+            ${totalCost != null ? `<div class="intro-card-cost">${cost(totalCost)} total</div>` : ""}
+          </a>
+          ${deleteBtn(`/introspections/${encodeURIComponent(r.id)}`, `introspection ${esc(r.created)}`, true)}
+        </div>`;
+      })
+      .join("")}</div>`;
+}
+
+async function introspectionDetail(id) {
+  let report;
+  try {
+    report = await api(`/introspections/${encodeURIComponent(id)}`);
+  } catch (err) {
+    app.innerHTML = `<p class="error">Error: ${esc(err.message)}</p>`;
+    return;
+  }
+  const graphs = report?.graphs || {};
+  const recs = report?.recommendations || [];
+  const tools = report?.tool_insights?.top_tools || report?.tool_insights || [];
+  const cp = report?.cost_profile || {};
+
+  function sevClass(s) {
+    if (s === "high") return "high";
+    if (s === "medium") return "warn";
+    return "info";
+  }
+
+  app.innerHTML = `<div class="crumb"><a href="#/introspections">Introspections</a> / ${esc(id.slice(0, 20))}…</div>
+    <h2>Introspection ${esc(report?.scope || id)} ${deleteBtn(`/introspections/${encodeURIComponent(id)}`, `introspection ${esc(id.slice(0, 20))}`, false)}</h2>
+    <div class="kv">
+      <div class="k">scope</div><div class="v">${esc(report?.scope || "—")}</div>
+      <div class="k">summary</div><div class="v">${esc(report?.summary || "—")}</div>
+    </div>
+    ${
+      cp.total_cost != null
+        ? `
+    <h2>Cost profile</h2>
+    <div class="cards">
+      <div class="card"><div class="label">Total cost</div><div class="value">${cost(cp.total_cost)}</div></div>
+      <div class="card"><div class="label">Avg per session</div><div class="value">${cost(cp.avg_cost_per_session || 0)}</div></div>
+      ${cp.median_session_cost != null ? `<div class="card"><div class="label">Median cost</div><div class="value">${cost(cp.median_session_cost)}</div></div>` : ""}
+      ${cp.most_expensive_session_cost != null ? `<div class="card"><div class="label">Most expensive</div><div class="value">${cost(cp.most_expensive_session_cost)}</div></div>` : ""}
+    </div>`
+        : ""
+    }
+    ${
+      graphs.daily_trend
+        ? `
+    <h2>Daily trend</h2>
+    ${timelineChart(graphs.daily_trend)}
+    `
+        : ""
+    }
+    ${
+      tools.length
+        ? `
+    <h2>Tool insights</h2>
+    <table><thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Result tokens</th></tr></thead><tbody>
+    ${tools.map((t) => `<tr><td>${esc(t.name)}</td><td class="num">${num(t.count || t.call_count || 0)}</td><td class="num">~${num(t.result_tokens || 0)}</td></tr>`).join("")}
+    </tbody></table>`
+        : ""
+    }
+    ${
+      graphs.cost_by_project
+        ? `
+    <h2>Cost by project</h2>
+    ${projectBars(graphs.cost_by_project)}
+    `
+        : ""
+    }
+    ${
+      recs.length
+        ? `
+    <h2>Recommendations</h2>
+    <div class="recs">${recs
+      .map((r) => {
+        if (typeof r === "string") {
+          return `<div class="rec rec-info"><span class="rec-sev">info</span><div class="rec-body"><div class="rec-title">${esc(r)}</div></div></div>`;
+        }
+        const title = r.title || r.finding || r.summary || "";
+        const detail = r.detail || r.suggestion || r.description || "";
+        const sev = sevClass(r.severity || r.level || "info");
+        return `<div class="rec rec-${sev}"><span class="rec-sev">${esc(r.severity || r.level || "info")}</span><div class="rec-body"><div class="rec-title">${esc(title)}</div>${detail ? `<div class="rec-detail muted">${esc(detail)}</div>` : ""}</div></div>`;
+      })
+      .join("")}</div>
+    `
+        : ""
+    }
+    ${
+      graphs.tool_usage
+        ? `
+    <h2>Tool usage</h2>
+    ${toolBars(graphs.tool_usage.map((t) => ({ name: t.tool || t.name, count: t.calls || t.count || 0, result_tokens: t.result_tokens || 0 })))}
+    `
+        : ""
+    }`;
+}
+
+function timelineChart(entries) {
+  if (!entries || !entries.length)
+    return `<p class="empty">No timeline data.</p>`;
+  const max = Math.max(...entries.map((e) => e.cost || 0), 1);
+  const w = 640;
+  const h = 120;
+  const pad = 28;
+  const stepX = (w - pad * 2) / (entries.length - 1 || 1);
+  const xy = (v, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - (v / max) * (h - pad * 2);
+    return [x, y];
+  };
+  const line = entries.map((e, i) => xy(e.cost || 0, i).join(",")).join(" ");
+  const dots = entries
+    .map((e, i) => {
+      if (!e.cost) return "";
+      const [x, y] = xy(e.cost, i);
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" class="dot-write" />`;
+    })
+    .join("");
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">
+    <text x="${pad}" y="14" class="axis-label">cost per day (max ${cost(max)})</text>
+    <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" class="axis" />
+    <polyline points="${line}" class="line line-total" fill="none" />
+    ${dots}
+  </svg>
+  <div class="chart-legend">
+    <span class="lg lg-total">cost per day</span>
+  </div>`;
+}
+function projectBars(items) {
+  if (!items || !items.length) return `<p class="empty">No project data.</p>`;
+  const max = Math.max(...items.map((p) => p.cost || p.total_cost || 0), 0.01);
+  return `<div class="bars">${items
+    .map((p) => {
+      const label = p.project || p.repo || p.cwd || "?";
+      const costVal = p.cost || p.total_cost || 0;
+      const sessions =
+        p.sessions || p.session_count
+          ? ` · ${p.sessions || p.session_count} sessions`
+          : "";
+      return `<div class="bar-row"><span class="bar-label mono">${esc((label || "").slice(0, 40))}</span><span class="bar-track"><span class="bar-fill" style="width:${((costVal / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${cost(costVal)}${sessions}</span></div>`;
+    })
+    .join("")}</div>`;
+}
+
 async function render() {
   const hash = location.hash.slice(1) || "/";
   try {
@@ -742,6 +930,9 @@ async function render() {
     if (s) return await sessionDetail(decodeURIComponent(s[1]));
     const q = hash.match(/^\/requests\/(.+)$/);
     if (q) return await requestDetail(decodeURIComponent(q[1]));
+    if (hash === "/introspections") return await introspections();
+    const i = hash.match(/^\/introspections\/(.+)$/);
+    if (i) return await introspectionDetail(decodeURIComponent(i[1]));
     app.innerHTML = `<p class="empty">Not found.</p>`;
   } catch (err) {
     app.innerHTML = `<p class="error">Error: ${esc(err.message)}</p>`;

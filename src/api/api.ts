@@ -1,4 +1,12 @@
-import { readFileSync } from "node:fs";
+import {
+  readFileSync,
+  readdirSync,
+  existsSync,
+  statSync,
+  rmSync,
+} from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   analyzeIdleGaps,
@@ -35,6 +43,32 @@ export function handleApi(
   }
 
   if (pathname.startsWith("/sessions/")) {
+    if (req.method === "DELETE") {
+      const id = extractId(pathname, "/sessions/");
+      if (!id) {
+        writeError(res, 404, "session id required");
+        return true;
+      }
+      const s = store.resolveSessionId(id);
+      if (!s) {
+        writeError(res, 404, `session "${id}" not found`);
+        return true;
+      }
+      const detail = store.getSession(s);
+      for (const r of detail?.requests ?? []) {
+        const reqDetail = store.getRequest(r.id);
+        if (reqDetail?.trace_file) {
+          try {
+            rmSync(reqDetail.trace_file, { force: true });
+          } catch {
+            /* trace file may already be gone */
+          }
+        }
+      }
+      store.deleteSession(s);
+      writeJson(res, 200, { deleted: true });
+      return true;
+    }
     if (!requireGet(req, res)) return true;
     const id = extractId(pathname, "/sessions/");
     if (!id) {
@@ -142,6 +176,30 @@ export function handleApi(
     return true;
   }
 
+  if (pathname === "/introspections") {
+    if (!requireGet(req, res)) return true;
+    writeJson(res, 200, listIntrospections());
+    return true;
+  }
+
+  const introMatch = pathname.match(/^\/introspections\/([^/]+)$/);
+  if (introMatch) {
+    const id = decodeURIComponent(introMatch[1] ?? "");
+    if (req.method === "DELETE") {
+      deleteIntrospection(id);
+      writeJson(res, 200, { deleted: true });
+      return true;
+    }
+    if (!requireGet(req, res)) return true;
+    const report = readIntrospectionReport(id);
+    if (!report) {
+      writeError(res, 404, `introspection "${id}" not found`);
+      return true;
+    }
+    writeJson(res, 200, report);
+    return true;
+  }
+
   return false;
 }
 
@@ -191,4 +249,63 @@ function writeError(
   message: string,
 ): void {
   writeJson(res, status, { error: message });
+}
+
+function introspectionsDir(): string {
+  return join(homedir(), ".aap", "introspections");
+}
+
+interface IntrospectionEntry {
+  id: string;
+  created: string;
+  hasReport: boolean;
+  report?: unknown;
+}
+
+function listIntrospections(): IntrospectionEntry[] {
+  const dir = introspectionsDir();
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((name) => {
+        const full = join(dir, name);
+        return statSync(full).isDirectory() && name !== "CLAUDE.md";
+      })
+      .sort()
+      .reverse()
+      .map((name) => {
+        const reportPath = join(dir, name, "report.json");
+        const hasReport = existsSync(reportPath);
+        const created = name.replace(/-/g, ":").replace("T", " ").slice(0, 19);
+        let report: unknown;
+        if (hasReport) {
+          try {
+            report = JSON.parse(readFileSync(reportPath, "utf8"));
+          } catch {
+            /* ignore parse errors */
+          }
+        }
+        return { id: name, created, hasReport, report };
+      });
+  } catch {
+    return [];
+  }
+}
+
+function readIntrospectionReport(id: string): unknown | null {
+  const path = join(introspectionsDir(), id, "report.json");
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function deleteIntrospection(id: string): void {
+  try {
+    rmSync(join(introspectionsDir(), id), { recursive: true, force: true });
+  } catch {
+    /* may not exist */
+  }
 }

@@ -316,7 +316,7 @@ async function sendKeepAlivePing(
   }
 }
 
-async function registerSession(
+export async function registerSession(
   origin: string,
   session: SessionInfo,
 ): Promise<void> {
