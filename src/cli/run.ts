@@ -102,13 +102,24 @@ export function parseRunArgs(
       break;
     }
   }
-  return { meta, agent: args[i], agentArgs: args.slice(i + 1), cacheTtl, hooks };
+  return {
+    meta,
+    agent: args[i],
+    agentArgs: args.slice(i + 1),
+    cacheTtl,
+    hooks,
+  };
 }
 
 export async function run(args: string[]): Promise<void> {
-  const { meta, agent, agentArgs, cacheTtl, hooks } = parseRunArgs(args, process.env);
+  const { meta, agent, agentArgs, cacheTtl, hooks } = parseRunArgs(
+    args,
+    process.env,
+  );
   if (!agent) {
-    console.error("Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]");
+    console.error(
+      "Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]",
+    );
     process.exitCode = 1;
     return;
   }
@@ -214,14 +225,13 @@ function normalizeHost(host: string): string {
   return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
 }
 
-function resolvePrimaryProvider(
-  config: Config,
-  agent: string,
-): string {
+function resolvePrimaryProvider(config: Config, agent: string): string {
   const providers = Object.keys(config.providers);
   if (providers.length === 1) return providers[0]!;
-  if (agent === "opencode") return "deepseek" in config.providers ? "deepseek" : providers[0]!;
-  if (agent === "claude") return "anthropic" in config.providers ? "anthropic" : providers[0]!;
+  if (agent === "opencode")
+    return "deepseek" in config.providers ? "deepseek" : providers[0]!;
+  if (agent === "claude")
+    return "anthropic" in config.providers ? "anthropic" : providers[0]!;
   return providers[0]!;
 }
 
@@ -241,17 +251,14 @@ async function sendKeepAlivePing(
     };
     if (!body || !path) return;
 
-    const res = await fetch(
-      `${origin}/${sessionId}/${provider}${path}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-aap-keep-alive": "1",
-        },
-        body,
+    const res = await fetch(`${origin}/${sessionId}/${provider}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-aap-keep-alive": "1",
       },
-    );
+      body,
+    });
     if (!res.ok) {
       console.error(`aap: keep-alive ping failed HTTP ${res.status}`);
     }

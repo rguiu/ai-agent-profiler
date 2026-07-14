@@ -24,4 +24,3 @@ export function applyCacheTtlUpgrade(parsed: Record<string, unknown>): boolean {
   }
   return changed;
 }
-

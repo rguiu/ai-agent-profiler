@@ -16,13 +16,13 @@ Claude Code docs and the Anthropic prompt-caching docs — high confidence.
   of `--optimize`. Pure cache-lifetime, no content edit → nothing for the client to
   undo. **Economics gate it:** a 1h write costs 2× input vs 1.25× for 5m, so it only
   pays when idle gaps regularly fall in the 5min–1h window. Needs idle-gap data +
-  one live Bedrock probe (does eu-west-1 actually *honor* the rewritten ttl?) before
+  one live Bedrock probe (does eu-west-1 actually _honor_ the rewritten ttl?) before
   defaulting on.
 - **Keep-alive pings.** Replay the last request during idle to keep the prefix warm.
-  Built (`AAP_KEEP_ALIVE=1`). **Only economically viable *with* the 1h cache**
+  Built (`AAP_KEEP_ALIVE=1`). **Only economically viable _with_ the 1h cache**
   (break-even ~12 pings); on the 5m cache it barely breaks even. Downstream of
   proving 1h works. Caveat: phantom API calls that appear in billing.
-- **`stripTools` from turn 1.** The one *content* strategy that's cache-safe — remove
+- **`stripTools` from turn 1.** The one _content_ strategy that's cache-safe — remove
   never-used tool defs (e.g. `Workflow`) before the first write. Already works via
   the proxy.
 - **Deterministic proxy transforms** (`stableTruncate`, `shapeTestOutput`). Safe
@@ -36,7 +36,7 @@ Claude Code docs and the Anthropic prompt-caching docs — high confidence.
 - **Permanently owning the request stack from the wrapper or proxy.** Claude is the
   source of truth and rebuilds each request from its own in-memory state every turn.
   The proxy's edit is undone next turn; a JSONL edit is adopted only at the next
-  *reload*, after which Claude owns the stack again. So no set-once-forever change
+  _reload_, after which Claude owns the stack again. So no set-once-forever change
   exists — only recurring intervention at load boundaries.
 - **Mid-session prefix editing that sticks.** Any proxy edit to the cached prefix
   diverges from what the client re-sends next turn → cache rebuild (net loss). This
@@ -52,12 +52,13 @@ Claude Code docs and the Anthropic prompt-caching docs — high confidence.
 
 Build the **idle-gap distribution analyzer** (read-only: bucket request timestamp
 gaps into <5m / 5m–1h / 1h+). It is the evidence that decides whether the 1h cache
-*and* keep-alive are worth turning on for the Bedrock workload. Without it, enabling
+_and_ keep-alive are worth turning on for the Bedrock workload. Without it, enabling
 either is a guess.
 
 ## Wave 2 — implementation priorities
 
 Clean separation between wrapper and proxy. No communication needed:
+
 - **Wrapper** (`aap run`): permanent conversation compaction via JSONL manipulation,
   plus keep-alive pings. Owns the session lifecycle end-to-end.
 - **Proxy** (`aap serve`): per-request cache-lifecycle modifications (1h cache
@@ -70,6 +71,7 @@ The wrapper compacts Claude's conversation history directly in
 version and re-sends it every turn — no proxy rewriting needed.
 
 **Implementation steps:**
+
 1. `aap run` discovers Claude's session JSONL path (parse `~/.claude/projects/`,
    match by cwd or let Claude tell us via `--session-id`).
 2. On each Claude request, the wrapper estimates accumulated tokens (read the
@@ -105,6 +107,7 @@ the cache TTL expires, keeping the prefix warm. Lives in the wrapper because it
 owns the session lifecycle and definitively knows when the agent exits.
 
 **Why the wrapper, not the proxy:**
+
 - The wrapper spawned the agent → knows its PID → `kill(pid, 0)` or `child_process`
   exit event gives a **definitive** signal that the session is over. No heuristics,
   no confidence scoring, no false positives.
@@ -116,6 +119,7 @@ owns the session lifecycle and definitively knows when the agent exits.
   transparently — it doesn't even need to know they're keep-alive pings.
 
 **Implementation steps:**
+
 1. After each Claude request completes, the wrapper stores `lastRequestBytes`
    and starts/restarts a keep-alive timer.
 2. Ping timing: `TTL * 0.8` (4 min for 5m cache, 48 min for 1h cache).
@@ -144,10 +148,11 @@ idle gaps often fall between 5 min and 1 hour.
 > in `cache_control` alone enables it — and it is supported on **both the Anthropic
 > API and Amazon Bedrock** (per Anthropic prompt-caching docs). So the body rewrite
 > is mechanically sufficient on our providers; no header injection required. Still
-> unverified: whether Bedrock eu-west-1 actually *honors* the rewritten ttl at
+> unverified: whether Bedrock eu-west-1 actually _honors_ the rewritten ttl at
 > runtime (§2.1 probe).
 
 **Implementation steps:**
+
 1. Strategy implemented two ways this branch: `upgradeCacheTtl` in
    `src/optimize/layer.ts` (optimize path) AND the standalone `applyCacheTtlUpgrade()`
    wired into the proxy independent of `--optimize`, triggered by session
@@ -216,23 +221,23 @@ on every subsequent turn.
 
 Only deterministic, content-addressed transforms survive the reproducibility rule:
 
-| Strategy | Mechanism | Safety |
-|----------|-----------|--------|
-| `stableTruncate` | Pure function of content — same input → same output every turn | prefix-safe |
-| `shapeTestOutput` | Pure function of content — same test log → same shaped bytes | prefix-safe |
-| `stripTools` | Removes tool defs from turn 1, before the first cache write | prefix-safe |
-| `upgradeCacheTtl` | Rewrites `cache_control` markers (5m→1h), no content changes | safe |
-| `prefixProbe` | Diagnostic only, no rewrites | harmless |
+| Strategy          | Mechanism                                                      | Safety      |
+| ----------------- | -------------------------------------------------------------- | ----------- |
+| `stableTruncate`  | Pure function of content — same input → same output every turn | prefix-safe |
+| `shapeTestOutput` | Pure function of content — same test log → same shaped bytes   | prefix-safe |
+| `stripTools`      | Removes tool defs from turn 1, before the first cache write    | prefix-safe |
+| `upgradeCacheTtl` | Rewrites `cache_control` markers (5m→1h), no content changes   | safe        |
+| `prefixProbe`     | Diagnostic only, no rewrites                                   | harmless    |
 
 These are all **always-on** strategies — they don't need cold-start gating because they're
 safe to apply every turn. The cold start concept adds nothing for them.
 
 ## What was removed
 
-| Strategy | Why removed |
-|----------|-------------|
-| `tailTruncate` | NOT prefix-safe. Touches only the newest message. Client re-sends full result next turn when it moves mid-history → cache rebuild. `stableTruncate` replaces it. |
-| `frozenCompact` | Can break `assistant(tool_calls) → tool` message pairing (OpenAI API constraint). Inserts a `role:"user"` summary that orphans tool messages whose parent assistant was folded. |
+| Strategy         | Why removed                                                                                                                                                                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tailTruncate`   | NOT prefix-safe. Touches only the newest message. Client re-sends full result next turn when it moves mid-history → cache rebuild. `stableTruncate` replaces it.                                                                                |
+| `frozenCompact`  | Can break `assistant(tool_calls) → tool` message pairing (OpenAI API constraint). Inserts a `role:"user"` summary that orphans tool messages whose parent assistant was folded.                                                                 |
 | `optimizeOnCold` | Causes a double cache write. Shrinks the prefix on the cold turn, then reverts. Next turn the client sends the full pristine prefix → divergence from the shrunk cache → entire prefix rebuilds. Two writes, strictly worse than doing nothing. |
 
 ## Ideas for making cold-start optimizations viable
@@ -260,6 +265,7 @@ every subsequent turn. Example:
 3. Turn N+K: same re-application
 
 **Challenges:**
+
 - Claude Code's Compact rewrites history, changing message content and positions
 - Hash-based matching is fragile — a slight content change (timestamp, memory update) breaks the match
 - The state grows with the conversation and must handle edge cases (new tool calls at previously-pruned positions)
@@ -279,6 +285,7 @@ Detection: the prefix legitimately shrinks/diverge early without an idle gap (di
 from a cache expiry).
 
 **Challenges:**
+
 - Detecting compaction vs. any other prefix change is non-trivial
 - False positive → double write bug re-introduced
 - The marginal savings are small (Compact already removes the bulk of history)
@@ -299,6 +306,7 @@ large and compact it proactively. The key difference from `frozenCompact`:
 - Only compact once, freeze the boundary, and re-emit the same compacted form every turn.
 
 **Challenges:**
+
 - Must correctly handle tool message pairing for both OpenAI and Anthropic formats
 - The summary content must be useful enough that the model doesn't lose context
 - The threshold for compaction must be high enough that it fires rarely (amortizing
@@ -362,16 +370,20 @@ local conversation storage.** Claude then "owns" the optimized version and re-se
 as the source of truth — the proxy does nothing on subsequent turns.
 
 **Claude Code's storage format** (discovered on this system):
+
 ```
 ~/.claude/projects/<path-hash>/<session-uuid>.jsonl
 ```
+
 Each line is a JSON event with `type`, `message`, `uuid`, `timestamp`:
+
 ```json
 {"type":"user","message":{"role":"user","content":"..."},"uuid":"...","sessionId":"..."}
 {"type":"assistant","message":{"role":"assistant","content":[{...tool_use...}]},"uuid":"..."}
 ```
 
 **How it would work:**
+
 1. Proxy monitors the session. When context exceeds threshold, proxy reads Claude's
    JSONL file to understand the full conversation state.
 2. Proxy compacts old entries (prune tool results, summarize assistant turns) and
@@ -382,6 +394,7 @@ Each line is a JSON event with `type`, `message`, `uuid`, `timestamp`:
    Claude IS sending the compacted version.
 
 **Advantages over request rewriting:**
+
 - No per-request rewriting overhead (JSON parse + stringify on every turn).
 - The prefix is genuinely stable — Claude owns the compacted history, no fight.
 - Works on ALL providers (no OpenAPI tool-message pairing bug, no Anthropic breakpoint
@@ -391,6 +404,7 @@ Each line is a JSON event with `type`, `message`, `uuid`, `timestamp`:
   naturally, then piggyback additional pruning on the already-rewritten file.
 
 **Risks and unknowns:**
+
 - **Format stability.** The JSONL format is undocumented and could change between
   Claude Code versions. Needs version detection and graceful fallback.
 - **File locking / concurrent access.** Claude Code may hold the file open or write
@@ -408,6 +422,7 @@ Each line is a JSON event with `type`, `message`, `uuid`, `timestamp`:
   Must be opt-in, clearly documented, and never enabled by default.
 
 **Implementation sketch:**
+
 ```
 On session registration (aap run):
   1. Wrapper discovers Claude's project-hash and session UUID
@@ -437,6 +452,7 @@ On context threshold exceeded (proxy detects via token estimation):
 ```
 
 **Why the wrapper, not the proxy:**
+
 - **Filesystem scope.** The proxy may run on a different machine (team proxy setup).
   The wrapper always runs alongside Claude on the developer's machine.
 - **Version compatibility.** The wrapper is tied to a specific `aap` version that
@@ -453,6 +469,7 @@ On context threshold exceeded (proxy detects via token estimation):
   `compact` and `compact-done` routes extends an established channel.
 
 **What the proxy computes and sends to the wrapper:**
+
 ```json
 POST /_control/sessions/{id}/compact
 {
@@ -464,6 +481,7 @@ POST /_control/sessions/{id}/compact
   "strategy": "frozenCompact"   // which transform to apply
 }
 ```
+
 The wrapper doesn't need to understand optimization logic — it just executes the
 file rewrite with the proxy's computed parameters.
 
@@ -475,20 +493,21 @@ When the wrapper writes the optimized history directly into Claude's JSONL file,
 **that reason disappears.** Claude owns the optimized version and re-sends it
 identically every turn.
 
-| Strategy | Why it failed before | Why it works via JSONL |
-|----------|---------------------|----------------------|
-| `tailTruncate` | Only touched newest message; client re-sent full result next turn when it moved mid-history | Write the truncated version into JSONL. Claude sends truncated version every turn from then on |
-| `pruneStale` | Age-based pruning produced different output every turn (message "age" changes) → non-deterministic → cache rebuild | Prune ONCE at compaction time, write result. Every subsequent turn sends identical bytes |
-| `collapseSystem` | Replaced system prompt with hash stub; next turn client sent full prompt → divergence at byte 0 | Collapse the system prompt in JSONL. Claude sends the stub every turn |
-| `pruneUnusedTools` | Removed tool defs mid-session; same defs reappeared next request from client | Remove from JSONL. Claude builds requests without those tools from then on |
-| `frozenCompact` | Inserted `{role:"user"}` summary that broke OpenAI tool message pairing | Write the compacted conversation into JSONL. Claude rebuilds API request correctly (assistant+tool_calls stay together) |
-| `dedup` | Identical tool results were only detected per-request; varied across turns | Dedup IN the JSONL. Duplicate results are replaced with stubs permanently |
-| `suppressReread` | Write-then-Read pattern only detectable per-request | Prune the redundant Read from JSONL history entirely |
-| `reorderVolatile` | Moved `<system-reminder>` blocks; client re-sent original ordering next turn | Reorder IN the JSONL. Claude sends the reordered version every turn |
+| Strategy           | Why it failed before                                                                                               | Why it works via JSONL                                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `tailTruncate`     | Only touched newest message; client re-sent full result next turn when it moved mid-history                        | Write the truncated version into JSONL. Claude sends truncated version every turn from then on                          |
+| `pruneStale`       | Age-based pruning produced different output every turn (message "age" changes) → non-deterministic → cache rebuild | Prune ONCE at compaction time, write result. Every subsequent turn sends identical bytes                                |
+| `collapseSystem`   | Replaced system prompt with hash stub; next turn client sent full prompt → divergence at byte 0                    | Collapse the system prompt in JSONL. Claude sends the stub every turn                                                   |
+| `pruneUnusedTools` | Removed tool defs mid-session; same defs reappeared next request from client                                       | Remove from JSONL. Claude builds requests without those tools from then on                                              |
+| `frozenCompact`    | Inserted `{role:"user"}` summary that broke OpenAI tool message pairing                                            | Write the compacted conversation into JSONL. Claude rebuilds API request correctly (assistant+tool_calls stay together) |
+| `dedup`            | Identical tool results were only detected per-request; varied across turns                                         | Dedup IN the JSONL. Duplicate results are replaced with stubs permanently                                               |
+| `suppressReread`   | Write-then-Read pattern only detectable per-request                                                                | Prune the redundant Read from JSONL history entirely                                                                    |
+| `reorderVolatile`  | Moved `<system-reminder>` blocks; client re-sent original ordering next turn                                       | Reorder IN the JSONL. Claude sends the reordered version every turn                                                     |
 
 The entire proxy-side `OptimizeLayer` becomes optional. The compaction is a
 scheduled, batch operation on the JSONL file — not a per-request hot-path
 transform. The proxy only needs to:
+
 1. Estimate token usage from the request body (for threshold detection).
 2. Compute the optimal compaction boundary and summary.
 3. Signal the wrapper with the parameters.
@@ -498,6 +517,7 @@ All the complex message-rewriting logic (`mapToolResults`, `headTailTruncate`,
 request handler into a compaction utility that the wrapper calls on the JSONL.
 
 **New question: when to compact?**
+
 - **On cache expiry** (what `optimizeOnCold` attempted): idle gap > TTL. The
   next request pays a full cache write regardless, so compact before it to
   shrink what gets written. Unlike the old approach, the compacted form
@@ -529,13 +549,13 @@ compaction WOULD save) before attempting writes.
 
 3. **IASH** — prevents waste at the source. No cache considerations. High ROI.
 
-3. **Prefix normalization** — team-level savings. Requires shared proxy deployment.
+4. **Prefix normalization** — team-level savings. Requires shared proxy deployment.
 
-4. **Proxy-side compaction (Idea D)** — if long sessions are common and
+5. **Proxy-side compaction (Idea D)** — if long sessions are common and
    context-limit errors are a problem. Fixes `frozenCompact`'s tool pairing bug
    and makes it a viable strategy.
 
-5. **Stateful replay (Idea B)** — most ambitious but most fragile. Only worth
+6. **Stateful replay (Idea B)** — most ambitious but most fragile. Only worth
    exploring if the deterministic set proves insufficient and real traces show
    large savings from semantic pruning.
 
@@ -684,7 +704,7 @@ reset the cache TTL before it expires.
   - On the 5m cache: ping every 4.5 min → ~12.5 pings before break-even (one
     rebuild costs ~$1.25 for a 200K prefix on Opus 4.x; 12.5 reads cost ~$1.25).
     Barely breaks even — not worth the complexity.
-  - On the 1h cache: ping once/hour → ~12 pings before break-even (~$1.20 in
+  - On the 1h cache: ping once/hour → ~~12 pings before break-even (~~$1.20 in
     reads vs. $10 write on 200K prefix). **Requires `upgradeCacheTtl` to be
     enabled and verified first.**
 - **3.3 Implementation sketch.**
@@ -749,11 +769,13 @@ Several channels exist:
 
 - **3.4d Shell hook injection.** `aap run` wraps the agent command with a shell
   script that traps exit and curl-calls the proxy:
+
   ```bash
   #!/bin/bash
   trap 'curl -s -X POST http://127.0.0.1:8080/_control/sessions/$AAP_SESSION_ID/end' EXIT
   exec claude "$@"
   ```
+
   This works with any agent (claude, opencode, ollama) without modification.
   The trap fires on normal exit, Ctrl+C, and SIGTERM.
 

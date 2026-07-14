@@ -247,6 +247,7 @@ aap hook status           # show installed hooks
 
 When hooks are active (`aap run --hooks` or `AAP_HOOK_MODE=true`), `~/.aap/bin`
 is prepended to PATH. The wrappers filter output:
+
 - **git** — `status` (short), `diff` (tail -80), `log` (oneline -15), `show` (stat)
 - **node** — `--test` strips passing tests, keeps failure details + diagnostics
 - **npm** — `test`/`run build`/`run lint`/`run typecheck` → errors only, tail -10 on failure
@@ -266,6 +267,7 @@ every 48 min vs every 4 min).
 
 The full story — what we tried, why proxy rewriting failed, and what works now —
 is in:
+
 - [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md)
 - [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md)
 - [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md)

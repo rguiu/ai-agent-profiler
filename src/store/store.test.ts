@@ -363,4 +363,3 @@ describe("Store", () => {
     expect(global).toEqual([{ name: "read", count: 2, result_tokens: 0 }]);
   });
 });
-

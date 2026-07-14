@@ -145,7 +145,9 @@ export function analyzeClaude(args: string[]): void {
   console.log(
     "Note: read-only. To take effect, an edited transcript must be reloaded",
   );
-  console.log("via `claude --resume <id>` — Claude ignores file edits mid-run.");
+  console.log(
+    "via `claude --resume <id>` — Claude ignores file edits mid-run.",
+  );
   console.log();
 }
 

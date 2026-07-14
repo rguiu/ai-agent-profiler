@@ -94,7 +94,8 @@ function handle(
   const pathname = queryStart === -1 ? rawUrl : rawUrl.slice(0, queryStart);
   const search = queryStart === -1 ? "" : rawUrl.slice(queryStart);
 
-  if (handleControl(req, res, pathname, registry, state, capture, prevBodies)) return;
+  if (handleControl(req, res, pathname, registry, state, capture, prevBodies))
+    return;
   if (handleUi(req, res, pathname)) return;
   if (store && handleApi(req, res, pathname, store)) return;
 
@@ -177,7 +178,7 @@ function handle(
       trace,
       logger,
       extraHeaders,
-  throttle,
+      throttle,
       timeoutMs: route.provider === "ollama" ? 120_000 : undefined,
       sessionId: route.sessionId,
       prevBodies,
@@ -471,7 +472,8 @@ function forward(
           const hitTokens = commonPrefixTokens(prev.body, currentBody);
           const totalTokens = estimateTokens(currentBody);
           const missTokens = totalTokens - hitTokens;
-          const hitPct = totalTokens > 0 ? Math.round((hitTokens / totalTokens) * 100) : 0;
+          const hitPct =
+            totalTokens > 0 ? Math.round((hitTokens / totalTokens) * 100) : 0;
           process.stderr.write(
             `[cache] ${sessionId.slice(0, 8)} hit=${hitPct}% hitT=${hitTokens} missT=${missTokens} totalT=${totalTokens}\n`,
           );

@@ -133,6 +133,7 @@ the optimization is applied **once** to Claude's local conversation file. Claude
 stores the compacted version and re-sends it identically every turn.
 
 On DeepSeek this means:
+
 - The first turn after compaction pays a full cache write (first request with new bytes).
 - Every subsequent turn hits the cache at the compacted size — 99% hit rate.
 - Net savings = (reduction per turn) × (turns after compaction) - (one write cost at
@@ -143,6 +144,7 @@ and doesn't undo the compaction on the next turn. The previous approach (proxy r
 failed because the client re-sent pristine history, undoing every edit.
 
 The compaction strategies that make sense for DeepSeek via JSONL:
+
 - `stableTruncate` — deterministic, same output every time
 - `shapeTestOutput` — deterministic
 - `stripTools` — removes unused tool defs from turn 1

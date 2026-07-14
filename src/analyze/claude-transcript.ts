@@ -223,10 +223,7 @@ export function parseTranscript(path: string): ParsedTranscript {
     eventTypeCounts[e.type] = (eventTypeCounts[e.type] ?? 0) + 1;
     if (e.uuid) byUuid.set(e.uuid, e);
     parents.add(e.parentUuid);
-    childCounts.set(
-      e.parentUuid,
-      (childCounts.get(e.parentUuid) ?? 0) + 1,
-    );
+    childCounts.set(e.parentUuid, (childCounts.get(e.parentUuid) ?? 0) + 1);
   }
 
   const chained = events.filter((e) => e.uuid);
@@ -278,7 +275,9 @@ function contentToString(content: unknown): string {
 }
 
 // Extract every tool_result block on the active path, with its size.
-export function toolResults(messages: ReconstructedMessage[]): ToolResultInfo[] {
+export function toolResults(
+  messages: ReconstructedMessage[],
+): ToolResultInfo[] {
   const out: ToolResultInfo[] = [];
   for (const m of messages) {
     if (!Array.isArray(m.content)) continue;

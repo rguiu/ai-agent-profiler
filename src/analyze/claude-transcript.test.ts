@@ -130,10 +130,15 @@ describe("computeStats", () => {
   it("sums cache usage from assistant events and tool-result tokens by tool", () => {
     const path = fixture([
       userMsg("u1", null, "hi"),
-      assistantMsg("u2", "u1", [{ type: "tool_use", id: "tu1", name: "Read" }], {
-        cache_read_input_tokens: 1000,
-        cache_creation_input_tokens: 200,
-      }),
+      assistantMsg(
+        "u2",
+        "u1",
+        [{ type: "tool_use", id: "tu1", name: "Read" }],
+        {
+          cache_read_input_tokens: 1000,
+          cache_creation_input_tokens: 200,
+        },
+      ),
       toolResultMsg("u3", "u2", "tu1", "x".repeat(4000)),
     ]);
     const t = parseTranscript(path);

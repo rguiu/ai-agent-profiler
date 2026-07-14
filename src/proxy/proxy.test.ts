@@ -138,7 +138,6 @@ describe("proxy passthrough", () => {
   });
 });
 
-
 describe("control endpoint", () => {
   it("registers and lists sessions", async () => {
     const { proxyPort } = await startStack();

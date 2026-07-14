@@ -25,10 +25,18 @@ function realBin(name: string): string {
   }
 }
 
-function renderWrapper(dir: string, template: string, realName: string): string {
+function renderWrapper(
+  dir: string,
+  template: string,
+  realName: string,
+): string {
   const src = readFileSync(join(__dirname, "templates", template), "utf8");
   const dest = join(dir, template.replace(/\.sh$/, ""));
-  writeFileSync(dest, src.replaceAll("__REAL_BIN__", realBin(realName)), "utf8");
+  writeFileSync(
+    dest,
+    src.replaceAll("__REAL_BIN__", realBin(realName)),
+    "utf8",
+  );
   chmodSync(dest, 0o755);
   return dest;
 }

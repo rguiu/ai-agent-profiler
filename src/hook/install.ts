@@ -16,9 +16,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function resolveBin(name: string): string {
   try {
-    return execFileSync("which", [name], { encoding: "utf8" }).trim() || `/usr/bin/${name}`;
+    return (
+      execFileSync("which", [name], { encoding: "utf8" }).trim() ||
+      `/usr/bin/${name}`
+    );
   } catch {
-    return name === "cargo" ? `${homedir()}/.cargo/bin/cargo` : `/usr/bin/${name}`;
+    return name === "cargo"
+      ? `${homedir()}/.cargo/bin/cargo`
+      : `/usr/bin/${name}`;
   }
 }
 

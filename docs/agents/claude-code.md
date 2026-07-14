@@ -29,6 +29,7 @@ event; these must stay paired during compaction.
 ### Token data in transcript
 
 Some assistant events include `message.usage`:
+
 ```json
 {
   "input_tokens": 12000,
@@ -52,11 +53,11 @@ reports what compaction would save. Read-only — never modifies the transcript.
 
 ### Environment variables (set by `aap run`)
 
-| Variable | Effect |
-|----------|--------|
-| `ANTHROPIC_BASE_URL` | Routes Anthropic API calls through proxy |
-| `ANTHROPIC_BEDROCK_BASE_URL` | Routes Bedrock calls through proxy |
-| `CLAUDE_CODE_USE_BEDROCK` | Tells Claude to use Bedrock instead of direct API |
+| Variable                     | Effect                                            |
+| ---------------------------- | ------------------------------------------------- |
+| `ANTHROPIC_BASE_URL`         | Routes Anthropic API calls through proxy          |
+| `ANTHROPIC_BEDROCK_BASE_URL` | Routes Bedrock calls through proxy                |
+| `CLAUDE_CODE_USE_BEDROCK`    | Tells Claude to use Bedrock instead of direct API |
 
 Claude Code does not natively consume `AAP_*` variables — they're used by the
 wrapper to manage the proxy connection.
@@ -80,39 +81,40 @@ extension APIs, but AAP operates outside VSCode.
 
 ## What's observable
 
-| Signal | Source | Usage |
-|--------|--------|-------|
-| Process liveness | `child_process.on("exit")` in wrapper | Keep-alive stop signal |
-| Request volume | Proxy trace capture | Dashboard metrics |
-| Cache hit/miss (Anthropic) | Response `usage.cache_read_input_tokens` | Parse phase |
-| Cache hit/miss (Bedrock) | Response `cacheReadInputTokens` | Parse phase, live proxy |
-| Byte-level cache point | `commonPrefixTokens(prev, current)` | Live proxy log |
-| JSONL growth | File size / line count | Compaction trigger |
+| Signal                     | Source                                   | Usage                   |
+| -------------------------- | ---------------------------------------- | ----------------------- |
+| Process liveness           | `child_process.on("exit")` in wrapper    | Keep-alive stop signal  |
+| Request volume             | Proxy trace capture                      | Dashboard metrics       |
+| Cache hit/miss (Anthropic) | Response `usage.cache_read_input_tokens` | Parse phase             |
+| Cache hit/miss (Bedrock)   | Response `cacheReadInputTokens`          | Parse phase, live proxy |
+| Byte-level cache point     | `commonPrefixTokens(prev, current)`      | Live proxy log          |
+| JSONL growth               | File size / line count                   | Compaction trigger      |
 
 ## What's controllable
 
-| Action | Mechanism | Status |
-|--------|-----------|--------|
-| 1h cache TTL | `aap run --cache-1h` → proxy rewrites `cache_control` markers | Shipped |
-| Keep-alive pings | `AAP_KEEP_ALIVE=1 aap run` → wrapper replays last request | Shipped |
-| JSONL compaction | `aap run --compact-jsonl` → wrapper modifies JSONL | **Not built** |
-| Direct JSONL write | Modify `~/.claude/projects/<slug>/<uuid>.jsonl` | **Not safe yet** |
+| Action             | Mechanism                                                     | Status           |
+| ------------------ | ------------------------------------------------------------- | ---------------- |
+| 1h cache TTL       | `aap run --cache-1h` → proxy rewrites `cache_control` markers | Shipped          |
+| Keep-alive pings   | `AAP_KEEP_ALIVE=1 aap run` → wrapper replays last request     | Shipped          |
+| JSONL compaction   | `aap run --compact-jsonl` → wrapper modifies JSONL            | **Not built**    |
+| Direct JSONL write | Modify `~/.claude/projects/<slug>/<uuid>.jsonl`               | **Not safe yet** |
 
 ## Open questions
 
 See [docs/wrapper/OPEN-QUESTIONS.md](../wrapper/OPEN-QUESTIONS.md) for:
+
 - Leaf-selection heuristics (which path is the "real" conversation?)
 - Transcript format stability across Claude Code versions
 - Tool pairing integrity (assistant(tool_use) ←→ user(tool_result))
 
 ## Differences from opencode
 
-| Aspect | Claude Code | opencode |
-|--------|-------------|----------|
-| Storage | JSONL tree in `~/.claude/projects/` | Different format in `~/.config/opencode/` |
-| Cache API | Explicit breakpoints via `cache_control` | Automatic prefix cache (no markers) |
-| Rewind/Edit | Yes — creates tree branches | No |
-| Session resume | Yes — loads existing JSONL | Yes |
-| MCP | Supported | Supported |
-| Compaction | `Compact` rewrites history client-side | No built-in compaction |
-| Keep-alive viability | Good (1h cache makes pings cheap) | Good (automatic cache, no markers needed) |
+| Aspect               | Claude Code                              | opencode                                  |
+| -------------------- | ---------------------------------------- | ----------------------------------------- |
+| Storage              | JSONL tree in `~/.claude/projects/`      | Different format in `~/.config/opencode/` |
+| Cache API            | Explicit breakpoints via `cache_control` | Automatic prefix cache (no markers)       |
+| Rewind/Edit          | Yes — creates tree branches              | No                                        |
+| Session resume       | Yes — loads existing JSONL               | Yes                                       |
+| MCP                  | Supported                                | Supported                                 |
+| Compaction           | `Compact` rewrites history client-side   | No built-in compaction                    |
+| Keep-alive viability | Good (1h cache makes pings cheap)        | Good (automatic cache, no markers needed) |

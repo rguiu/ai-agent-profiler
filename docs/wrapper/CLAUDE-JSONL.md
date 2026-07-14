@@ -13,9 +13,10 @@ original.
 > (high confidence):
 >
 > **What is possible:**
+>
 > - **Edit the JSONL, then `claude --resume <id>` → the edit is honored.** Resume
 >   reloads the full transcript from disk and rebuilds in-memory state from it.
->   This is the *only* runtime path to make Claude adopt an edited transcript.
+>   This is the _only_ runtime path to make Claude adopt an edited transcript.
 > - `claude --session-id <uuid>` lets `aap run` fix the JSONL path up front (no
 >   scanning/heuristics needed).
 > - The `assistant` events carry real cache numbers in `message.usage`
@@ -23,15 +24,16 @@ original.
 >   behavior straight from the file, no proxy response parsing.
 >
 > **What is NOT possible:**
+>
 > - **No mid-session reload.** During a live session Claude holds the conversation
->   in memory and only *appends* to the JSONL (written asynchronously, lags memory).
+>   in memory and only _appends_ to the JSONL (written asynchronously, lags memory).
 >   No hook, signal (SIGHUP), file-watch, IPC, or plugin API forces a re-read.
->   `PreCompact` can only *block*, not rewrite; `FileChanged` can't trigger reload.
+>   `PreCompact` can only _block_, not rewrite; `FileChanged` can't trigger reload.
 >   Editing the file while Claude runs does nothing to the current turn and races
 >   with Claude's own flush (corruption risk).
-> - **The wrapper can never *permanently* own the request stack.** Claude is the
+> - **The wrapper can never _permanently_ own the request stack.** Claude is the
 >   source of truth and rebuilds each request from its own in-memory state. Editing
->   the JSONL gives Claude a modified *starting point* at the next load; from that
+>   the JSONL gives Claude a modified _starting point_ at the next load; from that
 >   moment Claude owns the stack again (appends, auto-compacts, re-emits from memory).
 >   So this is a **recurring intervention at every load boundary**, not a
 >   set-once-forever change.
@@ -52,7 +54,7 @@ original.
 **Path:** `~/.claude/projects/<cwd-slug>/<session-uuid>.jsonl`
 (the slug is the absolute cwd with every `/` and `.` replaced by `-`).
 
-**Format:** One JSON *event* per line — richer than "one message per line":
+**Format:** One JSON _event_ per line — richer than "one message per line":
 
 - **It is a TREE, not a flat log.** Events chain via `parentUuid → uuid`.
   Rewind/edit/checkpoint create abandoned side branches. The real conversation is
@@ -73,6 +75,7 @@ original.
 ## What needs to be built
 
 ### 0. Read-only analysis — ✅ SHIPPED
+
 - `aap analyze-claude <session-id|path> [--strip-tools A,B] [--json]`
 - Walks the active leaf → root path (not line order), reconstructs the API message
   array, reports tokens / cache usage / tokens-by-tool / largest results, and
@@ -80,6 +83,7 @@ original.
 - Code: `src/analyze/claude-transcript.ts`, `src/cli/analyze-claude.ts`.
 
 ### 1. JSONL path discovery — approach chosen
+
 - **Use `claude --session-id <uuid>`** (verified to exist): `aap run claude`
   generates the UUID, passes it in, and knows the exact JSONL path up front.
   No scanning, no heuristics, no stdout parsing needed.
@@ -88,6 +92,7 @@ original.
 - Store AAP session-id → JSONL path in session metadata.
 
 ### 2. JSONL read + token estimation — ✅ core shipped in Phase 0
+
 - Walk `parentUuid → uuid` from the newest leaf to root (tree, not log).
 - Reconstruct the `user`/`assistant` message array; estimate tokens, or read the
   real `usage` fields off assistant events.
@@ -96,11 +101,12 @@ original.
 ### 3. JSONL compaction (write-back) — applies at RESUME only
 
 > Prerequisite: a **byte-identical round-trip harness** — `read → tree model →
-> write` that reproduces the file exactly when no transform is applied, across all
+write` that reproduces the file exactly when no transform is applied, across all
 > real session files. Must preserve tree structure, uuids, every event type, and
 > ordering. This is the corruption firewall before any real write.
 
 When accumulated tokens exceed threshold, at a load boundary:
+
 - Compute compaction boundary on the active path (fold old messages, keep tail),
   re-chaining `parentUuid`/`uuid` correctly.
 - Apply strategies (chosen: `stableTruncate`, `dedup`, `pruneStale`, a
@@ -113,10 +119,12 @@ When accumulated tokens exceed threshold, at a load boundary:
   compaction only runs when Claude is NOT running the session.
 
 ### 4. Timing: when to compact — ONLY at load boundaries
+
 Mid-session edits do nothing (Claude ignores the file until reload) and race with
 its flush, so the only valid moments are when Claude loads the file:
+
 - **On session resume:** `aap run claude --resume <id>` (or `aap run` relaunching a
-  session) → compact the existing JSONL *before* the first request. That first
+  session) → compact the existing JSONL _before_ the first request. That first
   request is a full cache write regardless, so shrinking the prefix first is free.
 - **On resume detection:** if `aap run` starts and an existing JSONL for the session
   has grown past threshold, compact before launch.
@@ -125,14 +133,17 @@ its flush, so the only valid moments are when Claude loads the file:
   interactive use and only sensible headless.
 
 ### 5. OpenCode support
+
 - OpenCode doesn't use JSONL files. It uses `~/.config/opencode/` with a different format.
 - Need to discover and support OpenCode's storage format separately.
 - For now, JSONL compaction is Claude-only.
 
 ### 6. Read-only analysis first (safety) — ✅ SHIPPED
+
 ```
 aap analyze-claude <session-id|path.jsonl> [--strip-tools A,B] [--json]
 ```
+
 - Reads Claude's JSONL, reconstructs the active-path message array (tree walk).
 - Reports: structure (active vs abandoned events), message count, estimated tokens,
   real cache read/write tokens, tokens-by-tool, largest results, and projected
@@ -150,6 +161,7 @@ Wrapper:    aap run claude --compact-jsonl     (JSONL compaction enabled)
 ```
 
 Metrics to compare:
+
 - Requests per session (should be same — same task)
 - Input tokens, cached tokens, cost
 - Cache hit ratio (should be HIGHER with wrapper)
@@ -164,6 +176,7 @@ write plus subsequent reads.
 ### 8. Why this works AT A RESUME BOUNDARY (and why proxy rewriting failed)
 
 Previous `iterative-fix-ab.sh` results:
+
 - Baseline: 41 requests, 985K input (984K cached = 99.9% hit), $0.0102 cost
 - Optimize: 23 requests, 770K input (732K cached = 95% hit), $0.0363 cost (3.5x MORE)
 
@@ -172,6 +185,7 @@ pairing destroyed the prefix match) and `tailTruncate` caused non-deterministic
 output (same input, different bytes each turn → cache rebuild).
 
 JSONL compaction avoids the proxy's problem — but **only across a reload**:
+
 - Compact the file ONCE, while Claude is NOT running the session.
 - On `--resume`, Claude reads the compacted file and rebuilds from it.
 - From that point Claude re-sends the compacted history every turn (it now owns it)

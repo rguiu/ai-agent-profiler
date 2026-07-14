@@ -248,7 +248,11 @@ function paginatedRequestsTable(requests, page, regenerations) {
           : "—";
       const rg = regen[r.id];
       const ka = r.keep_alive;
-      const rowCls = ka ? ' class="keepalive"' : rg ? ` class="regen regen-${esc(rg.severity)}"` : "";
+      const rowCls = ka
+        ? ' class="keepalive"'
+        : rg
+          ? ` class="regen regen-${esc(rg.severity)}"`
+          : "";
       const regenCell = rg
         ? `<span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
         : "";

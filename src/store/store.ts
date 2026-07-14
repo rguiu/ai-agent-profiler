@@ -172,7 +172,6 @@ export interface SessionDetail {
   analysis: SessionAnalysis;
 }
 
-
 export interface ToolCall {
   ordinal: number;
   name: string;
