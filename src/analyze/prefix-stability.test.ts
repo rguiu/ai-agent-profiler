@@ -14,6 +14,7 @@ function fp(
     toolsHash: "tools",
     messageHashes: [],
     messageCount: 0,
+    model: null,
     ...overrides,
   };
 }
@@ -204,5 +205,61 @@ describe("analyzePrefixStability / summarizePrefixStability", () => {
     expect(summary.breakPoints).toEqual(["r3", "r5"]);
     expect(summary.dominantBreakSegment).toBe("tools");
     expect(summary.longestStableRun).toBe(1);
+  });
+
+  it("diffs each model stream independently when models interleave", () => {
+    // Claude Code interleaves a background small/fast model (its own system
+    // prompt + short conversation) between primary-model turns. Diffed
+    // globally this looks like a system break every other request; diffed
+    // per-model each stream is a clean append. Regression for that bug.
+    const primary = "eu.anthropic.claude-opus-4-8";
+    const background = "claude-opus-4-8";
+    const inputs: PrefixInput[] = [
+      fp({
+        requestId: "p1",
+        model: primary,
+        systemHash: "sysP",
+        messageHashes: ["a1"],
+        messageCount: 1,
+      }),
+      fp({
+        requestId: "b1",
+        model: background,
+        systemHash: "sysB",
+        messageHashes: ["x1"],
+        messageCount: 1,
+      }),
+      fp({
+        requestId: "p2",
+        model: primary,
+        systemHash: "sysP",
+        messageHashes: ["a1", "a2"],
+        messageCount: 2,
+      }),
+      fp({
+        requestId: "b2",
+        model: background,
+        systemHash: "sysB",
+        messageHashes: ["x1"],
+        messageCount: 1,
+      }),
+      fp({
+        requestId: "p3",
+        model: primary,
+        systemHash: "sysP",
+        messageHashes: ["a1", "a2", "a3"],
+        messageCount: 3,
+      }),
+    ];
+    const results = analyzePrefixStability(inputs);
+    const byId = new Map(results.map((r) => [r.requestId, r.transition.kind]));
+    // First request of each stream is "first"; the rest are clean appends.
+    expect(byId.get("p1")).toBe("first");
+    expect(byId.get("b1")).toBe("first");
+    expect(byId.get("p2")).toBe("append-only");
+    expect(byId.get("b2")).toBe("append-only");
+    expect(byId.get("p3")).toBe("append-only");
+    // No spurious system breaks from the interleaving.
+    expect(summarizePrefixStability(results).breakPoints).toEqual([]);
   });
 });

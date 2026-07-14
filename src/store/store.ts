@@ -306,6 +306,7 @@ export interface PrefixHistoryRow {
   message_hashes: string[];
   message_count: number | null;
   started_at: string | null;
+  model: string | null;
 }
 
 export class Store {
@@ -558,8 +559,9 @@ export class Store {
     `);
     this.getSessionPrefixesStmt = db.prepare(`
       SELECT p.request_id, p.session_id, p.system_hash, p.tools_hash,
-             p.message_hashes, p.message_count, r.started_at
+             p.message_hashes, p.message_count, r.started_at, m.model
       FROM request_prefix p JOIN requests r ON r.id = p.request_id
+      LEFT JOIN metrics m ON m.request_id = p.request_id
       WHERE p.session_id = ?
       ORDER BY r.started_at
     `);

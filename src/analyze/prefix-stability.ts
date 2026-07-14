@@ -11,6 +11,13 @@ export interface PrefixInput {
   toolsHash: string | null;
   messageHashes: string[];
   messageCount: number | null;
+  // The model this request targeted. Claude Code interleaves distinct model
+  // streams within one session (e.g. the primary model and a background
+  // small/fast model for titles), each with its own system prompt and
+  // conversation. Transitions must be diffed within a stream, not across the
+  // globally-previous request, or every interleaved background call would look
+  // like a system-prompt break. `null` requests share one fallback stream.
+  model: string | null;
 }
 
 export type BrokenSegment = "system" | "tools" | `message[${number}]`;
@@ -71,18 +78,24 @@ export function classifyPrefixTransition(
 }
 
 // Classify a whole session's timeline (ordered by started_at). Returns one
-// result per request (the first is always `{ kind: "first" }`).
+// result per request. Each request is compared against the previous request
+// *of the same model stream* (see PrefixInput.model) — the cache is per-model,
+// so a background small/fast-model call interleaved between primary-model turns
+// must not be treated as a prefix break of the primary stream. The first
+// request seen in each stream is `{ kind: "first" }`.
 export function analyzePrefixStability(
   inputs: PrefixInput[],
 ): PrefixStabilityResult[] {
   const results: PrefixStabilityResult[] = [];
-  let prev: PrefixInput | null = null;
+  const prevByModel = new Map<string, PrefixInput>();
   for (const cur of inputs) {
+    const key = cur.model ?? "";
+    const prev = prevByModel.get(key) ?? null;
     results.push({
       requestId: cur.requestId,
       transition: classifyPrefixTransition(prev, cur),
     });
-    prev = cur;
+    prevByModel.set(key, cur);
   }
   return results;
 }

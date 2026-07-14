@@ -94,6 +94,7 @@ describe("renderMarkdown", () => {
         message_hashes: ["m1"],
         message_count: 1,
         started_at: "2026-01-01T00:00:00Z",
+        model: "eu.anthropic.claude-opus-4-8",
       },
     ];
     const md = renderMarkdown(detail, recommend(detail), prefixRows);

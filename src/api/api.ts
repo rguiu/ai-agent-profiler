@@ -21,6 +21,7 @@ function toPrefixInputs(rows: PrefixHistoryRow[]): PrefixInput[] {
     toolsHash: row.tools_hash,
     messageHashes: row.message_hashes,
     messageCount: row.message_count,
+    model: row.model,
   }));
 }
 
