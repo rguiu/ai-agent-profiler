@@ -35,7 +35,17 @@ is ("very thorough over two repos" spawns a long agent loop).
 Detection uses two signal sources, deliberately kept separate — see
 `classifyRequestKind()` in [`src/parse/parse.ts`](../src/parse/parse.ts).
 
-### 1. The top-level system prompt
+The classifier is **provider-agnostic**: it checks the system prompt text
+and the last message regardless of whether the request uses Anthropic or
+OpenAI/DeepSeek format. System messages inside the `messages[]` array
+(OpenAI/DeepSeek style) are accumulated _before_ classification alongside
+the top-level `system` field (Anthropic style).
+
+### 1. The system prompt
+
+Both Claude Code and OpenCode carry per-agent identity in the system prompt:
+
+**Claude Code** (Anthropic format):
 
 Claude Code prepends an `x-anthropic-billing-header` system block to every call,
 and subagents set `cc_is_subagent=true` there. The specialist's identity follows
@@ -55,17 +65,32 @@ You are a file search specialist for Claude Code…      ← search
 | `title`    | `Generate a concise… title` + `session`            |
 | `quota`    | `quota` / `usage limit`                            |
 
+**OpenCode** (OpenAI/DeepSeek format):
+
+OpenCode agents carry their identity in their per-agent system prompt (text
+files like `prompt/title.txt`, `prompt/compaction.txt`, `prompt/explore.txt`):
+
+| Kind       | System-prompt marker                                          |
+| ---------- | ------------------------------------------------------------- |
+| `title`    | `You are a title generator. You output ONLY a thread title.`  |
+| `compact`  | `You are an anchored context summarization assistant…`        |
+| `search`   | `You are a file search specialist. You excel at…`             |
+| `compact`  | `Summarize what was done in this conversation.` (summary)     |
+| `main`     | `You are opencode, an interactive CLI tool…` (build/plan)     |
+
 ### 2. The last message text
 
-`recap` and `compact` run on the **main model with a normal system prompt** —
-nothing in the system block distinguishes them from a user turn. They are only
-identifiable by their **final instruction**:
+`recap` and `compact` (and some `title` calls) run on the **main model with a
+normal system prompt** — nothing in the system block distinguishes them from a
+user turn. They are only identifiable by their **final instruction**:
 
-| Kind       | Last-message marker                                         |
-| ---------- | ----------------------------------------------------------- |
-| `recap`    | `The user stepped away` + `recap`                           |
-| `compact`  | `summary of the conversation` / `create a detailed summary` |
-| `webfetch` | (subagent +) `Web page content:`                            |
+| Kind       | Last-message marker                                                        | Agent      |
+| ---------- | -------------------------------------------------------------------------- | ---------- |
+| `recap`    | `The user stepped away` + `recap`                                          | Claude     |
+| `compact`  | `summary of the conversation` / `create a detailed summary`                | Claude     |
+| `compact`  | `## Objective` + `## Important Details` + `## Work State` (compaction template) | OpenCode |
+| `title`    | `Generate a title for this conversation:`                                  | OpenCode   |
+| `webfetch` | (subagent +) `Web page content:`                                          | Claude     |
 
 ## False-positive traps
 
@@ -87,8 +112,13 @@ reduce that to zero while catching the genuine recaps.
 
 ## Notes
 
-- Classification is provider-agnostic in structure, but the markers above are
-  Claude Code / Anthropic-specific. Other agents (opencode, ollama) fall through
-  to `main`/`unknown`.
+- Classification is **provider-agnostic**: it checks both the Anthropic-style
+  top-level `system` field and OpenAI-style `role:"system"` messages inside the
+  `messages[]` array. `parseRequestBody()` accumulates both before calling
+  the classifier.
+- Markers are specific to each coding agent. Claude Code uses
+  `cc_is_subagent=true` billing headers; OpenCode uses per-agent system prompt
+  identities. Other agents (ollama, OpenAI) may still fall through to
+  `main`/`unknown`.
 - Kinds are recomputed on every `aap parse` — re-run `aap parse --all` after
   changing the rules to backfill existing traces.

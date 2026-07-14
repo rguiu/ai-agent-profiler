@@ -906,6 +906,88 @@ describe("classifyRequestKind", () => {
     expect(classifyRequestKind("")).toBe("unknown");
   });
 
+  // OpenCode-specific markers
+
+  it("detects OpenCode title agent from system prompt", () => {
+    expect(
+      classifyRequestKind(
+        "You are a title generator. You output ONLY a thread title.",
+      ),
+    ).toBe("title");
+  });
+
+  it("detects OpenCode title from last message", () => {
+    expect(
+      classifyRequestKind(
+        "You are opencode, an interactive CLI tool.",
+        "Generate a title for this conversation:\n---",
+      ),
+    ).toBe("title");
+  });
+
+  it("detects OpenCode compaction agent from system prompt", () => {
+    expect(
+      classifyRequestKind(
+        "You are an anchored context summarization assistant for coding sessions.",
+      ),
+    ).toBe("compact");
+  });
+
+  it("detects OpenCode compaction from last message template", () => {
+    expect(
+      classifyRequestKind(
+        "You are opencode, an interactive CLI tool.",
+        "Update the anchored summary below.\n## Objective\nFix the bug\n## Important Details\n- foo\n## Work State\n### Completed\n- bar",
+      ),
+    ).toBe("compact");
+  });
+
+  it("detects OpenCode explore/search agent without cc_is_subagent", () => {
+    expect(
+      classifyRequestKind(
+        "You are a file search specialist. You excel at thoroughly navigating codebases.",
+      ),
+    ).toBe("search");
+  });
+
+  it("detects OpenCode summary agent as compact", () => {
+    expect(
+      classifyRequestKind(
+        "Summarize what was done in this conversation. Write like a pull request description.",
+      ),
+    ).toBe("compact");
+  });
+
+  it("treats an OpenCode main prompt as main", () => {
+    expect(
+      classifyRequestKind(
+        "You are opencode, an interactive CLI tool that helps users.",
+      ),
+    ).toBe("main");
+  });
+
+  it("detects OpenAI-format system messages in the messages array (integration)", () => {
+    const events: TraceEvent[] = [
+      { type: "request", headers: { "content-type": "application/json" } },
+      {
+        type: "request_body",
+        data: Buffer.from(
+          JSON.stringify({
+            messages: [
+              {
+                role: "system",
+                content: "You are a file search specialist. You excel at navigating codebases.",
+              },
+              { role: "user", content: "find the auth module" },
+            ],
+          }),
+        ).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    expect(parseTrace(events).context.kind).toBe("search");
+  });
+
   it("populates context.kind (recap) on a parsed trace", () => {
     const events: TraceEvent[] = [
       { type: "request", headers: { "content-type": "application/json" } },

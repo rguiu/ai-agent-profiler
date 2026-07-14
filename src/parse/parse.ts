@@ -655,9 +655,9 @@ function parseRequestJson(
 }
 
 // Classify what triggered a request. Two signal sources:
-//   1. The top-level system prompt — carries the `x-anthropic-billing-header`
-//      (subagents set `cc_is_subagent=true`) and the identity of one-shot
-//      utility agents (title-gen, file search, guide, webfetch).
+//   1. The SYSTEM PROMPT (top-level system field + role:"system" messages) —
+//      carries provider-specific markers: Claude's cc_is_subagent billing header
+//      and OpenCode's per-agent prompt identities (title, compaction, explore).
 //   2. The LAST message — recap/compaction/quota run on the MAIN model with a
 //      normal system prompt, so they're only distinguishable by their final
 //      instruction ("The user stepped away…", "detailed summary…").
@@ -697,6 +697,8 @@ export function classifyRequestKind(
     if (last.includes("web page content")) return "webfetch";
     return "subagent";
   }
+
+  // Claude Code title-gen: "Generate a concise… title" + "session"
   if (
     s.includes("generate a concise") &&
     s.includes("title") &&
@@ -704,6 +706,32 @@ export function classifyRequestKind(
   ) {
     return "title";
   }
+
+  // OpenCode agents — distinct per-agent system prompts carry the identity.
+  // Title agent: "You are a title generator. You output ONLY a thread title."
+  if (
+    s.includes("you are a title generator") ||
+    last.includes("generate a title for this conversation")
+  ) {
+    return "title";
+  }
+  // Compaction agent: "You are an anchored context summarization assistant…"
+  if (
+    s.includes("you are an anchored context summarization") ||
+    (last.includes("## objective") &&
+      last.includes("## important details") &&
+      last.includes("## work state"))
+  ) {
+    return "compact";
+  }
+  // Explore agent (file search): "You are a file search specialist…"
+  // Matches OpenCode's explore agent without requiring cc_is_subagent.
+  if (s.includes("you are a file search specialist")) return "search";
+  // Summary agent: "Summarize what was done in this conversation."
+  if (s.includes("summarize what was done in this conversation")) {
+    return "compact";
+  }
+
   if (s.includes("quota") || s.includes("usage limit")) return "quota";
   return "main";
 }
@@ -754,17 +782,15 @@ function parseRequestBody(events: TraceEvent[]): {
       }
     }
   }
-  // Classify from the top-level system prompt (billing header + utility-agent
-  // identity live here) plus the LAST message's text — recap/compaction run on
-  // the main model and are only identifiable by their final instruction.
-  // Using the last message ONLY (not the whole transcript) avoids false
-  // positives from prior summaries echoed back into context.
   const lastMessage = asRecord(messages[messages.length - 1]);
   const lastMessageText = lastMessage
     ? lastMessagePromptText(lastMessage.content)
     : "";
-  const kind = classifyRequestKind(systemText, lastMessageText);
 
+  // Accumulate system messages from the messages array — OpenAI/DeepSeek format
+  // carries system instructions inside role:"system" entries rather than a
+  // top-level system field. Process these BEFORE classification so the
+  // classifier can see provider-agnostic markers (title, compact, search).
   for (const message of messages) {
     const msg = asRecord(message);
     if (!msg) continue;
@@ -789,6 +815,12 @@ function parseRequestBody(events: TraceEvent[]): {
       }
     }
   }
+
+  // Classify now that we have both the top-level system field (Anthropic) and
+  // any role:"system" messages from the array (OpenAI/DeepSeek). Using the last
+  // message ONLY (not the whole transcript) avoids false positives from prior
+  // summaries echoed back into context.
+  const kind = classifyRequestKind(systemText, lastMessageText);
 
   // Tools: Anthropic uses record.tools, Bedrock uses record.toolConfig.tools
   let tools = asArray(record.tools);
