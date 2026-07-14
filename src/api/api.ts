@@ -89,6 +89,11 @@ export function handleApi(
     return true;
   }
 
+  if (pathname === "/kinds") {
+    if (requireGet(req, res)) writeJson(res, 200, store.kindBreakdown());
+    return true;
+  }
+
   if (pathname === "/tools") {
     if (requireGet(req, res)) writeJson(res, 200, store.globalToolUsage());
     return true;

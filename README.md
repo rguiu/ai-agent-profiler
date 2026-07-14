@@ -52,6 +52,7 @@ the LLM.
   tokens, duplicated totals).
 - **Prompt-cache awareness** — captures provider cache-hit tokens so findings reflect real cost.
 - **Message-stack breakdown** — per-request context split by role (system/user/assistant/tool).
+- **Request-kind classification** — labels each call (user turn, file-search subagent, recap, compaction, title-gen…) and breaks out the cost of non-user, agent-initiated traffic. See [`docs/REQUEST-KINDS.md`](docs/REQUEST-KINDS.md).
 - **Command-usage analysis** — which shell programs run through `bash`, how often, by category.
 - **Recommendations** — actionable findings per session (repeated reads, redundant calls,
   high amplification, context duplication, inefficient search→read).
@@ -311,6 +312,7 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`VISION.md`](VISION.md) — why the project exists.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
+- [`docs/REQUEST-KINDS.md`](docs/REQUEST-KINDS.md) — how requests are classified (user turn vs subagent/recap/compaction/title) and the detection signals.
 - [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md) — what we tried to optimize, why it doesn't beat the cache, and where gains might still exist.
 - [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md) — per-strategy catalogue and cache-safety table.
 - [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
