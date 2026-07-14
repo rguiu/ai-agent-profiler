@@ -8,6 +8,16 @@
 //
 // This is provider-agnostic: it works from the three token buckets each request
 // reports (fresh input, cached read, cache write) plus timing.
+//
+// When prefix-fingerprint data is available (see
+// docs/PREFIX-FINGERPRINTING.md and prefix-stability.ts), attribution becomes
+// deterministic instead of gap-only guesswork: a "rewrite" transition names
+// the broken segment; an "append-only" transition beyond the TTL is a real
+// expiry; anything else is an unexplained cache miss. Callers that don't have
+// prefix data (or pass none) keep the previous gap-based heuristic — fully
+// backward-compatible.
+
+import type { PrefixTransition } from "./prefix-stability.js";
 
 export interface RegenPoint {
   id: string;
@@ -33,8 +43,22 @@ export interface RegenResult {
 const EXCESS_FLOOR = 5000;
 const HIGH_FLOOR = 50000;
 // Idle gap (ms) beyond which the provider cache has likely expired (Anthropic
-// documents "at least 5 minutes" for ephemeral entries).
+// documents "at least 5 minutes" for ephemeral entries). Used as a fallback
+// when the caller doesn't pass a real effective TTL via `RegenOptions.ttlMs`.
 const TTL_GAP_MS = 5 * 60 * 1000;
+
+// Optional per-request context that sharpens attribution beyond the
+// gap-only heuristic. Both fields are optional so existing callers that
+// don't have this data keep working unchanged.
+export interface RegenOptions {
+  // Effective cache TTL (ms) for the provider/session; defaults to the
+  // 5-minute floor when omitted.
+  ttlMs?: number;
+  // The prefix-fingerprint transition into `cur` (see prefix-stability.ts).
+  // When provided, attribution becomes deterministic instead of guessed
+  // from the idle gap (closes #10 — see docs/PREFIX-FINGERPRINTING.md).
+  prefixTransition?: PrefixTransition;
+}
 
 function parseTs(s: string | null): number | null {
   if (!s) return null;
@@ -47,7 +71,9 @@ function parseTs(s: string | null): number | null {
 export function classifyRegen(
   prev: RegenPoint | null,
   cur: RegenPoint,
+  options?: RegenOptions,
 ): RegenResult {
+  const ttlGapMs = options?.ttlMs ?? TTL_GAP_MS;
   const fresh = cur.inputTokens ?? 0;
   const write = cur.cacheCreationInputTokens ?? 0;
   const read = cur.cachedInputTokens ?? 0;
@@ -85,15 +111,14 @@ export function classifyRegen(
   const curTs = parseTs(cur.startedAt);
   const gap = prevTs !== null && curTs !== null ? curTs - prevTs : null;
 
-  let reason: string;
-  if (gap !== null && gap >= TTL_GAP_MS) {
-    const mins = Math.round(gap / 60000);
-    reason = `cache expired after ~${mins} min idle — prefix recomputed (${fmt(excess)} tokens re-billed)`;
-  } else if (write > 0 && write >= recomputed * 0.5) {
-    reason = `prompt prefix changed — ${fmt(write)} tokens written to cache beyond new content`;
-  } else {
-    reason = `${fmt(excess)} tokens recomputed beyond this turn's new content (cache miss on already-sent context)`;
-  }
+  const reason = attributeReason(
+    options?.prefixTransition,
+    gap,
+    ttlGapMs,
+    write,
+    recomputed,
+    excess,
+  );
 
   return {
     cold: true,
@@ -103,15 +128,58 @@ export function classifyRegen(
   };
 }
 
+// Deterministic cause attribution when a prefix transition is available;
+// falls back to the previous gap-only heuristic otherwise. Per
+// docs/PREFIX-FINGERPRINTING.md's table:
+//   rewrite            + cache-write -> recap / prefix-edit (names the segment)
+//   append-only        + gap > ttl   -> TTL expiry (unavoidable)
+//   append-only        + gap <= ttl  -> cache miss (investigate)
+function attributeReason(
+  prefixTransition: PrefixTransition | undefined,
+  gap: number | null,
+  ttlGapMs: number,
+  write: number,
+  recomputed: number,
+  excess: number,
+): string {
+  if (prefixTransition?.kind === "rewrite") {
+    return `prefix rewritten at ${prefixTransition.brokenSegment} (recap or prefix-edit) — ${fmt(write || excess)} tokens re-billed`;
+  }
+  if (prefixTransition?.kind === "append-only") {
+    if (gap !== null && gap >= ttlGapMs) {
+      const mins = Math.round(gap / 60000);
+      return `cache expired after ~${mins} min idle — prefix recomputed (${fmt(excess)} tokens re-billed)`;
+    }
+    return `${fmt(excess)} tokens recomputed beyond this turn's new content (cache miss on already-sent context)`;
+  }
+
+  // No prefix data available — fall back to the gap-only heuristic.
+  if (gap !== null && gap >= ttlGapMs) {
+    const mins = Math.round(gap / 60000);
+    return `cache expired after ~${mins} min idle — prefix recomputed (${fmt(excess)} tokens re-billed)`;
+  }
+  if (write > 0 && write >= recomputed * 0.5) {
+    return `prompt prefix changed — ${fmt(write)} tokens written to cache beyond new content`;
+  }
+  return `${fmt(excess)} tokens recomputed beyond this turn's new content (cache miss on already-sent context)`;
+}
+
 // Classify a whole ordered timeline; returns a map of request id → result for
-// the requests that are cold regenerations (others omitted).
+// the requests that are cold regenerations (others omitted). `prefixTransitions`
+// is an optional map of request id → PrefixTransition (see
+// analyzePrefixStability), keyed the same as `options.prefixTransition` would
+// be per-point.
 export function detectRegenerations(
   points: RegenPoint[],
+  options?: RegenOptions & {
+    prefixTransitions?: Map<string, PrefixTransition>;
+  },
 ): Map<string, RegenResult> {
   const out = new Map<string, RegenResult>();
   let prev: RegenPoint | null = null;
   for (const p of points) {
-    const r = classifyRegen(prev, p);
+    const prefixTransition = options?.prefixTransitions?.get(p.id);
+    const r = classifyRegen(prev, p, { ...options, prefixTransition });
     if (r.cold) out.set(p.id, r);
     // Only advance `prev` for requests that actually carry token metrics, so a
     // metric-less request (unparsed) doesn't reset the baseline.

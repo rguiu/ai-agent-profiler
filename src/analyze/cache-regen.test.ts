@@ -72,6 +72,82 @@ describe("classifyRegen", () => {
   });
 });
 
+describe("classifyRegen with prefix transition data", () => {
+  it("attributes a rewrite transition to recap/prefix-edit and names the segment", () => {
+    const prev = pt({
+      startedAt: "2026-07-12T10:00:00Z",
+      cachedInputTokens: 40000,
+      inputTokens: 300,
+    });
+    const cur = pt({
+      startedAt: "2026-07-12T10:00:10Z",
+      cacheCreationInputTokens: 40000,
+      cachedInputTokens: 0,
+      inputTokens: 300,
+    });
+    const r = classifyRegen(prev, cur, {
+      prefixTransition: { kind: "rewrite", brokenSegment: "tools" },
+    });
+    expect(r.cold).toBe(true);
+    expect(r.reason).toMatch(/tools/);
+    expect(r.reason).toMatch(/recap or prefix-edit/);
+  });
+
+  it("attributes an append-only transition beyond the TTL to TTL expiry", () => {
+    const prev = pt({
+      startedAt: "2026-07-12T10:00:00Z",
+      cachedInputTokens: 120000,
+      inputTokens: 300,
+    });
+    const cur = pt({
+      startedAt: "2026-07-12T10:20:00Z",
+      cacheCreationInputTokens: 120000,
+      inputTokens: 300,
+    });
+    const r = classifyRegen(prev, cur, {
+      prefixTransition: { kind: "append-only" },
+    });
+    expect(r.cold).toBe(true);
+    expect(r.reason).toMatch(/idle/);
+  });
+
+  it("attributes an append-only transition within the TTL to a plain cache miss", () => {
+    const prev = pt({
+      startedAt: "2026-07-12T10:00:00Z",
+      cachedInputTokens: 40000,
+      inputTokens: 300,
+    });
+    const cur = pt({
+      startedAt: "2026-07-12T10:00:10Z",
+      cacheCreationInputTokens: 40000,
+      cachedInputTokens: 0,
+      inputTokens: 300,
+    });
+    const r = classifyRegen(prev, cur, {
+      prefixTransition: { kind: "append-only" },
+    });
+    expect(r.cold).toBe(true);
+    expect(r.reason).toMatch(/cache miss/);
+    expect(r.reason).not.toMatch(/idle/);
+  });
+
+  it("falls back to the gap-only heuristic when no prefix transition is passed", () => {
+    const prev = pt({
+      startedAt: "2026-07-12T10:00:00Z",
+      cachedInputTokens: 120000,
+      inputTokens: 300,
+    });
+    const cur = pt({
+      startedAt: "2026-07-12T10:20:00Z",
+      cacheCreationInputTokens: 120000,
+      inputTokens: 300,
+    });
+    const r = classifyRegen(prev, cur);
+    expect(r.cold).toBe(true);
+    expect(r.reason).toMatch(/idle/);
+  });
+});
+
 describe("detectRegenerations", () => {
   it("returns only the cold turns, keyed by id", () => {
     const points: RegenPoint[] = [
@@ -98,5 +174,24 @@ describe("detectRegenerations", () => {
     ];
     const map = detectRegenerations(points);
     expect(map.has("b")).toBe(false);
+  });
+
+  it("uses the prefixTransitions map to attribute each regeneration deterministically", () => {
+    const points: RegenPoint[] = [
+      pt({ id: "a", cachedInputTokens: 40000, inputTokens: 300 }),
+      pt({
+        id: "b",
+        startedAt: "2026-07-12T10:00:10Z",
+        cacheCreationInputTokens: 40000,
+        cachedInputTokens: 0,
+        inputTokens: 300,
+      }),
+    ];
+    const prefixTransitions = new Map<
+      string,
+      { kind: "rewrite"; brokenSegment: "system" }
+    >([["b", { kind: "rewrite", brokenSegment: "system" }]]);
+    const map = detectRegenerations(points, { prefixTransitions });
+    expect(map.get("b")?.reason).toMatch(/system/);
   });
 });

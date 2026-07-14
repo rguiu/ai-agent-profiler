@@ -8,6 +8,7 @@ export {
 export {
   classifyRegen,
   detectRegenerations,
+  type RegenOptions,
   type RegenPoint,
   type RegenResult,
   type RegenSeverity,
