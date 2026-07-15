@@ -736,9 +736,10 @@ function messageStackHtml(stack, requestId) {
       const cls = ["msg", isNew ? "msg-is-new" : "", isFocus ? "msg-focus" : ""]
         .filter(Boolean)
         .join(" ");
-      // Auto-open the focused (last user) message and any new/large one; keep
-      // the long tail of unchanged tool-results collapsed.
-      const open = isFocus || isNew || big ? " open" : "";
+      // Auto-open only the focused (last user) message and new/changed ones.
+      // Large messages get a flag but stay collapsed (they're often unchanged
+      // context, not what you're looking for).
+      const open = isFocus || isNew ? " open" : "";
       // The preview is clipped at 600 chars — offer a lazy "show full" fetch
       // when it's at (or near) that cap.
       const clipped = (m.preview || "").length >= 600;
