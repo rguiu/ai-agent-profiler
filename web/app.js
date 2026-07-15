@@ -363,9 +363,14 @@ const PAGE_SIZE = 50;
 function paginatedRequestsTable(requests, page, regenerations) {
   if (!requests.length) return `<p class="empty">No requests.</p>`;
   const regen = regenerations || {};
-  const totalPages = Math.ceil(requests.length / PAGE_SIZE);
+  // Display newest-first. `requests` arrives in ascending (chronological) order
+  // because the analyzers need that; reverse only for the table. `seq` still
+  // reflects true chronological position (1 = first request of the session).
+  const ordered = requests.slice().reverse();
+  const total = requests.length;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
   const start = page * PAGE_SIZE;
-  const pageItems = requests.slice(start, start + PAGE_SIZE);
+  const pageItems = ordered.slice(start, start + PAGE_SIZE);
   const rows = pageItems
     .map((r, idx) => {
       const totalIn = (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
@@ -384,7 +389,7 @@ function paginatedRequestsTable(requests, page, regenerations) {
         ? `<span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
         : "";
       const kaCell = ka ? '<span class="ka-badge">♻ keep-alive</span>' : "";
-      const seq = start + idx + 1;
+      const seq = total - (start + idx);
       return `<tr${rowCls}>
       <td class="num muted">${seq}</td>
       <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a>${kaCell ? ` ${kaCell}` : ""}</td>
