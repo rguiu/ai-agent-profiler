@@ -768,23 +768,51 @@ document.addEventListener("click", (e) => {
     .forEach((d) => (d.open = open));
 });
 
-// "show full" — lazily fetch the complete text of one clipped message.
+// "show full" / "show less" — toggle between the clipped preview and the full
+// message text. Full text is fetched once (lazily) then cached on the element,
+// so subsequent toggles are instant.
 document.addEventListener("click", (e) => {
   const btn = e.target.closest && e.target.closest(".msg-full[data-full-req]");
   if (!btn) return;
   e.preventDefault();
-  const reqId = btn.dataset.fullReq;
   const idx = btn.dataset.fullIdx;
   const body = btn.parentElement.querySelector(
     `.msg-body[data-msg-idx="${idx}"]`,
   );
+  if (!body) return;
+
+  // Currently showing full → collapse back to the preview.
+  if (body.dataset.expanded === "1") {
+    body.textContent = body.dataset.preview ?? "";
+    body.dataset.expanded = "0";
+    btn.textContent = "show full ↓";
+    return;
+  }
+
+  // Already fetched once → just re-expand from cache.
+  if (body.dataset.full !== undefined) {
+    if (body.dataset.preview === undefined)
+      body.dataset.preview = body.textContent;
+    body.textContent = body.dataset.full;
+    body.dataset.expanded = "1";
+    btn.textContent = "show less ↑";
+    return;
+  }
+
+  // First time → fetch, cache, expand.
+  const reqId = btn.dataset.fullReq;
   btn.disabled = true;
   btn.textContent = "loading…";
   fetch(`/requests/${encodeURIComponent(reqId)}/messages/${idx}`)
     .then((r) => r.json())
     .then((d) => {
-      if (body) body.textContent = d.text || "(no text content)";
-      btn.remove();
+      const full = d.text || "(no text content)";
+      body.dataset.preview = body.textContent;
+      body.dataset.full = full;
+      body.textContent = full;
+      body.dataset.expanded = "1";
+      btn.disabled = false;
+      btn.textContent = "show less ↑";
     })
     .catch((err) => {
       btn.disabled = false;
