@@ -912,6 +912,9 @@ export interface MessageSummary {
   toolCallNames: string[];
   toolResultFor: string | null;
   preview: string;
+  // Content hash (role + text), so the UI can diff this request's messages
+  // against the previous request's and flag which ones are new/rewritten.
+  hash: string;
 }
 
 export interface RoleTotal {
@@ -929,6 +932,12 @@ export interface MessageStack {
   tools: { count: number; bytes: number; tokens: number };
   totalsByRole: RoleTotal[];
   messages: MessageSummary[];
+  // What triggered this request (recap/compact/main/…), so the UI can orient
+  // the reader before they scroll a few hundred messages.
+  kind: RequestKind;
+  // Index of the last non-tool-result user message — the actual instruction on
+  // a recap/compact turn. The UI focuses/expands this. -1 if none.
+  lastUserIndex: number;
 }
 
 // Break a captured request body into its per-message composition (role, size,
@@ -943,6 +952,8 @@ export function summarizeMessages(events: TraceEvent[]): MessageStack {
     tools: { count: 0, bytes: 0, tokens: 0 },
     totalsByRole: [],
     messages: [],
+    kind: "unknown",
+    lastUserIndex: -1,
   };
 
   const record = parseRequestJson(events);
@@ -998,6 +1009,7 @@ export function summarizeMessages(events: TraceEvent[]): MessageStack {
     acc.tokens += tokens;
     totals.set(role, acc);
 
+    const text = extractResultText(msg.content).replace(/\s+/g, " ").trim();
     return {
       index,
       role,
@@ -1006,12 +1018,26 @@ export function summarizeMessages(events: TraceEvent[]): MessageStack {
       hasToolCalls: toolCallNames.length > 0,
       toolCallNames,
       toolResultFor: toolResultFor ?? null,
-      preview: extractResultText(msg.content)
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 200),
+      preview: text.slice(0, 600),
+      hash: fnv1a(`${role}:${text}`),
     };
   });
+
+  // Last non-tool-result user message = the actual instruction on a recap/
+  // compact turn (the thing the reader most wants to see).
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m && m.role === "user" && !m.toolResultFor) {
+      lastUserIndex = m.index;
+      break;
+    }
+  }
+
+  const { systemText: fullSystem } = extractPrefixSegments(record);
+  const lastUserText =
+    lastUserIndex >= 0 ? (messages[lastUserIndex]?.preview ?? "") : "";
+  const kind = classifyRequestKind(fullSystem, lastUserText);
 
   return {
     model: asString(record.model),
@@ -1021,6 +1047,8 @@ export function summarizeMessages(events: TraceEvent[]): MessageStack {
     tools,
     totalsByRole: [...totals.values()],
     messages,
+    kind,
+    lastUserIndex,
   };
 }
 

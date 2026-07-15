@@ -174,7 +174,15 @@ export function handleApi(
       return true;
     }
     const events = readEvents(detail.trace_file) as TraceEvent[];
-    writeJson(res, 200, summarizeMessages(events));
+    const stack = summarizeMessages(events);
+    // Attach the previous request's per-message hashes (same session, ordered by
+    // started_at) so the UI can flag which messages are new/rewritten vs the
+    // prior turn — the key signal for understanding a recap/compaction.
+    const prefixes = store.getSessionPrefixes(detail.session_id);
+    const pos = prefixes.findIndex((p) => p.request_id === id);
+    const previousMessageHashes =
+      pos > 0 ? (prefixes[pos - 1]?.message_hashes ?? null) : null;
+    writeJson(res, 200, { ...stack, previousMessageHashes });
     return true;
   }
 

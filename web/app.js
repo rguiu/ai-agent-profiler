@@ -634,6 +634,7 @@ async function requestDetail(id) {
     </div>
     <h2>Tool calls (${toolCalls.length})</h2>
     ${toolCallsHtml(toolCalls)}
+    ${kindBanner(stack, r)}
     <h2>Context sent (${stack.messageCount} messages)</h2>
     ${messageStackHtml(stack)}
     <h2>Response</h2>
@@ -647,6 +648,36 @@ async function requestDetail(id) {
         })
         .join("")}
     </div>`;
+}
+
+// Full-sentence descriptions of request kinds for the orientation banner
+// (kindBadge above uses the short KIND_LABELS for chips).
+const KIND_DESCRIPTIONS = {
+  recap: "Recap — a mid-session catch-up summary the client injected",
+  compact: "Compaction — full conversation history summarised/rewritten",
+  title: "Title generation (background small/fast model)",
+  quota: "Quota / usage-limit check",
+  search: "File-search subagent",
+  guide: "Docs/guide subagent",
+  webfetch: "Web-fetch subagent",
+  subagent: "Subagent call",
+  main: "Main interactive turn",
+  unknown: "Unclassified",
+};
+
+// Orientation banner: what kind of request this is, so the reader knows what
+// they're looking at before scrolling hundreds of messages.
+function kindBanner(stack, r) {
+  const kind = (stack && stack.kind) || r.kind || "unknown";
+  const label = KIND_DESCRIPTIONS[kind] || kind;
+  const write = r.cache_creation_input_tokens
+    ? ` This turn wrote <span class="cache-miss">${num(r.cache_creation_input_tokens)}</span> tokens to cache (prefix changed).`
+    : "";
+  const special = kind === "recap" || kind === "compact";
+  return `<div class="kind-banner${special ? " kind-banner-hot" : ""}">
+    <span class="kind-badge kind-${esc(kind)}">${esc(kind)}</span>
+    <span>${esc(label)}.${write}</span>
+  </div>`;
 }
 
 function messageStackHtml(stack) {
@@ -674,6 +705,15 @@ function messageStackHtml(stack) {
       return `<div class="bar-row"><span class="bar-label mono">${esc(s.label)}</span><span class="bar-track"><span class="bar-fill role-${esc(s.role)}" style="width:${pct}%"></span></span><span class="bar-val num">${fmtBytes(s.bytes)} · ~${num(s.tokens)} tok</span></div>`;
     })
     .join("");
+
+  // Diff vs previous request: a message is "new" if its content hash wasn't
+  // present in the previous request's message set. Matched by hash (set), not
+  // index, so it's robust to the system-message offset in the two sources.
+  const prevSet = new Set(stack.previousMessageHashes || []);
+  const hasPrev = Array.isArray(stack.previousMessageHashes);
+  // The biggest few messages by tokens — the ones worth jumping to.
+  const maxTokens = Math.max(1, ...stack.messages.map((m) => m.tokens));
+
   const rows = stack.messages
     .map((m) => {
       const calls = m.toolCallNames.length
@@ -682,11 +722,45 @@ function messageStackHtml(stack) {
       const result = m.toolResultFor
         ? ` <span class="muted">⇐ tool result</span>`
         : "";
-      return `<details class="msg"><summary><span class="pill role-${esc(m.role)}">${esc(m.role)}</span> <span class="num mono">${fmtBytes(m.bytes)} · ~${num(m.tokens)} tok</span>${calls}${result}</summary><div class="mono msg-body">${esc(m.preview) || '<span class="muted">(no text content)</span>'}</div></details>`;
+      const isNew = hasPrev && m.hash && !prevSet.has(m.hash);
+      const newFlag = isNew ? ` <span class="msg-new">● new</span>` : "";
+      const isFocus = m.index === stack.lastUserIndex;
+      const big = m.tokens >= maxTokens * 0.5 && m.tokens > 2000;
+      const bigFlag = big ? ` <span class="msg-big">▲ large</span>` : "";
+      const cls = ["msg", isNew ? "msg-is-new" : "", isFocus ? "msg-focus" : ""]
+        .filter(Boolean)
+        .join(" ");
+      // Auto-open the focused (last user) message and any new/large one; keep
+      // the long tail of unchanged tool-results collapsed.
+      const open = isFocus || isNew || big ? " open" : "";
+      return `<details class="${cls}"${open} data-tokens="${m.tokens}"><summary><span class="msg-idx muted mono">#${m.index}</span> <span class="pill role-${esc(m.role)}">${esc(m.role)}</span> <span class="num mono">${fmtBytes(m.bytes)} · ~${num(m.tokens)} tok</span>${calls}${result}${newFlag}${bigFlag}${isFocus ? ' <span class="msg-focus-tag">← last user message</span>' : ""}</summary><div class="mono msg-body">${esc(m.preview) || '<span class="muted">(no text content)</span>'}</div></details>`;
     })
     .join("");
-  return `<div class="bars">${bars}</div><div class="msg-list">${rows}</div>`;
+
+  const newCount = hasPrev
+    ? stack.messages.filter((m) => m.hash && !prevSet.has(m.hash)).length
+    : null;
+  const diffNote = hasPrev
+    ? `<span class="muted">${newCount} new/changed vs previous request</span>`
+    : `<span class="muted">no previous request to diff against</span>`;
+  const controls = `<div class="msg-controls">
+      <button class="msg-ctl" data-msg-action="expand">Expand all</button>
+      <button class="msg-ctl" data-msg-action="collapse">Collapse all</button>
+      ${diffNote}
+    </div>`;
+
+  return `<div class="bars">${bars}</div>${controls}<div class="msg-list">${rows}</div>`;
 }
+
+// Expand/collapse-all buttons (delegated).
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest && e.target.closest(".msg-ctl[data-msg-action]");
+  if (!btn) return;
+  const open = btn.dataset.msgAction === "expand";
+  document
+    .querySelectorAll(".msg-list details.msg")
+    .forEach((d) => (d.open = open));
+});
 
 function toolCallsHtml(calls) {
   if (!calls.length)

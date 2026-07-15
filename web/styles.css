@@ -750,3 +750,61 @@ tr.keepalive:hover td {
 .row-actions {
   white-space: nowrap;
 }
+
+/* Request-detail: orientation banner + message-diff affordances */
+.kind-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin: 12px 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+}
+.kind-banner-hot {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel-2));
+}
+.msg-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+.msg-ctl {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.msg-ctl:hover {
+  border-color: var(--accent);
+}
+.msg-idx {
+  font-size: 11px;
+}
+.msg-new {
+  color: var(--good);
+  font-size: 11px;
+  font-weight: 600;
+}
+.msg-big {
+  color: var(--warn);
+  font-size: 11px;
+}
+.msg-focus-tag {
+  color: var(--accent);
+  font-size: 11px;
+}
+.msg.msg-is-new {
+  border-left: 2px solid var(--good);
+}
+.msg.msg-focus {
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}

@@ -423,6 +423,34 @@ describe("summarizeMessages", () => {
     expect(tool?.toolResultFor).toBe("c1");
   });
 
+  it("classifies kind, focuses the last user message, and hashes messages", () => {
+    const stack = summarizeMessages(
+      requestTrace({
+        model: "claude-opus-4-8",
+        messages: [
+          { role: "user", content: "do a thing" },
+          { role: "assistant", content: "ok" },
+          {
+            role: "user",
+            content:
+              "The user stepped away. Provide a recap of what you were doing.",
+          },
+        ],
+      }),
+    );
+    expect(stack.kind).toBe("recap");
+    // lastUserIndex points at the recap instruction (index 2), not the earlier
+    // user message.
+    expect(stack.lastUserIndex).toBe(2);
+    // Every message carries a stable content hash; identical role+text hash
+    // equally, distinct text differs.
+    const hashes = stack.messages.map((m) => m.hash);
+    expect(hashes.every((h) => typeof h === "string" && h.length > 0)).toBe(
+      true,
+    );
+    expect(new Set(hashes).size).toBe(3);
+  });
+
   it("treats Anthropic top-level system as a synthetic message", () => {
     const stack = summarizeMessages(
       requestTrace({
