@@ -86,6 +86,38 @@ export function handleApi(
       writeJson(res, 200, { deleted: true });
       return true;
     }
+    if (req.method === "PATCH") {
+      const id = extractId(pathname, "/sessions/");
+      if (!id) {
+        writeError(res, 404, "session id required");
+        return true;
+      }
+      const s = store.resolveSessionId(id);
+      if (!s) {
+        writeError(res, 404, `session "${id}" not found`);
+        return true;
+      }
+      let body = "";
+      req.on("data", (chunk: Buffer) => {
+        body += chunk.toString("utf8");
+      });
+      req.on("end", () => {
+        let name: string | null;
+        try {
+          const parsed = JSON.parse(body || "{}") as { name?: unknown };
+          name = typeof parsed.name === "string" ? parsed.name : null;
+        } catch {
+          writeError(res, 400, "invalid JSON body");
+          return;
+        }
+        store.setSessionName(s, name);
+        writeJson(res, 200, {
+          id: s,
+          name: name && name.trim() ? name.trim() : null,
+        });
+      });
+      return true;
+    }
     if (!requireGet(req, res)) return true;
     const id = extractId(pathname, "/sessions/");
     if (!id) {

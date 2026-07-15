@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at    TEXT,
   first_seen_at TEXT,
   last_seen_at  TEXT,
-  meta          TEXT
+  meta          TEXT,
+  name          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS requests (
@@ -142,6 +143,7 @@ export interface SessionSummary {
   cost: number;
   tool_calls: number;
   meta: Record<string, string> | null;
+  name: string | null;
 }
 
 export interface SessionRow {
@@ -153,6 +155,7 @@ export interface SessionRow {
   first_seen_at: string | null;
   last_seen_at: string | null;
   meta: Record<string, string> | null;
+  name: string | null;
 }
 
 export interface SessionRequest {
@@ -436,7 +439,7 @@ export class Store {
       },
     );
     this.listSessionsStmt = db.prepare(`
-      SELECT s.id, s.client, s.cwd, s.repo, s.started_at, s.first_seen_at, s.last_seen_at, s.meta,
+      SELECT s.id, s.client, s.cwd, s.repo, s.started_at, s.first_seen_at, s.last_seen_at, s.meta, s.name,
              COUNT(r.id) AS request_count,
              COALESCE(SUM(m.input_tokens), 0) + COALESCE(SUM(m.cached_input_tokens), 0) AS input_tokens,
              COALESCE(SUM(m.cached_input_tokens), 0) AS cached_input_tokens,
@@ -859,6 +862,16 @@ export class Store {
     }>;
   }
 
+  // Set (or clear, with null/empty) a session's display name. Returns false if
+  // no session matched the id.
+  setSessionName(id: string, name: string | null): boolean {
+    const value = name && name.trim() ? name.trim() : null;
+    const info = this.db
+      .prepare("UPDATE sessions SET name = ? WHERE id = ?")
+      .run(value, id);
+    return info.changes > 0;
+  }
+
   deleteSession(id: string): void {
     const txn = this.db.transaction((sid: string) => {
       this.db
@@ -951,6 +964,7 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "kind", "TEXT");
   ensureColumn(db, "requests", "keep_alive", "INTEGER");
   ensureColumn(db, "sessions", "meta", "TEXT");
+  ensureColumn(db, "sessions", "name", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,
   // otherwise pre-existing databases fail before ensureColumn can run.
   db.exec(

@@ -183,6 +183,26 @@ describe("Store", () => {
     expect(remaining[0]?.c).toBe(0);
   });
 
+  it("sets, trims, clears, and lists a session name", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({ id: "s1", startedAt: "t" });
+
+    expect(store.setSessionName("s1", "  My session  ")).toBe(true);
+    expect(store.getSession("s1")?.session.name).toBe("My session");
+    expect(store.listSessions().find((s) => s.id === "s1")?.name).toBe(
+      "My session",
+    );
+
+    // Empty/whitespace clears the name.
+    store.setSessionName("s1", "   ");
+    expect(store.getSession("s1")?.session.name).toBeNull();
+
+    // Unknown id returns false.
+    expect(store.setSessionName("nope", "x")).toBe(false);
+    store.close();
+  });
+
   it("finds session ids by metadata", () => {
     const dir = tmpDir();
     const store = openStore(dir);

@@ -14,6 +14,7 @@ function makeDetail(): SessionDetail {
       first_seen_at: null,
       last_seen_at: null,
       meta: null,
+      name: null,
     },
     requests: [
       {

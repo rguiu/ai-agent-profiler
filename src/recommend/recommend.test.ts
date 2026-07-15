@@ -13,6 +13,7 @@ function detail(overrides: Partial<SessionDetail["analysis"]>): SessionDetail {
       first_seen_at: null,
       last_seen_at: null,
       meta: null,
+      name: null,
     },
     requests: [],
     analysis: {

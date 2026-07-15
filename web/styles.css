@@ -726,3 +726,27 @@ tr.keepalive:hover td {
   font-size: 13px;
   padding: 0 4px;
 }
+.rename-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: 1.4;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.rename-btn:hover {
+  color: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+}
+.rename-btn.del-sm {
+  font-size: 12px;
+  padding: 0 4px;
+}
+.row-actions {
+  white-space: nowrap;
+}

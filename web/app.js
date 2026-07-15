@@ -80,6 +80,28 @@ function deleteBtn(url, label, small) {
   return `<button class="del-btn${small ? " del-sm" : ""}" onclick="event.stopPropagation();(async()=>{try{if(await window._deleteResource('${esc(url)}','${esc(label)}'))location.reload();}catch(e){alert(e.message)}})()" title="Delete ${esc(label)}">×</button>`;
 }
 
+// Prompt for a session name and PATCH it, then reload. Pre-fills the current
+// name so this doubles as rename/clear (empty input clears the name).
+async function renameSession(id, current) {
+  const next = window.prompt(
+    "Session name (leave empty to clear):",
+    current || "",
+  );
+  if (next === null) return; // cancelled
+  const res = await fetch(`/sessions/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: next }),
+  });
+  if (!res.ok) throw new Error(`${res.status} renaming session`);
+  location.reload();
+}
+window._renameSession = renameSession;
+
+function renameBtn(id, current, small) {
+  return `<button class="rename-btn${small ? " del-sm" : ""}" onclick="event.stopPropagation();(async()=>{try{await window._renameSession('${esc(id)}',${JSON.stringify(current || "")})}catch(e){alert(e.message)}})()" title="Rename session">✎</button>`;
+}
+
 function b64ToText(b64) {
   try {
     const bin = atob(b64);
@@ -277,8 +299,11 @@ function sessionsTable(sessions) {
           s.cached_input_tokens > 0 && s.input_tokens > 0
             ? ` <span class="muted">(${Math.round((s.cached_input_tokens / s.input_tokens) * 100)}% cached)</span>`
             : "";
+        const label = s.name
+          ? `${esc(s.name)} <span class="muted mono">${shortId(s.id)}</span>`
+          : shortId(s.id);
         return `<tr>
-      <td><a class="mono" href="#/sessions/${encodeURIComponent(s.id)}">${shortId(s.id)}</a></td>
+      <td><a class="mono" href="#/sessions/${encodeURIComponent(s.id)}">${label}</a></td>
       <td>${esc((s.meta && s.meta.armada_node) || s.client) || "<span class='muted'>—</span>"}</td>
       <td class="mono muted">${esc(s.cwd) || "—"}</td>
       <td class="num">${num(s.request_count)}</td>
@@ -287,7 +312,7 @@ function sessionsTable(sessions) {
       <td class="num">${num(s.tool_calls)}</td>
       <td class="num">${cost(s.cost)}</td>
       <td class="mono muted">${esc((s.last_seen_at || "").replace("T", " ").slice(0, 19))}</td>
-      <td>${deleteBtn(`/sessions/${encodeURIComponent(s.id)}`, `session ${shortId(s.id)}`, true)}</td>
+      <td class="row-actions">${renameBtn(s.id, s.name, true)}${deleteBtn(`/sessions/${encodeURIComponent(s.id)}`, `session ${shortId(s.id)}`, true)}</td>
     </tr>`;
       })
       .join("")}
@@ -423,8 +448,9 @@ async function sessionDetail(id) {
 
   app.innerHTML = `
     <div class="crumb"><a href="#/sessions">Sessions</a> / ${shortId(session.id)}</div>
-    <h2>Session ${shortId(session.id)} ${deleteBtn(`/sessions/${encodeURIComponent(session.id)}`, `session ${shortId(session.id)}`, false)}</h2>
+    <h2>${session.name ? esc(session.name) : `Session ${shortId(session.id)}`} ${renameBtn(session.id, session.name, false)}${deleteBtn(`/sessions/${encodeURIComponent(session.id)}`, `session ${shortId(session.id)}`, false)}</h2>
     <div class="kv">
+      <div class="k">name</div><div class="v">${session.name ? esc(session.name) : "<span class='muted'>—</span>"}</div>
       <div class="k">id</div><div class="v">${esc(session.id)}</div>
       <div class="k">client</div><div class="v">${esc(session.client) || "—"}</div>
       <div class="k">cwd</div><div class="v">${esc(session.cwd) || "—"}</div>
