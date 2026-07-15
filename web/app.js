@@ -796,6 +796,9 @@ async function introspectionDetail(id) {
   const recs = report?.recommendations || [];
   const tools = report?.tool_insights?.top_tools || report?.tool_insights || [];
   const cp = report?.cost_profile || {};
+  const up = report?.usage_profile || {};
+  const sh = report?.session_highlights || [];
+  const amp = report?.tool_insights?.amplification_concerns || [];
 
   function sevClass(s) {
     if (s === "high") return "high";
@@ -822,6 +825,18 @@ async function introspectionDetail(id) {
         : ""
     }
     ${
+      up.total_requests != null
+        ? `
+    <h2>Usage</h2>
+    <div class="cards">
+      <div class="card"><div class="label">Requests</div><div class="value">${num(up.total_requests)}</div></div>
+      <div class="card"><div class="label">Input tokens</div><div class="value">${num(up.total_input_tokens)}</div></div>
+      <div class="card"><div class="label">Output tokens</div><div class="value">${num(up.total_output_tokens)}</div></div>
+      <div class="card"><div class="label">Tool calls</div><div class="value">${num(up.total_tool_calls)}</div></div>
+    </div>`
+        : ""
+    }
+    ${
       graphs.daily_trend
         ? `
     <h2>Daily trend</h2>
@@ -836,6 +851,30 @@ async function introspectionDetail(id) {
     <table><thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Result tokens</th></tr></thead><tbody>
     ${tools.map((t) => `<tr><td>${esc(t.name)}</td><td class="num">${num(t.count || t.call_count || 0)}</td><td class="num">~${num(t.result_tokens || 0)}</td></tr>`).join("")}
     </tbody></table>`
+        : ""
+    }
+    ${
+      amp.length
+        ? `
+    <div class="recs" style="margin-top:10px">${amp
+      .map(
+        (a) =>
+          `<div class="rec rec-warn"><span class="rec-sev">amp</span><div class="rec-body"><div class="rec-title">${esc(a.issue || "")}</div><div class="rec-detail muted">${esc(a.suggestion || "")}</div></div></div>`,
+      )
+      .join("")}</div>`
+        : ""
+    }
+    ${
+      sh.length
+        ? `
+    <h2>Session highlights</h2>
+    <table><thead><tr><th>Session</th><th class="num">Reqs</th><th class="num">Cost</th><th class="num">Duration</th><th>Top tool</th><th>Note</th></tr></thead><tbody>
+    ${sh
+      .map(
+        (s) =>
+          `<tr><td><a class="mono" href="#/requests/${esc(s.id)}">${shortId(s.id)}</a></td><td class="num">${num(s.requests)}</td><td class="num">${cost(s.cost)}</td><td class="num">${s.duration_minutes != null ? num(s.duration_minutes) + "m" : "—"}</td><td>${esc(s.top_tool || "—")}</td><td class="muted">${esc(s.note || "—")}</td></tr>`,
+      )
+      .join("")}</tbody></table>`
         : ""
     }
     ${
