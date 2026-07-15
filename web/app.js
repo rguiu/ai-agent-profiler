@@ -636,7 +636,7 @@ async function requestDetail(id) {
     ${toolCallsHtml(toolCalls)}
     ${kindBanner(stack, r)}
     <h2>Context sent (${stack.messageCount} messages)</h2>
-    ${messageStackHtml(stack)}
+    ${messageStackHtml(stack, r.id)}
     <h2>Response</h2>
     <pre>${esc(responseText) || '<span class="muted">no body</span>'}</pre>
     <h2>Events (${events.length})</h2>
@@ -680,7 +680,7 @@ function kindBanner(stack, r) {
   </div>`;
 }
 
-function messageStackHtml(stack) {
+function messageStackHtml(stack, requestId) {
   if (!stack || !stack.messageCount)
     return `<p class="empty">No request body captured for this request.</p>`;
   const segments = [];
@@ -733,7 +733,13 @@ function messageStackHtml(stack) {
       // Auto-open the focused (last user) message and any new/large one; keep
       // the long tail of unchanged tool-results collapsed.
       const open = isFocus || isNew || big ? " open" : "";
-      return `<details class="${cls}"${open} data-tokens="${m.tokens}"><summary><span class="msg-idx muted mono">#${m.index}</span> <span class="pill role-${esc(m.role)}">${esc(m.role)}</span> <span class="num mono">${fmtBytes(m.bytes)} · ~${num(m.tokens)} tok</span>${calls}${result}${newFlag}${bigFlag}${isFocus ? ' <span class="msg-focus-tag">← last user message</span>' : ""}</summary><div class="mono msg-body">${esc(m.preview) || '<span class="muted">(no text content)</span>'}</div></details>`;
+      // The preview is clipped at 600 chars — offer a lazy "show full" fetch
+      // when it's at (or near) that cap.
+      const clipped = (m.preview || "").length >= 600;
+      const showFull = clipped
+        ? `<button class="msg-full" data-full-req="${esc(requestId)}" data-full-idx="${m.index}">show full ↓</button>`
+        : "";
+      return `<details class="${cls}"${open} data-tokens="${m.tokens}"><summary><span class="msg-idx muted mono">#${m.index}</span> <span class="pill role-${esc(m.role)}">${esc(m.role)}</span> <span class="num mono">${fmtBytes(m.bytes)} · ~${num(m.tokens)} tok</span>${calls}${result}${newFlag}${bigFlag}${isFocus ? ' <span class="msg-focus-tag">← last user message</span>' : ""}</summary><div class="mono msg-body" data-msg-idx="${m.index}">${esc(m.preview) || '<span class="muted">(no text content)</span>'}${clipped ? "…" : ""}</div>${showFull}</details>`;
     })
     .join("");
 
@@ -760,6 +766,31 @@ document.addEventListener("click", (e) => {
   document
     .querySelectorAll(".msg-list details.msg")
     .forEach((d) => (d.open = open));
+});
+
+// "show full" — lazily fetch the complete text of one clipped message.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest && e.target.closest(".msg-full[data-full-req]");
+  if (!btn) return;
+  e.preventDefault();
+  const reqId = btn.dataset.fullReq;
+  const idx = btn.dataset.fullIdx;
+  const body = btn.parentElement.querySelector(
+    `.msg-body[data-msg-idx="${idx}"]`,
+  );
+  btn.disabled = true;
+  btn.textContent = "loading…";
+  fetch(`/requests/${encodeURIComponent(reqId)}/messages/${idx}`)
+    .then((r) => r.json())
+    .then((d) => {
+      if (body) body.textContent = d.text || "(no text content)";
+      btn.remove();
+    })
+    .catch((err) => {
+      btn.disabled = false;
+      btn.textContent = "show full ↓";
+      alert(err.message);
+    });
 });
 
 function toolCallsHtml(calls) {

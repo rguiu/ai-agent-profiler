@@ -808,3 +808,20 @@ tr.keepalive:hover td {
   border-left: 2px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
+.msg-full {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  margin: 4px 0 0 8px;
+}
+.msg-full:hover {
+  border-color: var(--accent);
+}
+.msg-full:disabled {
+  color: var(--muted);
+  cursor: default;
+}

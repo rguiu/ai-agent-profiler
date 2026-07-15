@@ -2,6 +2,7 @@ export {
   parseTrace,
   computeCost,
   summarizeMessages,
+  messageText,
   type ParsedTrace,
   type TraceEvent,
   type MessageStack,

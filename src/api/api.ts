@@ -18,7 +18,11 @@ import {
   type PrefixInput,
   type PrefixTransition,
 } from "../analyze/index.js";
-import { summarizeMessages, type TraceEvent } from "../parse/index.js";
+import {
+  summarizeMessages,
+  messageText,
+  type TraceEvent,
+} from "../parse/index.js";
 import { recommend } from "../recommend/index.js";
 import type { PrefixHistoryRow, Store } from "../store/index.js";
 
@@ -157,6 +161,23 @@ export function handleApi(
       prefixStability,
       searchReadChains: chains,
     });
+    return true;
+  }
+
+  // Full text of one message, lazily fetched when the user expands a clipped
+  // preview. Matched before the /messages$ endpoint below.
+  const msgTextMatch = pathname.match(/^\/requests\/([^/]+)\/messages\/(\d+)$/);
+  if (msgTextMatch) {
+    if (!requireGet(req, res)) return true;
+    const id = decodeURIComponent(msgTextMatch[1] ?? "");
+    const index = Number(msgTextMatch[2]);
+    const detail = store.getRequest(id);
+    if (!detail?.trace_file) {
+      writeError(res, 404, `request "${id}" has no trace`);
+      return true;
+    }
+    const events = readEvents(detail.trace_file) as TraceEvent[];
+    writeJson(res, 200, { index, text: messageText(events, index) });
     return true;
   }
 

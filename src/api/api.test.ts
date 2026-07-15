@@ -366,6 +366,14 @@ describe("read API", () => {
     expect(stack.messages.find((m) => m.role === "tool")?.toolResultFor).toBe(
       "c1",
     );
+
+    // Full text of one message by index (lazy "show full").
+    const full = (await (
+      await fetch(`http://127.0.0.1:${port}/requests/r2/messages/1`)
+    ).json()) as { index: number; text: string | null };
+    expect(full.index).toBe(1);
+    expect(typeof full.text).toBe("string");
+    expect(full.text?.length).toBeGreaterThan(0);
   });
 
   it("404s messages for an unknown request", async () => {

@@ -1052,6 +1052,28 @@ export function summarizeMessages(events: TraceEvent[]): MessageStack {
   };
 }
 
+// Full text of a single message by its index in the summarizeMessages ordering
+// (system prepended as index 0, matching MessageSummary.index). Used by the UI
+// to lazily reveal a message whose preview was clipped — returns null when the
+// index is out of range or no body was captured.
+export function messageText(
+  events: TraceEvent[],
+  index: number,
+): string | null {
+  const record = parseRequestJson(events);
+  if (!record) return null;
+  const raw: Record<string, unknown>[] = [];
+  const systemText = extractResultText(record.system ?? "");
+  if (systemText) raw.push({ role: "system", content: systemText });
+  for (const message of asArray(record.messages)) {
+    const msg = asRecord(message);
+    if (msg) raw.push(msg);
+  }
+  const msg = raw[index];
+  if (!msg) return null;
+  return extractResultText(msg.content).replace(/\s+/g, " ").trim();
+}
+
 // Extract the model ID from a Bedrock request path like /model/{id}/converse-stream
 function extractBedrockModel(events: TraceEvent[]): string | null {
   const req = events.find((e) => e.type === "request");
