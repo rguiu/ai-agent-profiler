@@ -1,12 +1,10 @@
 #!/bin/sh
-# A/B benchmark for the iterative-fix-plus fixture: run the same task twice through
-# one agent — once baseline, once with --optimize — on an ISOLATED proxy port, then
-# compare cost/tokens and print the optimizations that actually fired live.
+# A/B benchmark for the iterative-fix-plus fixture comparing wrapper-level optimizations
+# (tool output filtering via ~/.aap/bin PATH wrappers) vs bare agent.
 #
-# This exercises three things end-to-end:
-#   1. DeepSeek/OpenAI-compatible cost capture (non-zero tokens + cost).
-#   2. Live recording of which optimize strategies applied (per session).
-#   3. A realistic long read-fix-verify session (~50 requests).
+# Tests:
+#   1. Baseline — no hooks, raw tool output
+#   2. Hooks — tool output filtered (aap run --hooks)
 #
 # Usage:
 #   ./benchmarks/iterative-fix-ab.sh [agent] [--fixture NAME] [--port N] [--keep-serve]
@@ -14,28 +12,27 @@
 #   agent          opencode (default) | claude
 #   --fixture      fixture under benchmarks/fixtures/ (default: iterative-fix-plus)
 #   --port         proxy port for this run (default: 8199, or $AAP_BENCH_PORT)
-#   --keep-serve   leave the optimize proxy running at the end (for manual poking)
+#   --scenario     which scenarios to run (default: "baseline hooks")
+#                  comma-separated: baseline, hooks
+#   --keep-serve   leave the proxy running at the end (for manual poking)
 #
-# Isolation:
-#   Runs its OWN `aap serve` on --port so it never touches a proxy you already have
-#   on :8080. It uses your configured storage; for FULL isolation (separate DB) set
-#   AAP_CONFIG=/path/to/isolated-config.toml before running.
-#
-# Prereqs: `aap` built + on PATH (npm run build && npm link); the agent installed
-#   with its API key; the chosen port free. Run from anywhere.
+# Prereqs: `aap` built + on PATH; the agent installed with its API key; the
+#   chosen port free. Run from anywhere.
 set -eu
 
 AGENT=opencode
 FIXTURE=iterative-fix-plus
 PORT="${AAP_BENCH_PORT:-8199}"
+SCENARIOS="baseline,hooks"
 KEEP=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --fixture) FIXTURE="${2:?--fixture needs a name}"; shift 2 ;;
     --port) PORT="${2:?--port needs a number}"; shift 2 ;;
+    --scenario) SCENARIOS="${2:?--scenario needs a list}"; shift 2 ;;
     --keep-serve) KEEP=1; shift ;;
-    -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 1 ;;
     *) AGENT="$1"; shift ;;
   esac
@@ -66,46 +63,72 @@ stop_serve() {
 cleanup() { [ "$KEEP" = "1" ] || stop_serve; }
 trap cleanup EXIT INT TERM
 
-start_serve() { # $1 = extra serve args (e.g. --optimize)
-  aap serve $1 >"$LOGDIR/serve-${1:-baseline}.log" 2>&1 &
+# Install hooks once before all runs
+aap hook install >/dev/null 2>&1 || true
+
+start_serve() {
+  local label="${1:-serve}"
+  aap serve >"$LOGDIR/serve-${label}.log" 2>&1 &
   SERVE_PID=$!
   i=0
   while [ $i -lt 100 ]; do
     curl -s -m1 "$BASE/health" >/dev/null 2>&1 && return 0
     kill -0 "$SERVE_PID" 2>/dev/null || {
-      echo "serve exited early — see $LOGDIR/serve-${1:-baseline}.log" >&2; exit 1; }
+      echo "serve exited early — see $LOGDIR/serve-${label}.log" >&2; exit 1; }
     sleep 0.1; i=$((i+1))
   done
   echo "serve did not become healthy on $BASE — see $LOGDIR" >&2; exit 1
 }
 
-run_phase() { # $1 = tag, $2 = serve args
-  printf '\n\033[1m=== phase: %s (aap serve %s) ===\033[0m\n' "$1" "${2:-<baseline>}"
-  start_serve "$2"
-  "$HERE/run.sh" "$AGENT" --fixture "$FIXTURE" --tag "$1"
+run_phase() { # $1 = scenario tag, $2 = enable hooks (true|"")
+  printf '\n\033[1m=== phase: %s (hooks=%s) ===\033[0m\n' "$1" "${2:-off}"
+  start_serve "${1:-serve}"
+  [ -n "$2" ] && export AAP_HOOK_MODE="true" || unset AAP_HOOK_MODE
+
+  "$HERE/run.sh" "$AGENT" \
+    --fixture "$FIXTURE" \
+    --tag "$1"
+
   stop_serve
 }
 
-run_phase baseline "--no-optimize"
-run_phase optimize "--optimize"
+# --- Run scenarios ---
+IFS=','; for scenario in $SCENARIOS; do
+  case "$scenario" in
+    baseline)
+      run_phase baseline ""
+      ;;
+    hooks)
+      run_phase hooks true
+      ;;
+    *)
+      echo "unknown scenario: $scenario (valid: baseline, hooks)" >&2
+      ;;
+  esac
+done
 
 printf '\n\033[1m=== parse + compare ===\033[0m\n'
 aap parse >/dev/null 2>&1 || true
-aap compare --run baseline --run optimize || true
 
-printf '\n\033[1m=== optimizations recorded (optimize run) ===\033[0m\n'
-opt_id=$(aap sessions --json 2>/dev/null | node -e '
-  let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-    let rows=[];try{rows=JSON.parse(s)}catch{}
-    const hit=rows.find(r=>r.meta&&r.meta.run==="optimize"&&r.meta.task);
-    if(hit)process.stdout.write(hit.id);
-  });' 2>/dev/null || true)
-if [ -n "$opt_id" ]; then
-  aap export "$opt_id" | awk '/^## Optimizations applied/{p=1} /^## Recommendations/{p=0} p'
-  echo "(full report: aap export $opt_id)"
-else
-  echo "No optimize session found — check 'aap sessions'."
-fi
+IFS=','; for scenario in $SCENARIOS; do
+  case "$scenario" in
+    baseline) TAGS="${TAGS:+$TAGS }baseline" ;;
+    hooks)    TAGS="${TAGS:+$TAGS }hooks" ;;                                                   
+  esac
+done
 
-[ "$KEEP" = "1" ] && echo && echo "optimize proxy still running on $BASE (pid $SERVE_PID)"
+# List sessions per tag
+for tag in $TAGS; do
+  sid=$(aap sessions --json 2>/dev/null | node -e "
+    let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+      let rows=[];try{rows=JSON.parse(s)}catch{}
+      const hit=rows.find(r=>r.meta&&r.meta.run==='$tag');
+      if(hit)process.stdout.write(hit.id);
+    });" 2>/dev/null || true)
+  printf '  %-12s %s\n' "$tag" "${sid:-<not found>}"
+done
+
+echo
+echo "To compare: aap compare --run baseline --run hooks"
+[ "$KEEP" = "1" ] && echo && echo "proxy still running on $BASE (pid $SERVE_PID)"
 exit 0

@@ -28,6 +28,8 @@ export default tseslint.config(
         location: "readonly",
         fetch: "readonly",
         atob: "readonly",
+        confirm: "readonly",
+        alert: "readonly",
         TextDecoder: "readonly",
         Uint8Array: "readonly",
         console: "readonly",

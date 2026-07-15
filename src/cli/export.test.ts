@@ -37,6 +37,7 @@ function makeDetail(): SessionDetail {
         stop_reason: "tool_use",
         cost: 0.001,
         tool_call_count: 1,
+        kind: "main",
       },
     ],
     analysis: {
@@ -54,7 +55,6 @@ function makeDetail(): SessionDetail {
       },
       commands: [],
     },
-    optimize: [],
   };
 }
 

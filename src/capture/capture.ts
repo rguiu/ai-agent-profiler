@@ -15,6 +15,7 @@ export interface RequestContext {
   httpVersion: string;
   headers: IncomingHttpHeaders;
   startedAt: number;
+  keepAlive?: boolean;
 }
 
 export interface RequestTrace {
@@ -179,6 +180,7 @@ export class FileCapture implements Capture {
       path: ctx.path,
       traceFile,
       startedAt: new Date(ctx.startedAt).toISOString(),
+      keepAlive: ctx.keepAlive ? 1 : 0,
     });
 
     return new FileRequestTrace(this.store, stream, ctx);

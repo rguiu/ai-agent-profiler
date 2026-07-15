@@ -11,7 +11,6 @@ export {
   type SessionRequest,
   type SessionDetail,
   type RequestDetail,
-  type OptimizeActionSummary,
   type ToolCall,
   type ToolCallInput,
   type Stats,
@@ -22,4 +21,5 @@ export {
   type SessionContext,
   type PrefixRow,
   type PrefixHistoryRow,
+  type SessionToolCall,
 } from "./store.js";

@@ -9,15 +9,10 @@ const PARSE_INTERVAL_MS = 3000;
 const SHUTDOWN_TIMEOUT_MS = 5000;
 
 export function serve(args?: string[]): void {
-  const cliOptimize = args?.includes("--optimize") ?? false;
-  const cliNoOptimize = args?.includes("--no-optimize") ?? false;
   const portIdx = args?.indexOf("--port") ?? -1;
   const portArg = portIdx >= 0 ? args?.[portIdx + 1] : undefined;
   const cliPort = portArg ? parseInt(portArg, 10) : undefined;
   const config = loadConfig();
-  const optimize = cliNoOptimize
-    ? false
-    : cliOptimize || config.optimize.enabled;
   const registry = new SessionRegistry();
   const store = openStore(config.storage.dir);
 
@@ -46,7 +41,6 @@ export function serve(args?: string[]): void {
     capture,
     store,
     consoleRequestLogger(),
-    optimize ? { optimize: config.optimize } : undefined,
   );
 
   const port = cliPort ?? config.server.port;
@@ -54,12 +48,6 @@ export function serve(args?: string[]): void {
     console.log(`aap proxy listening on http://${config.server.host}:${port}`);
     console.log(`providers: ${Object.keys(config.providers).join(", ")}`);
     console.log(`storage: ${config.storage.dir}`);
-    if (optimize) {
-      const active = Object.entries(config.optimize)
-        .filter(([k, v]) => v === true && k !== "enabled")
-        .map(([k]) => k);
-      console.log(`optimize: ON (${active.join(", ")})`);
-    }
     if (rows.length > 0) {
       console.log(`hydrated ${rows.length} session(s) from store`);
     }

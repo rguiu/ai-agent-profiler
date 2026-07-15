@@ -21,11 +21,38 @@ export interface ParsedToolResult {
   tokens: number;
 }
 
+// What triggered a request. "main" is the user-driven interactive loop; every
+// other kind is an agent-initiated (non-user) call whose cost we want to break
+// out separately. Detected from the request body — see classifyRequestKind.
+//
+// Subagent flavours (all carry cc_is_subagent=true in the billing header):
+//   search   — the file-search/Explore specialist grepping the repo
+//   guide    — the Claude docs/help agent answering "how do I…"
+//   webfetch — summarising fetched web-page content
+//   subagent — a subagent we couldn't further identify
+//
+// recap/compact/title/quota run on the main model with a normal system prompt;
+// their trigger is in the LAST message, not the system block:
+//   recap    — "The user stepped away…": a short mid-session catch-up summary
+//   compact  — full-history summarisation for context compaction
+export type RequestKind =
+  | "main"
+  | "subagent"
+  | "search"
+  | "guide"
+  | "webfetch"
+  | "title"
+  | "compact"
+  | "recap"
+  | "quota"
+  | "unknown";
+
 export interface ParsedContext {
   messageCount: number;
   systemTokens: number;
   toolsDefined: number;
   toolsTokens: number;
+  kind: RequestKind;
 }
 
 // Prefix fingerprints for cache-stability analysis (see
@@ -589,6 +616,24 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+// Extract only the human/prompt TEXT of a message, ignoring tool_result and
+// other structured blocks. Used for kind classification: recap/compaction
+// instructions arrive as plain text, and a tool_result echoing those phrases
+// (e.g. captured command output) must not trigger a false positive.
+function lastMessagePromptText(content: unknown): string {
+  const asStr = asString(content);
+  if (asStr !== null) return asStr;
+  let out = "";
+  for (const block of asArray(content)) {
+    const record = asRecord(block);
+    if (!record) continue;
+    if (record.type !== undefined && record.type !== "text") continue;
+    const text = asString(record.text);
+    if (text !== null) out += text;
+  }
+  return out;
+}
+
 function extractResultText(content: unknown): string {
   const asStr = asString(content);
   if (asStr !== null) return asStr;
@@ -621,13 +666,96 @@ function parseRequestJson(
   }
 }
 
-// Extracts the system-prompt text, tool-definitions array, and raw messages
-// array from a decoded request body. Shared by parseRequestBody's context/
-// fingerprint computation so the two never drift apart.
+// Classify what triggered a request. Two signal sources:
+//   1. The SYSTEM PROMPT (top-level system field + role:"system" messages) —
+//      carries provider-specific markers: Claude's cc_is_subagent billing header
+//      and OpenCode's per-agent prompt identities (title, compaction, explore).
+//   2. The LAST message — recap/compaction/quota run on the MAIN model with a
+//      normal system prompt, so they're only distinguishable by their final
+//      instruction ("The user stepped away…", "detailed summary…").
+// `lastMessageText` is the text of the final message (any role); pass "" when
+// unavailable. Classifying from the last message (not the whole transcript)
+// avoids false positives from prior summaries echoed back in history.
+export function classifyRequestKind(
+  systemText: string,
+  lastMessageText = "",
+): RequestKind {
+  const last = lastMessageText.toLowerCase();
+  // Recap: a short mid-session catch-up the client injects as the last user
+  // message. Runs on the main model, so only the instruction identifies it.
+  if (last.includes("the user stepped away") && last.includes("recap")) {
+    return "recap";
+  }
+  // Compaction: full-history summarisation. The instruction is the last
+  // message; matching it there (not anywhere in history) prevents a prior
+  // summary echoed into context from mislabelling a normal turn.
+  if (
+    last.includes("summary of the conversation") ||
+    last.includes("detailed summary of our conversation") ||
+    last.includes("create a detailed summary")
+  ) {
+    return "compact";
+  }
+
+  if (!systemText) return "unknown";
+  const s = systemText.toLowerCase();
+  // Subagents carry cc_is_subagent=true. Split by their specialist identity so
+  // the file-search agent (the tunable cost driver) is visible on its own.
+  if (/cc_is_subagent\s*=\s*true/.test(s)) {
+    if (s.includes("file search specialist")) return "search";
+    if (s.includes("claude guide agent")) return "guide";
+    // WebFetch's identity is in the message body ("Web page content:"), not the
+    // system prompt, so check the last message here too.
+    if (last.includes("web page content")) return "webfetch";
+    return "subagent";
+  }
+
+  // Claude Code title-gen: "Generate a concise… title" + "session"
+  if (
+    s.includes("generate a concise") &&
+    s.includes("title") &&
+    s.includes("session")
+  ) {
+    return "title";
+  }
+
+  // OpenCode agents — distinct per-agent system prompts carry the identity.
+  // Title agent: "You are a title generator. You output ONLY a thread title."
+  if (
+    s.includes("you are a title generator") ||
+    last.includes("generate a title for this conversation")
+  ) {
+    return "title";
+  }
+  // Compaction agent: "You are an anchored context summarization assistant…"
+  if (
+    s.includes("you are an anchored context summarization") ||
+    (last.includes("## objective") &&
+      last.includes("## important details") &&
+      last.includes("## work state"))
+  ) {
+    return "compact";
+  }
+  // Explore agent (file search): "You are a file search specialist…"
+  // Matches OpenCode's explore agent without requiring cc_is_subagent.
+  if (s.includes("you are a file search specialist")) return "search";
+  // Summary agent: "Summarize what was done in this conversation."
+  if (s.includes("summarize what was done in this conversation")) {
+    return "compact";
+  }
+
+  if (s.includes("quota") || s.includes("usage limit")) return "quota";
+  return "main";
+}
+
+// Extracts the system-prompt text, tool-definitions array, raw messages array,
+// and the last message's prompt text from a decoded request body. Shared by
+// parseRequestBody's context/kind/fingerprint computation so they never drift.
 function extractPrefixSegments(record: Record<string, unknown>): {
   systemText: string;
   tools: unknown[];
   messages: unknown[];
+  lastMessageText: string;
 } {
   const messages = asArray(record.messages);
 
@@ -647,6 +775,16 @@ function extractPrefixSegments(record: Record<string, unknown>): {
       }
     }
   }
+
+  const lastMessage = asRecord(messages[messages.length - 1]);
+  const lastMessageText = lastMessage
+    ? lastMessagePromptText(lastMessage.content)
+    : "";
+
+  // Accumulate system messages from the messages array — OpenAI/DeepSeek format
+  // carries system instructions inside role:"system" entries rather than a
+  // top-level system field. Process these so the classifier can see
+  // provider-agnostic markers (title, compact, search).
   for (const message of messages) {
     const msg = asRecord(message);
     if (!msg) continue;
@@ -663,7 +801,7 @@ function extractPrefixSegments(record: Record<string, unknown>): {
     if (toolConfig) tools = asArray(toolConfig.tools);
   }
 
-  return { systemText, tools, messages };
+  return { systemText, tools, messages, lastMessageText };
 }
 
 // Stable serialization of a message for hashing: role + content only, so
@@ -704,6 +842,7 @@ function parseRequestBody(events: TraceEvent[]): {
       systemTokens: 0,
       toolsDefined: 0,
       toolsTokens: 0,
+      kind: "unknown" as RequestKind,
     },
     fingerprint: emptyFingerprint(),
   };
@@ -711,7 +850,8 @@ function parseRequestBody(events: TraceEvent[]): {
   const record = parseRequestJson(events);
   if (!record) return empty;
 
-  const { systemText, tools, messages } = extractPrefixSegments(record);
+  const { systemText, tools, messages, lastMessageText } =
+    extractPrefixSegments(record);
 
   const toolResults: ParsedToolResult[] = [];
   const add = (id: string | null, content: unknown): void => {
@@ -746,11 +886,18 @@ function parseRequestBody(events: TraceEvent[]): {
     }
   }
 
+  // Classify now that we have both the top-level system field (Anthropic) and
+  // any role:"system" messages from the array (OpenAI/DeepSeek). Using the last
+  // message ONLY (not the whole transcript) avoids false positives from prior
+  // summaries echoed back into context.
+  const kind = classifyRequestKind(systemText, lastMessageText);
+
   const context: ParsedContext = {
     messageCount: messages.length,
     systemTokens: estimateTokens(systemText),
     toolsDefined: tools.length,
     toolsTokens: tools.length > 0 ? estimateTokens(JSON.stringify(tools)) : 0,
+    kind,
   };
   const fingerprint = computeFingerprint(systemText, tools, messages);
   return { toolResults, context, fingerprint };

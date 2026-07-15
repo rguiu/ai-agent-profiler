@@ -10,10 +10,8 @@ export {
   serverSchema,
   sessionsSchema,
   storageSchema,
-  optimizeSchema,
   modelPricingSchema,
   type Config,
   type ProviderConfig,
   type ModelPricing,
-  type OptimizeSettings,
 } from "./schema.js";

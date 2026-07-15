@@ -1,11 +1,14 @@
 {
   "name": "ai-agent-profiler",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Local-first, read-only profiler for AI coding agents.",
   "license": "MIT",
   "author": "Raul Guiu <raulguiu@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anomalyco/ai-agent-profiler.git"
+  },
   "keywords": [
     "ai",
     "agent",
@@ -28,13 +31,14 @@
   ],
   "scripts": {
     "dev": "tsx src/cli/aap.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && rm -rf dist/hook/templates && cp -r src/hook/templates dist/hook/templates",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20"

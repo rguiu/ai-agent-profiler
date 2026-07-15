@@ -6,14 +6,10 @@ import http, {
 import https from "node:https";
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
+import { commonPrefixTokens, estimateTokens } from "../cache/common-prefix.js";
 import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
-import {
-  OptimizeLayer,
-  overridesFor,
-  type OptimizeConfig,
-  type OptimizeProfile,
-} from "../optimize/index.js";
+import { applyCacheTtlUpgrade } from "../cache/ttl-upgrade.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
 import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
@@ -39,36 +35,12 @@ export interface ProxyState {
   activeOllamaSession: string | null;
 }
 
-export interface ProxyOptions {
-  optimize?: Partial<OptimizeConfig> | boolean;
-}
-
-export type { OptimizeProfile } from "../optimize/index.js";
-export type OptimizeConfigWithProfile = Partial<OptimizeConfig> & {
-  profile?: OptimizeProfile;
-};
-
-// Resolve the effective optimize config for a provider. The provider→strategy
-// mapping now lives in the optimize profile registry (src/optimize/profiles.ts);
-// this just merges the resolved overrides (if any) onto the base config.
-// "auto" applies cache-safe overrides only to prefix-cache providers;
-// "cache-safe" forces them everywhere; "default" leaves the full layer intact.
-export function resolveOptimizeConfig(
-  base: OptimizeConfigWithProfile | undefined,
-  provider: string,
-): Partial<OptimizeConfig> | undefined {
-  const overrides = overridesFor(base?.profile ?? "auto", provider);
-  if (!overrides) return base;
-  return { ...base, ...overrides };
-}
-
 export function createProxyServer(
   config: Config,
   registry: SessionRegistry,
   capture?: Capture,
   store?: Store,
   logger?: RequestLogger,
-  options?: ProxyOptions,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
   // Initialize active provider sessions from hydrated registry (survives restart)
@@ -84,13 +56,8 @@ export function createProxyServer(
     activeOllamaSession: initialOllama,
   };
 
-  const optimizeLayers: Map<string, OptimizeLayer> | null = options?.optimize
-    ? new Map()
-    : null;
-  const optimizeConfig: Partial<OptimizeConfig> | undefined =
-    typeof options?.optimize === "object" ? options.optimize : undefined;
-
   const throttle = new Throttle(config.throttle);
+  const prevBodies = new Map<string, { body: string; path: string }>();
 
   return http.createServer((req, res) => {
     handle(
@@ -103,9 +70,8 @@ export function createProxyServer(
       capture,
       store,
       logger,
-      optimizeLayers,
-      optimizeConfig,
       throttle,
+      prevBodies,
     );
   });
 }
@@ -120,16 +86,16 @@ function handle(
   capture?: Capture,
   store?: Store,
   logger?: RequestLogger,
-  optimizeLayers?: Map<string, OptimizeLayer> | null,
-  optimizeConfig?: Partial<OptimizeConfig>,
   throttle?: Throttle,
+  prevBodies?: Map<string, { body: string; path: string }>,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
   const pathname = queryStart === -1 ? rawUrl : rawUrl.slice(0, queryStart);
   const search = queryStart === -1 ? "" : rawUrl.slice(queryStart);
 
-  if (handleControl(req, res, pathname, registry, state, capture)) return;
+  if (handleControl(req, res, pathname, registry, state, capture, prevBodies))
+    return;
   if (handleUi(req, res, pathname)) return;
   if (store && handleApi(req, res, pathname, store)) return;
 
@@ -151,6 +117,7 @@ function handle(
   }
 
   const method = req.method ?? "GET";
+  const isKeepAlive = req.headers["x-aap-keep-alive"] === "1";
 
   let trace: RequestTrace | undefined;
   if (capture) {
@@ -164,48 +131,21 @@ function handle(
       httpVersion: req.httpVersion,
       headers: req.headers,
       startedAt: Date.now(),
+      keepAlive: isKeepAlive || undefined,
     });
   }
 
   const extraHeaders: Record<string, string> = {};
+  let cacheTtlUpgrade = false;
   if (route.sessionId) {
     const session = registry.get(route.sessionId);
     if (session?.meta?.armada_node) {
       extraHeaders["x-armada-node"] = session.meta.armada_node;
     }
-  }
-
-  // Resolve per-session optimize layer (if --optimize is active)
-  let optimizer: OptimizeLayer | undefined;
-  if (optimizeLayers && route.sessionId) {
-    let layer = optimizeLayers.get(route.sessionId);
-    if (!layer) {
-      layer = new OptimizeLayer(
-        resolveOptimizeConfig(optimizeConfig, route.provider),
-      );
-      optimizeLayers.set(route.sessionId, layer);
+    if (session?.meta?.cache_ttl === "1h") {
+      cacheTtlUpgrade = true;
     }
-    optimizer = layer;
   }
-
-  // Persist which strategies the optimizer actually applied, so a live
-  // optimized session records its own savings (not just via simulation).
-  const recordOptimize: (() => void) | undefined =
-    optimizer && store && route.sessionId
-      ? () => {
-          const actions = optimizer!.getActions();
-          if (actions.length > 0) {
-            const byType: Record<string, number> = {};
-            for (const a of actions) byType[a.type] = (byType[a.type] || 0) + 1;
-            process.stderr.write(
-              `[optimize] ${route.sessionId} ${Object.entries(byType)
-                .map(([k, v]) => `${k}=${v}`)
-                .join(" ")}\n`,
-            );
-          }
-          store.recordOptimizeActions(route.sessionId!, actions);
-        }
-      : undefined;
 
   const doForward = (): void => {
     // Bedrock requires SigV4 re-signing — the original signature is for the proxy host.
@@ -225,13 +165,6 @@ function handle(
         region,
         extraHeaders:
           Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
-        rewriteBody: optimizer
-          ? (body) => {
-              const out = optimizer!.rewriteRequestBody(body);
-              recordOptimize?.();
-              return out;
-            }
-          : undefined,
         onRequestChunk: (chunk) => trace?.requestChunk(chunk),
         onResponse: (status, headers) =>
           trace?.response(status, undefined, headers as Record<string, string>),
@@ -245,10 +178,11 @@ function handle(
       trace,
       logger,
       extraHeaders,
-      optimizer,
-      recordOptimize,
       throttle,
       timeoutMs: route.provider === "ollama" ? 120_000 : undefined,
+      sessionId: route.sessionId,
+      prevBodies,
+      cacheTtlUpgrade,
       meta: {
         sessionId: route.sessionId,
         provider: route.provider,
@@ -276,6 +210,7 @@ function handleControl(
   registry: SessionRegistry,
   state: ProxyState,
   capture?: Capture,
+  prevBodies?: Map<string, { body: string; path: string }>,
 ): boolean {
   if (pathname === "/health") {
     sendJson(res, 200, { status: "ok" });
@@ -290,6 +225,19 @@ function handleControl(
       registerSession(req, res, registry, state, capture);
       return true;
     }
+  }
+  const lastBodyMatch = pathname.match(
+    /^\/_control\/sessions\/([^/]+)\/last-body$/,
+  );
+  if (lastBodyMatch && req.method === "GET") {
+    const sid = decodeURIComponent(lastBodyMatch[1] ?? "");
+    const entry = prevBodies?.get(sid) ?? null;
+    sendJson(res, 200, {
+      sessionId: sid,
+      body: entry?.body ?? null,
+      path: entry?.path ?? null,
+    });
+    return true;
   }
   return false;
 }
@@ -351,10 +299,11 @@ interface ForwardObs {
   trace?: RequestTrace;
   logger?: RequestLogger;
   extraHeaders?: Record<string, string>;
-  optimizer?: OptimizeLayer;
-  recordOptimize?: () => void;
   throttle?: Throttle;
   timeoutMs?: number;
+  sessionId?: string | null;
+  prevBodies?: Map<string, { body: string; path: string }>;
+  cacheTtlUpgrade?: boolean;
   meta: Omit<
     RequestLogEntry,
     "status" | "latencyMs" | "responseBytes" | "error"
@@ -372,10 +321,11 @@ function forward(
     trace,
     logger,
     extraHeaders,
-    optimizer,
-    recordOptimize,
     throttle,
     timeoutMs,
+    sessionId,
+    prevBodies,
+    cacheTtlUpgrade,
     meta,
   } = obs;
   const startedAt = Date.now();
@@ -417,13 +367,14 @@ function forward(
 
   const headers: OutgoingHttpHeaders = { ...req.headers };
   for (const name of HOP_BY_HOP) delete headers[name];
+  delete headers["x-aap-keep-alive"];
   headers["host"] = base.host;
   if (extraHeaders) {
     for (const [k, v] of Object.entries(extraHeaders)) headers[k] = v;
   }
 
   // Request-body tracing happens in sendUpstream so the trace records the
-  // exact bytes sent upstream (post shaping/optimize), not the raw request.
+  // exact bytes sent upstream (post shaping/), not the raw request.
   const transport = isHttps ? https : http;
 
   const sendUpstream = (body?: Buffer): void => {
@@ -485,10 +436,9 @@ function forward(
   };
 
   // Buffer the body when either the request shaper (always-on, for token/cost
-  // accuracy) or the optimizer (--optimize only) needs to rewrite it. Shaper
-  // runs first, then the optimizer.
+  // accuracy) needs to rewrite it. Shaper runs first.
   const willShape = needsShaping(meta.provider, req.method ?? "GET", meta.path);
-  if (willShape || optimizer) {
+  if (willShape || cacheTtlUpgrade) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
@@ -501,8 +451,36 @@ function forward(
           meta.path,
         );
       }
-      if (optimizer) body = optimizer.rewriteRequestBody(body);
-      recordOptimize?.();
+      if (cacheTtlUpgrade) {
+        try {
+          const parsed = JSON.parse(body.toString("utf8")) as Record<
+            string,
+            unknown
+          >;
+          if (applyCacheTtlUpgrade(parsed)) {
+            body = Buffer.from(JSON.stringify(parsed), "utf8");
+          }
+        } catch {
+          // not JSON — skip TTL upgrade
+        }
+      }
+
+      if (sessionId && prevBodies) {
+        const currentBody = body.toString("utf8");
+        const prev = prevBodies.get(sessionId);
+        if (prev) {
+          const hitTokens = commonPrefixTokens(prev.body, currentBody);
+          const totalTokens = estimateTokens(currentBody);
+          const missTokens = totalTokens - hitTokens;
+          const hitPct =
+            totalTokens > 0 ? Math.round((hitTokens / totalTokens) * 100) : 0;
+          process.stderr.write(
+            `[cache] ${sessionId.slice(0, 8)} hit=${hitPct}% hitT=${hitTokens} missT=${missTokens} totalT=${totalTokens}\n`,
+          );
+        }
+        prevBodies.set(sessionId, { body: currentBody, path: pathWithQuery });
+      }
+
       sendUpstream(body);
     });
   } else {

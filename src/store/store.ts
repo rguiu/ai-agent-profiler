@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS requests (
   latency_ms     INTEGER,
   request_bytes  INTEGER,
   response_bytes INTEGER,
-  error          TEXT
+  error          TEXT,
+  keep_alive     INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_session ON requests (session_id);
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS metrics (
   tools_defined   INTEGER,
   tools_tokens    INTEGER,
   cached_input_tokens INTEGER,
-  cache_creation_input_tokens INTEGER
+  cache_creation_input_tokens INTEGER,
+  kind            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -66,14 +68,6 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls (request_id);
-
-CREATE TABLE IF NOT EXISTS optimize_actions (
-  session_id   TEXT NOT NULL,
-  type         TEXT NOT NULL,
-  count        INTEGER NOT NULL,
-  tokens_saved INTEGER NOT NULL,
-  PRIMARY KEY (session_id, type)
-);
 
 CREATE TABLE IF NOT EXISTS request_prefix (
   request_id     TEXT PRIMARY KEY,
@@ -95,6 +89,7 @@ export interface RequestRow {
   path: string;
   traceFile: string;
   startedAt: string;
+  keepAlive?: number;
 }
 
 export interface RequestFinish {
@@ -129,6 +124,7 @@ export interface MetricsRow {
   systemTokens: number;
   toolsDefined: number;
   toolsTokens: number;
+  kind: string;
 }
 
 export interface SessionSummary {
@@ -180,19 +176,13 @@ export interface SessionRequest {
   stop_reason: string | null;
   cost: number | null;
   tool_call_count: number | null;
+  kind: string | null;
 }
 
 export interface SessionDetail {
   session: SessionRow;
   requests: SessionRequest[];
   analysis: SessionAnalysis;
-  optimize: OptimizeActionSummary[];
-}
-
-export interface OptimizeActionSummary {
-  type: string;
-  count: number;
-  tokens_saved: number;
 }
 
 export interface ToolCall {
@@ -239,6 +229,8 @@ export interface RequestDetail {
   system_tokens: number | null;
   tools_defined: number | null;
   tools_tokens: number | null;
+  kind: string | null;
+  keep_alive: number | null;
   toolCalls: ToolCall[];
   events?: unknown[];
 }
@@ -248,6 +240,14 @@ export interface Stats {
   requests: number;
   input_tokens: number;
   cached_input_tokens: number;
+  output_tokens: number;
+  cost: number;
+}
+
+export interface KindBreakdown {
+  kind: string;
+  requests: number;
+  input_tokens: number;
   output_tokens: number;
   cost: number;
 }
@@ -279,6 +279,15 @@ export interface SessionContext {
   tools_tokens_total: number;
   input_tokens_total: number;
   cached_input_tokens_total: number;
+}
+
+export interface SessionToolCall {
+  request_id: string;
+  started_at: string | null;
+  ordinal: number;
+  name: string;
+  arguments: string | null;
+  result_tokens: number | null;
 }
 
 export interface SessionAnalysis {
@@ -329,21 +338,15 @@ export class Store {
   private readonly getRequestStmt;
   private readonly getToolCallsStmt;
   private readonly statsStmt;
+  private readonly kindBreakdownStmt;
   private readonly toolUsageGlobalStmt;
   private readonly toolUsageSessionStmt;
   private readonly repeatedToolCallsStmt;
   private readonly contextGrowthStmt;
   private readonly sessionContextStmt;
-  private readonly deleteOptimizeStmt;
-  private readonly insertOptimizeStmt;
-  private readonly getOptimizeStmt;
-  private readonly replaceOptimizeTxn: (
-    sessionId: string,
-    rows: ReadonlyArray<{ type: string; count: number; tokens_saved: number }>,
-  ) => void;
   private readonly upsertPrefixStmt;
   private readonly getSessionPrefixesStmt;
-
+  private readonly sessionToolCallsStmt;
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
       INSERT INTO sessions (id, client, cwd, repo, started_at, first_seen_at, last_seen_at, meta)
@@ -357,8 +360,8 @@ export class Store {
         meta         = COALESCE(excluded.meta, sessions.meta)
     `);
     this.insertRequestStmt = db.prepare(`
-      INSERT INTO requests (id, session_id, provider, method, path, trace_file, started_at)
-      VALUES (@id, @session_id, @provider, @method, @path, @trace_file, @started_at)
+      INSERT INTO requests (id, session_id, provider, method, path, trace_file, started_at, keep_alive)
+      VALUES (@id, @session_id, @provider, @method, @path, @trace_file, @started_at, @keep_alive)
     `);
     this.finishRequestStmt = db.prepare(`
       UPDATE requests SET
@@ -384,11 +387,11 @@ export class Store {
       INSERT INTO metrics (request_id, format, model, input_tokens, output_tokens,
                            stop_reason, streaming, tool_call_count, cost, parsed_at,
                            message_count, system_tokens, tools_defined, tools_tokens,
-                           cached_input_tokens, cache_creation_input_tokens)
+                           cached_input_tokens, cache_creation_input_tokens, kind)
       VALUES (@request_id, @format, @model, @input_tokens, @output_tokens,
               @stop_reason, @streaming, @tool_call_count, @cost, @parsed_at,
               @message_count, @system_tokens, @tools_defined, @tools_tokens,
-              @cached_input_tokens, @cache_creation_input_tokens)
+              @cached_input_tokens, @cache_creation_input_tokens, @kind)
       ON CONFLICT(request_id) DO UPDATE SET
         format          = excluded.format,
         model           = excluded.model,
@@ -404,7 +407,8 @@ export class Store {
         tools_defined   = excluded.tools_defined,
         tools_tokens    = excluded.tools_tokens,
         cached_input_tokens = excluded.cached_input_tokens,
-        cache_creation_input_tokens = excluded.cache_creation_input_tokens
+        cache_creation_input_tokens = excluded.cache_creation_input_tokens,
+        kind            = excluded.kind
     `);
     this.deleteToolCallsStmt = db.prepare(
       `DELETE FROM tool_calls WHERE request_id = ?`,
@@ -449,9 +453,10 @@ export class Store {
     this.getSessionRequestsStmt = db.prepare(`
       SELECT r.id, r.provider, r.method, r.path, r.status, r.latency_ms,
              r.started_at, r.ended_at, r.request_bytes, r.response_bytes, r.error,
+             r.keep_alive,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.cost, m.tool_call_count, m.cached_input_tokens,
-             m.cache_creation_input_tokens
+             m.cache_creation_input_tokens, m.kind
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
@@ -460,11 +465,11 @@ export class Store {
     this.getRequestStmt = db.prepare(`
       SELECT r.id, r.session_id, r.provider, r.method, r.path, r.trace_file,
              r.started_at, r.ended_at, r.status, r.latency_ms,
-             r.request_bytes, r.response_bytes, r.error,
+             r.request_bytes, r.response_bytes, r.error, r.keep_alive,
              m.format, m.model, m.input_tokens, m.output_tokens, m.stop_reason,
              m.streaming, m.tool_call_count, m.cost, m.parsed_at,
              m.message_count, m.system_tokens, m.tools_defined, m.tools_tokens,
-             m.cached_input_tokens, m.cache_creation_input_tokens
+             m.cached_input_tokens, m.cache_creation_input_tokens, m.kind
       FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE r.id = ?
@@ -480,6 +485,16 @@ export class Store {
         COALESCE((SELECT SUM(cached_input_tokens) FROM metrics), 0) AS cached_input_tokens,
         COALESCE((SELECT SUM(output_tokens) FROM metrics), 0) AS output_tokens,
         COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost
+    `);
+    this.kindBreakdownStmt = db.prepare(`
+      SELECT COALESCE(kind, 'unknown') AS kind,
+             COUNT(*) AS requests,
+             COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(cached_input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(cost), 0) AS cost
+      FROM metrics
+      GROUP BY COALESCE(kind, 'unknown')
+      ORDER BY cost DESC
     `);
     this.toolUsageGlobalStmt = db.prepare(`
       SELECT name, COUNT(*) AS count,
@@ -519,32 +534,14 @@ export class Store {
       FROM requests r JOIN metrics m ON m.request_id = r.id
       WHERE r.session_id = ?
     `);
-    this.deleteOptimizeStmt = db.prepare(
-      `DELETE FROM optimize_actions WHERE session_id = ?`,
-    );
-    this.insertOptimizeStmt = db.prepare(`
-      INSERT INTO optimize_actions (session_id, type, count, tokens_saved)
-      VALUES (@session_id, @type, @count, @tokens_saved)
+    this.sessionToolCallsStmt = db.prepare(`
+      SELECT tc.request_id, tc.ordinal, tc.name, tc.arguments, tc.result_tokens,
+             r.started_at
+      FROM tool_calls tc
+      JOIN requests r ON r.id = tc.request_id
+      WHERE r.session_id = ?
+      ORDER BY r.started_at, tc.ordinal
     `);
-    this.getOptimizeStmt = db.prepare(`
-      SELECT type, count, tokens_saved FROM optimize_actions
-      WHERE session_id = ? ORDER BY tokens_saved DESC, type
-    `);
-    this.replaceOptimizeTxn = db.transaction(
-      (
-        sessionId: string,
-        rows: ReadonlyArray<{
-          type: string;
-          count: number;
-          tokens_saved: number;
-        }>,
-      ) => {
-        this.deleteOptimizeStmt.run(sessionId);
-        for (const row of rows) {
-          this.insertOptimizeStmt.run({ session_id: sessionId, ...row });
-        }
-      },
-    );
     this.upsertPrefixStmt = db.prepare(`
       INSERT INTO request_prefix (request_id, session_id, system_hash, tools_hash,
                                    message_hashes, message_count)
@@ -591,6 +588,7 @@ export class Store {
       path: row.path,
       trace_file: row.traceFile,
       started_at: row.startedAt,
+      keep_alive: row.keepAlive ?? 0,
     });
   }
 
@@ -629,6 +627,7 @@ export class Store {
       tools_tokens: row.toolsTokens,
       cached_input_tokens: row.cachedInputTokens,
       cache_creation_input_tokens: row.cacheCreationTokens,
+      kind: row.kind,
     });
   }
 
@@ -638,32 +637,6 @@ export class Store {
 
   recordToolResult(toolId: string, bytes: number, tokens: number): void {
     this.recordToolResultStmt.run({ tool_id: toolId, bytes, tokens });
-  }
-
-  // Persist the optimize layer's cumulative actions for a session as per-type
-  // totals. Called live on each optimized request; getActions() is cumulative,
-  // so replacing the session's rows keeps the totals current.
-  recordOptimizeActions(
-    sessionId: string,
-    actions: ReadonlyArray<{ type: string; tokensSaved: number }>,
-  ): void {
-    const byType = new Map<string, { count: number; tokens_saved: number }>();
-    for (const action of actions) {
-      const entry = byType.get(action.type) ?? { count: 0, tokens_saved: 0 };
-      entry.count++;
-      entry.tokens_saved += action.tokensSaved;
-      byType.set(action.type, entry);
-    }
-    const rows = [...byType.entries()].map(([type, v]) => ({
-      type,
-      count: v.count,
-      tokens_saved: v.tokens_saved,
-    }));
-    this.replaceOptimizeTxn(sessionId, rows);
-  }
-
-  getOptimizeActions(sessionId: string): OptimizeActionSummary[] {
-    return this.getOptimizeStmt.all(sessionId) as OptimizeActionSummary[];
   }
 
   // Persist a request's prefix fingerprint (see docs/PREFIX-FINGERPRINTING.md).
@@ -717,7 +690,6 @@ export class Store {
       session,
       requests,
       analysis,
-      optimize: this.getOptimizeActions(id),
     };
   }
 
@@ -783,6 +755,110 @@ export class Store {
     }>;
   }
 
+  sessionToolCalls(sessionId: string): SessionToolCall[] {
+    return this.sessionToolCallsStmt.all(sessionId) as SessionToolCall[];
+  }
+
+  requestTimestamps(): Array<{ session_id: string; started_at: string }> {
+    return this.db
+      .prepare(
+        `SELECT r.session_id, r.started_at
+         FROM requests r
+         WHERE r.started_at IS NOT NULL AND r.keep_alive = 0
+         ORDER BY r.session_id, r.started_at`,
+      )
+      .all() as Array<{ session_id: string; started_at: string }>;
+  }
+
+  projects(): Array<{
+    cwd: string;
+    repo: string | null;
+    session_count: number;
+    total_cost: number;
+    total_tokens: number;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT COALESCE(s.cwd, '') AS cwd,
+                s.repo,
+                COUNT(DISTINCT s.id) AS session_count,
+                COALESCE(SUM(m.cost), 0) AS total_cost,
+                COALESCE(SUM(m.input_tokens + m.output_tokens), 0) AS total_tokens
+         FROM sessions s
+         LEFT JOIN requests r ON r.session_id = s.id
+         LEFT JOIN metrics m ON m.request_id = r.id
+         WHERE s.last_seen_at IS NOT NULL
+         GROUP BY s.cwd, s.repo
+         HAVING session_count > 0
+         ORDER BY total_cost DESC`,
+      )
+      .all() as Array<{
+      cwd: string;
+      repo: string | null;
+      session_count: number;
+      total_cost: number;
+      total_tokens: number;
+    }>;
+  }
+
+  sessionTimeline(
+    days?: number,
+  ): Array<{ date: string; sessions: number; requests: number; cost: number }> {
+    const limit =
+      days !== undefined
+        ? `AND s.started_at >= datetime('now', '-${days} days')`
+        : "";
+    return this.db
+      .prepare(
+        `SELECT DATE(s.started_at) AS date,
+                COUNT(DISTINCT s.id) AS sessions,
+                COUNT(DISTINCT r.id) AS requests,
+                COALESCE(SUM(m.cost), 0) AS cost
+         FROM sessions s
+         LEFT JOIN requests r ON r.session_id = s.id
+         LEFT JOIN metrics m ON m.request_id = r.id
+         WHERE s.started_at IS NOT NULL ${limit}
+         GROUP BY DATE(s.started_at)
+         ORDER BY date DESC`,
+      )
+      .all() as Array<{
+      date: string;
+      sessions: number;
+      requests: number;
+      cost: number;
+    }>;
+  }
+
+  sessionLengths(): Array<{
+    session_id: string;
+    cwd: string;
+    request_count: number;
+    cost: number;
+    input_tokens: number;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT s.id AS session_id,
+                COALESCE(s.cwd, '') AS cwd,
+                COUNT(r.id) AS request_count,
+                COALESCE(SUM(m.cost), 0) AS cost,
+                COALESCE(SUM(m.input_tokens), 0) + COALESCE(SUM(m.output_tokens), 0) AS input_tokens
+         FROM sessions s
+         LEFT JOIN requests r ON r.session_id = s.id
+         LEFT JOIN metrics m ON m.request_id = r.id
+         WHERE r.id IS NOT NULL
+         GROUP BY s.id
+         ORDER BY request_count DESC`,
+      )
+      .all() as Array<{
+      session_id: string;
+      cwd: string;
+      request_count: number;
+      cost: number;
+      input_tokens: number;
+    }>;
+  }
+
   deleteSession(id: string): void {
     const txn = this.db.transaction((sid: string) => {
       this.db
@@ -796,9 +872,6 @@ export class Store {
         )
         .run(sid);
       this.db.prepare("DELETE FROM requests WHERE session_id = ?").run(sid);
-      this.db
-        .prepare("DELETE FROM optimize_actions WHERE session_id = ?")
-        .run(sid);
       this.db
         .prepare("DELETE FROM request_prefix WHERE session_id = ?")
         .run(sid);
@@ -817,6 +890,10 @@ export class Store {
 
   stats(): Stats {
     return this.statsStmt.get() as Stats;
+  }
+
+  kindBreakdown(): KindBreakdown[] {
+    return this.kindBreakdownStmt.all() as KindBreakdown[];
   }
 
   rawQuery(sql: string, ...params: Array<string | number | null>): unknown[] {
@@ -871,6 +948,8 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "tools_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cached_input_tokens", "INTEGER");
   ensureColumn(db, "metrics", "cache_creation_input_tokens", "INTEGER");
+  ensureColumn(db, "metrics", "kind", "TEXT");
+  ensureColumn(db, "requests", "keep_alive", "INTEGER");
   ensureColumn(db, "sessions", "meta", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,
   // otherwise pre-existing databases fail before ensureColumn can run.

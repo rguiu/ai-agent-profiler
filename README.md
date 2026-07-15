@@ -1,8 +1,8 @@
 # AI Agent Profiler
 
 A **local-first profiler for AI coding agents** — read-only by default, with an
-optional in-flight optimize layer (which, we found, mostly can't beat the provider's
-own prompt cache — see [findings](docs/OPTIMIZATION-FINDINGS.md)).
+optional shell-level filter layer that reduces tool output before it enters context
+(via PATH hooks — see [hooks](./src/hook/)).
 
 It sits as a transparent proxy between a coding agent (Claude Code, opencode) and an
 LLM provider (Anthropic, OpenAI-compatible) and records high-fidelity traces of every
@@ -11,14 +11,11 @@ interaction — so you can measure how the agent uses tools, files, context, and
 It is a **performance profiler for autonomous coding agents** — not an observability
 dashboard, not an enterprise proxy. See [`VISION.md`](VISION.md).
 
-On top of profiling, there's an optional [optimize layer](#optimize-layer) that can
-rewrite requests in-flight to cut token waste. We tried it and it mostly **doesn't beat
-the provider's own prompt cache**: on both Anthropic/Bedrock and DeepSeek, the high-impact
-ideas all edit the cached prefix, and editing the prefix costs more (cache writes / misses)
-than the tokens it saves. So the layer is **off by default** and passes cached traffic
-through. See [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) for the full
-story, what remains safe, and future directions (e.g. rewriting only idle/cold sessions,
-where the cache has expired anyway).
+On top of profiling, there are **shell hooks** that filter tool output before it
+enters context — `git status`, `grep`, `ls`, `find`, `node --test`, `npm test`.
+Unlike request rewriting (which destroys the provider's prompt cache), hooks never
+touch the API request body. Enable per session with `aap run --hooks`.
+See `aap hook help` for details.
 
 **Live demo:** explore real captured sessions in a static, read-only clone of the
 dashboard — no install required: **https://rguiu.github.io/ai-agent-profiler/**
@@ -55,6 +52,7 @@ the LLM.
   tokens, duplicated totals).
 - **Prompt-cache awareness** — captures provider cache-hit tokens so findings reflect real cost.
 - **Message-stack breakdown** — per-request context split by role (system/user/assistant/tool).
+- **Request-kind classification** — labels each call (user turn, file-search subagent, recap, compaction, title-gen…) and breaks out the cost of non-user, agent-initiated traffic. See [`docs/REQUEST-KINDS.md`](docs/REQUEST-KINDS.md).
 - **Command-usage analysis** — which shell programs run through `bash`, how often, by category.
 - **Recommendations** — actionable findings per session (repeated reads, redundant calls,
   high amplification, context duplication, inefficient search→read).
@@ -72,28 +70,32 @@ See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
 ## Installation
 
-Not published yet — install from source. Requires **Node 20+**.
+Requires **Node 20+**.
 
+### npm (recommended)
+
+```bash
+npm install -g ai-agent-profiler
+aap install           # seeds ~/.aap/config.toml, creates ~/.aap/data/
 ```
+
+`aap install` is safe to re-run — it never overwrites existing config. If the
+bundled example config has new fields, they are appended with a comment so you
+can review them.
+
+### From source
+
+```bash
 git clone <repo-url> ai-agent-profiler && cd ai-agent-profiler
-npm install          # install dependencies
-npm run build        # compile to dist/
-npm link             # put the `aap` command on your PATH (or: npm install -g .)
+npm install
+npm run build
+npm link              # puts `aap` on your PATH (or: npm install -g .)
+aap install           # seeds ~/.aap/config.toml
 ```
 
-`npm link` is a per-machine step. After pulling changes, re-run `npm run build`.
+### Manual config
 
-Then create your config where `aap` looks by default. The easiest way is the
-installer, which seeds `~/.aap/config.toml` (from your `config.toml`, or
-`config.example.toml`) and points storage at `~/.aap/data`:
-
-```
-./install.sh
-```
-
-Or do it by hand:
-
-```
+```bash
 mkdir -p ~/.aap
 cp config.example.toml ~/.aap/config.toml   # edit providers / pricing / storage.dir
 ```
@@ -107,8 +109,9 @@ cp config.example.toml ~/.aap/config.toml   # edit providers / pricing / storage
 ## Usage
 
 ```
-aap serve            # start the proxy + read API (prints a line per request)
-aap run <agent>      # launch an agent through the profiler, e.g. aap run claude
+aap install           # first-run: seeds ~/.aap/config.toml (safe to re-run)
+aap serve             # start the proxy + read API (prints a line per request)
+aap run <agent>       # launch an agent through the profiler, e.g. aap run claude
                      #   tag a run: aap run --meta task=explain --meta iter=1 opencode
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
 aap sessions         # list captured sessions (aap sessions rm <id> to delete)
@@ -116,7 +119,7 @@ aap commands         # break shell commands down by token cost
 aap tag <id> k=v     # tag a session with metadata (e.g. verify=pass)
 aap export <id>      # export a session report (Markdown; add --json for JSON)
 aap compare <ids>    # compare sessions side by side (add --json for JSON)
-aap optimize <id>    # dry-run: show which optimizations would fire + tokens saved
+aap hook install     # install shell hooks for tool output filtering
 aap mcp              # start an MCP server (stdio) for agent self-introspection
 aap config           # print the resolved configuration
 ```
@@ -237,73 +240,44 @@ works — and its caveats — differ per provider:
 }
 ```
 
-## Optimize Layer
+## Shell hooks (tool output filtering)
 
-An optional layer that can rewrite request bodies in-flight. Enable it with `--optimize`
-or in config:
-
-```
-aap serve --optimize
-```
-
-**It is off by default, and on cached providers it deliberately does very little.** We
-built a range of prompt-shrinking strategies (summarising old results, dropping the
-system prompt, pruning tools, compacting history) and found they don't beat the provider's
-own prompt cache: on Anthropic/Bedrock and DeepSeek alike, the high-impact ideas edit the
-_cached prefix_, and editing the prefix costs more (cache writes / misses) than the tokens
-it saves. So the layer auto-detects the provider and keeps only the edits that don't touch
-the cached prefix — principally `stripTools` (removed before the first write) and the
-deterministic `stableTruncate`; everything that rewrites the middle of the prompt is
-disabled in steady state.
-
-> **Note (correction):** `tailTruncate` was previously listed as prefix-safe. It isn't —
-> because the client re-sends the full result next turn once it moves into mid-history, and
-> `tailTruncate` only edits the newest message, so it fails to re-shrink it and forces a
-> cache rebuild. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
-> The genuinely safe deterministic truncator is `stableTruncate`.
-
-**`optimizeOnCold` (off by default — known flaw).** The intended idea: when the cache has
-already expired, the next write is unavoidable, so shrink the prefix on that one turn "for
-free." In practice it causes a **double write** — the cold turn writes a shrunk prefix, then
-the next turn reverts to the steady-state set and the client re-sends the pristine full
-prefix (it never learns the proxy edited it), so the whole prefix rebuilds. Net worse than
-doing nothing. Only _deterministic_ edits can be sustained across turns, and those are safe
-to run always — so gating them on "cold" adds nothing. Left configurable for experiments,
-default off. See [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md).
-
-**`upgradeCacheTtl` (off by default).** Claude Code always requests the **5-minute** cache
-(verified across captured Bedrock traces: every `cache_control` marker is bare
-`{"type":"ephemeral"}` with no `ttl`). Setting `upgradeCacheTtl = "1h"` rewrites those markers
-to a 1-hour TTL before forwarding. On Opus 4.x a 1h write costs 2× input ($10/MTok) vs 1.25×
-for 5m ($6.25/MTok), but the entry survives 12× longer — so it pays off when your idle gaps
-often fall between 5 min and 1 hour (fewer re-writes), and it makes cross-user cache sharing
-far more likely. Reads cost the same ($0.50/MTok) either way. Enable it from the start of a
-session, since it changes the cached-prefix bytes.
-
-The full story — what we tried, why it failed, what's still safe, and where real gains
-might exist (e.g. cross-user prefix normalisation) — is in:
-
-- [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) — the narrative.
-- [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue + safety table.
-- [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the caches work and how to benchmark them fairly.
-- [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider notes.
-
-> **You don't need to pick strategies.** Pass `--optimize` and the auto-detected profile
-> enables only the safe set for your provider.
-
-### Inspecting what fired
-
-A live optimized run records **which strategies fired** and how many tokens each removed,
-per session:
+Path-based wrappers in `~/.aap/bin/` that filter tool output before it enters the
+agent context. Never touches the API request body or the prompt cache. Hooks are
+on/off per session — pass `--hooks` to `aap run` to activate.
 
 ```
-aap export <session-id>            # Markdown report — "Optimizations applied" table
-aap export <session-id> --json     # machine-readable: the `optimize` array
-aap optimize <session-id>          # dry-run simulation over an already-captured session
+aap hook install          # install 7 wrappers (git, ls, grep, node, find, cat, npm)
+aap hook status           # show installed hooks
 ```
 
-(Recorded "tokens removed" is prompt shrinkage, not a guaranteed cost saving — see the
-findings doc for why the two differ on cached providers.)
+When hooks are active (`aap run --hooks` or `AAP_HOOK_MODE=true`), `~/.aap/bin`
+is prepended to PATH. The wrappers filter output:
+
+- **git** — `status` (short), `diff` (tail -80), `log` (oneline -15), `show` (stat)
+- **node** — `--test` strips passing tests, keeps failure details + diagnostics
+- **npm** — `test`/`run build`/`run lint`/`run typecheck` → errors only, tail -10 on failure
+- **grep/rg** — tail -40 lines
+- **ls, find, cat** — truncated output (head -40 / head -60)
+
+## Cache maintenance
+
+**`upgradeCacheTtl` (via `--cache-1h`).** Claude Code always requests the 5-minute
+cache. `aap run claude --cache-1h` rewrites `cache_control` markers to 1h before
+forwarding. Costs 2× input on write vs 1.25× for 5m but survives 12× longer —
+wins when idle gaps fall between 5 min and 1 hour.
+
+**Keep-alive.** `AAP_KEEP_ALIVE=1 aap run claude` replays the last request with
+`max_tokens: 1` to prevent cache expiry during idle. Best with `--cache-1h` (pings
+every 48 min vs every 4 min).
+
+The full story — what we tried, why proxy rewriting failed, and what works now —
+is in:
+
+- [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md)
+- [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md)
+- [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md)
+- [`docs/agents/claude-code.md`](docs/agents/claude-code.md)
 
 ## Benchmarks
 
@@ -343,11 +317,12 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`VISION.md`](VISION.md) — why the project exists.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is designed and why.
 - [`ROADMAP.md`](ROADMAP.md) — what is done and what comes next.
-- [`docs/OPTIMIZATION-FINDINGS.md`](docs/OPTIMIZATION-FINDINGS.md) — what we tried to optimize, why it doesn't beat the cache, and where gains might still exist.
-- [`docs/OPTIMIZATION-STRATEGIES.md`](docs/OPTIMIZATION-STRATEGIES.md) — per-strategy catalogue and cache-safety table.
+- [`docs/REQUEST-KINDS.md`](docs/REQUEST-KINDS.md) — how requests are classified (user turn vs subagent/recap/compaction/title) and the detection signals.
+- [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md) — what we tried to optimize, why it doesn't beat the cache, and where gains might still exist.
+- [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md) — per-strategy catalogue and cache-safety table.
 - [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
 - [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider caching and optimizer notes.
-- [`docs/OPTIMIZATIONS-TODO.md`](docs/OPTIMIZATIONS-TODO.md) — future optimization roadmap (normalizePrefix, keep-alive, IASH; and why optimizeOnCold was abandoned).
+- [`docs/optimization/TODO.md`](docs/optimization/TODO.md) — future optimization roadmap (normalizePrefix, keep-alive, IASH; and why optimizeOnCold was abandoned).
 - [`benchmarks/README.md`](benchmarks/README.md) — the benchmark corpus and runner.
 
 ## License
