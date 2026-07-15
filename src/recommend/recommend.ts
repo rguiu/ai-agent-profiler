@@ -1,4 +1,5 @@
 import type { SessionDetail, GrowthPoint } from "../store/index.js";
+import type { SearchReadChain } from "../analyze/index.js";
 
 export interface Recommendation {
   kind: string;
@@ -43,7 +44,10 @@ function n(value: number): string {
     .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
-export function recommend(detail: SessionDetail): Recommendation[] {
+export function recommend(
+  detail: SessionDetail,
+  searchReadChains?: SearchReadChain[],
+): Recommendation[] {
   const recs: Recommendation[] = [];
   const { analysis } = detail;
 
@@ -146,6 +150,21 @@ export function recommend(detail: SessionDetail): Recommendation[] {
       severity: searchCalls >= SEARCH_COMMANDS_MIN * 2 ? "warn" : "info",
       title: `${searchCalls} locate-type shell command(s) alongside ${reads} file read(s)`,
       detail: `The agent ran ${searchCalls} search/list command(s) (${names}) through the shell and separately read files ${reads} time(s). A repo-aware locate-and-read tool that resolves a filename and returns its content in one call would remove these search→read round-trips.`,
+    });
+  }
+
+  if (searchReadChains && searchReadChains.length > 0) {
+    const exampleChains = searchReadChains.slice(0, 3);
+    const detailLines = exampleChains.map(
+      (c) =>
+        `"${c.searchCommand}" → ${c.readTool} "${c.readFile}" (${c.stepsBetween} step${c.stepsBetween !== 1 ? "s" : ""} later)`,
+    );
+    const total = searchReadChains.length;
+    recs.push({
+      kind: "ordered_search_read_chain",
+      severity: total >= 5 ? "high" : total >= 3 ? "warn" : "info",
+      title: `${total} ordered search→read chain${total !== 1 ? "s" : ""} detected`,
+      detail: `The agent ran search commands and subsequently read files within the searched directories. Examples: ${detailLines.join("; ")}${total > 3 ? ` (+${total - 3} more)` : ""}. These are confirmed locate→read patterns where a combined tool would eliminate at least ${total} round-trips.`,
     });
   }
 

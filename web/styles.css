@@ -529,3 +529,200 @@ tr.keepalive:hover td {
   background: color-mix(in srgb, var(--warn) 20%, transparent);
   color: var(--warn);
 }
+
+/* Conversation tree */
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 24px;
+}
+.tree-node {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.tree-node.has-tools {
+  cursor: default;
+}
+.tree-node[open] {
+  border-color: var(--accent);
+}
+.tree-summary {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.tree-summary::-webkit-details-marker {
+  display: none;
+}
+.tree-summary::before {
+  content: "▶";
+  font-size: 8px;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.tree-node[open] > .tree-summary::before {
+  transform: rotate(90deg);
+}
+.tree-seq {
+  font-family: var(--mono);
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 28px;
+}
+.tree-provider {
+  font-size: 11px;
+}
+.tree-model {
+  font-size: 11px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-tokens {
+  font-size: 11px;
+  margin-left: auto;
+}
+.tree-cost {
+  font-size: 12px;
+  font-weight: 600;
+}
+.tree-tools {
+  font-size: 11px;
+}
+.tree-children {
+  border-top: 1px solid var(--border);
+  padding: 4px 0;
+}
+.tree-tool {
+  padding: 4px 12px 4px 44px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.tree-tool:hover {
+  background: var(--panel-2);
+}
+.tree-tool-num {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.tree-tool-name {
+  color: var(--accent);
+}
+.tree-tool-args {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-tool-result {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.chain-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+.chain-badge.chain-search {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.chain-badge.chain-read {
+  background: color-mix(in srgb, var(--good) 18%, transparent);
+  color: var(--good);
+}
+
+.intro-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.intro-card {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+.intro-card:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.intro-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.intro-card-date {
+  font-size: 13px;
+  color: var(--accent);
+}
+.intro-card-scope {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.intro-card-summary {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.intro-card-cost {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--good);
+}
+
+.intro-card-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+}
+.intro-card-wrap .intro-card {
+  flex: 1;
+}
+.intro-card-wrap .del-btn {
+  margin: 12px 8px 0 4px;
+  flex-shrink: 0;
+}
+
+.del-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: 1.4;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.del-btn:hover {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+.del-btn.del-sm {
+  font-size: 13px;
+  padding: 0 4px;
+}

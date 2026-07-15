@@ -3,7 +3,11 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "../config/index.js";
-import { commandBreakdown } from "../analyze/index.js";
+import {
+  analyzeIdleGaps,
+  commandBreakdown,
+  detectSearchReadChains,
+} from "../analyze/index.js";
 import { collectSummaries } from "./compare.js";
 import { recommend } from "../recommend/index.js";
 import { openStore, type Store } from "../store/index.js";
@@ -137,8 +141,11 @@ function registerTools(server: McpServer, store: Store): void {
         return {
           content: [{ type: "text", text: `Session "${id}" not found` }],
         };
+      const chains = detectSearchReadChains(store.sessionToolCalls(id));
       return {
-        content: [{ type: "text", text: JSON.stringify(recommend(detail)) }],
+        content: [
+          { type: "text", text: JSON.stringify(recommend(detail, chains)) },
+        ],
       };
     },
   );
@@ -191,6 +198,57 @@ function registerTools(server: McpServer, store: Store): void {
       content: [
         { type: "text", text: JSON.stringify(store.globalToolUsage()) },
       ],
+    }),
+  );
+
+  server.tool(
+    "idle_gaps",
+    "Distribution of idle gaps between requests across all sessions, bucketed into <5m (cache alive), 5m-1h (1h TTL would help), >1h (keep-alive needed).",
+    {},
+    async () => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(analyzeIdleGaps(store.requestTimestamps())),
+        },
+      ],
+    }),
+  );
+
+  server.tool(
+    "projects",
+    "All projects (cwd + repo) with session count, total cost, and total tokens.",
+    {},
+    async () => ({
+      content: [{ type: "text", text: JSON.stringify(store.projects()) }],
+    }),
+  );
+
+  server.tool(
+    "session_timeline",
+    "Sessions grouped by day with count, request count, and total cost. Use to spot trends over time.",
+    {
+      days: z
+        .number()
+        .optional()
+        .describe("How many days back to look. Omit for all-time."),
+    },
+    async ({ days }) => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(store.sessionTimeline(days)),
+        },
+      ],
+    }),
+  );
+
+  server.tool(
+    "session_lengths",
+    "Per-session stats: request count, cost, and total tokens. Sorted by largest first. Use to find expensive or long-running sessions.",
+    {},
+    async () => ({
+      content: [{ type: "text", text: JSON.stringify(store.sessionLengths()) }],
     }),
   );
 

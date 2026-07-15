@@ -70,28 +70,32 @@ See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
 ## Installation
 
-Not published yet — install from source. Requires **Node 20+**.
+Requires **Node 20+**.
 
+### npm (recommended)
+
+```bash
+npm install -g ai-agent-profiler
+aap install           # seeds ~/.aap/config.toml, creates ~/.aap/data/
 ```
+
+`aap install` is safe to re-run — it never overwrites existing config. If the
+bundled example config has new fields, they are appended with a comment so you
+can review them.
+
+### From source
+
+```bash
 git clone <repo-url> ai-agent-profiler && cd ai-agent-profiler
-npm install          # install dependencies
-npm run build        # compile to dist/
-npm link             # put the `aap` command on your PATH (or: npm install -g .)
+npm install
+npm run build
+npm link              # puts `aap` on your PATH (or: npm install -g .)
+aap install           # seeds ~/.aap/config.toml
 ```
 
-`npm link` is a per-machine step. After pulling changes, re-run `npm run build`.
+### Manual config
 
-Then create your config where `aap` looks by default. The easiest way is the
-installer, which seeds `~/.aap/config.toml` (from your `config.toml`, or
-`config.example.toml`) and points storage at `~/.aap/data`:
-
-```
-./install.sh
-```
-
-Or do it by hand:
-
-```
+```bash
 mkdir -p ~/.aap
 cp config.example.toml ~/.aap/config.toml   # edit providers / pricing / storage.dir
 ```
@@ -105,8 +109,9 @@ cp config.example.toml ~/.aap/config.toml   # edit providers / pricing / storage
 ## Usage
 
 ```
-aap serve            # start the proxy + read API (prints a line per request)
-aap run <agent>      # launch an agent through the profiler, e.g. aap run claude
+aap install           # first-run: seeds ~/.aap/config.toml (safe to re-run)
+aap serve             # start the proxy + read API (prints a line per request)
+aap run <agent>       # launch an agent through the profiler, e.g. aap run claude
                      #   tag a run: aap run --meta task=explain --meta iter=1 opencode
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
 aap sessions         # list captured sessions (aap sessions rm <id> to delete)

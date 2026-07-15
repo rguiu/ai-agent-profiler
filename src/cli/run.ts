@@ -1,5 +1,7 @@
+import type { ChildProcess } from "node:child_process";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { join, dirname } from "node:path";
 import { loadConfig, type Config } from "../config/index.js";
 import { ensureHooksInstalled, hooksPath } from "../hook/install.js";
 import type { SessionInfo } from "../session/index.js";
@@ -189,7 +191,12 @@ export async function run(args: string[]): Promise<void> {
   ensureHooksInstalled();
   if (hooks) {
     env.PATH = `${hooksPath()}:${env.PATH || "/usr/local/bin:/usr/bin:/bin"}`;
-    console.error("aap: shell hooks active");
+    env.AAP_HOOK_MEASURE = process.env.AAP_HOOK_MEASURE ?? "1";
+    env.AAP_HOOK_METRICS_DIR =
+      process.env.AAP_HOOK_METRICS_DIR ?? join(dirname(hooksPath()), "metrics");
+    console.error(
+      `aap: shell hooks active (metrics: ${env.AAP_HOOK_METRICS_DIR})`,
+    );
   }
 
   const child = spawn(agent, agentArgs, { stdio: "inherit", env });
@@ -218,6 +225,48 @@ export async function run(args: string[]): Promise<void> {
   child.on("exit", (code, signal) => {
     if (keepAliveTimer) clearInterval(keepAliveTimer);
     process.exit(code ?? (signal ? 1 : 0));
+  });
+
+  addTerminationHandlers(child, keepAliveTimer);
+}
+
+const SHUTDOWN_TIMEOUT_MS = 5000;
+
+function addTerminationHandlers(
+  child: ChildProcess,
+  keepAliveTimer: ReturnType<typeof setInterval> | null,
+): void {
+  let shuttingDown = false;
+
+  function cleanup(signal: NodeJS.Signals): void {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    if (keepAliveTimer) clearInterval(keepAliveTimer);
+
+    if (child.exitCode !== null || child.signalCode !== null) return;
+
+    child.kill(signal);
+
+    const forceTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      process.exitCode = 1;
+      process.exit();
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceTimer.unref();
+  }
+
+  process.on("SIGINT", () => cleanup("SIGINT"));
+  process.on("SIGTERM", () => cleanup("SIGTERM"));
+  process.on("SIGHUP", () => cleanup("SIGHUP"));
+
+  process.on("exit", () => {
+    if (keepAliveTimer) clearInterval(keepAliveTimer);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
   });
 }
 
@@ -267,7 +316,7 @@ async function sendKeepAlivePing(
   }
 }
 
-async function registerSession(
+export async function registerSession(
   origin: string,
   session: SessionInfo,
 ): Promise<void> {

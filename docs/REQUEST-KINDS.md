@@ -70,13 +70,13 @@ You are a file search specialist for Claude Code…      ← search
 OpenCode agents carry their identity in their per-agent system prompt (text
 files like `prompt/title.txt`, `prompt/compaction.txt`, `prompt/explore.txt`):
 
-| Kind       | System-prompt marker                                          |
-| ---------- | ------------------------------------------------------------- |
-| `title`    | `You are a title generator. You output ONLY a thread title.`  |
-| `compact`  | `You are an anchored context summarization assistant…`        |
-| `search`   | `You are a file search specialist. You excel at…`             |
-| `compact`  | `Summarize what was done in this conversation.` (summary)     |
-| `main`     | `You are opencode, an interactive CLI tool…` (build/plan)     |
+| Kind      | System-prompt marker                                         |
+| --------- | ------------------------------------------------------------ |
+| `title`   | `You are a title generator. You output ONLY a thread title.` |
+| `compact` | `You are an anchored context summarization assistant…`       |
+| `search`  | `You are a file search specialist. You excel at…`            |
+| `compact` | `Summarize what was done in this conversation.` (summary)    |
+| `main`    | `You are opencode, an interactive CLI tool…` (build/plan)    |
 
 ### 2. The last message text
 
@@ -84,13 +84,13 @@ files like `prompt/title.txt`, `prompt/compaction.txt`, `prompt/explore.txt`):
 normal system prompt** — nothing in the system block distinguishes them from a
 user turn. They are only identifiable by their **final instruction**:
 
-| Kind       | Last-message marker                                                        | Agent      |
-| ---------- | -------------------------------------------------------------------------- | ---------- |
-| `recap`    | `The user stepped away` + `recap`                                          | Claude     |
-| `compact`  | `summary of the conversation` / `create a detailed summary`                | Claude     |
+| Kind       | Last-message marker                                                             | Agent    |
+| ---------- | ------------------------------------------------------------------------------- | -------- |
+| `recap`    | `The user stepped away` + `recap`                                               | Claude   |
+| `compact`  | `summary of the conversation` / `create a detailed summary`                     | Claude   |
 | `compact`  | `## Objective` + `## Important Details` + `## Work State` (compaction template) | OpenCode |
-| `title`    | `Generate a title for this conversation:`                                  | OpenCode   |
-| `webfetch` | (subagent +) `Web page content:`                                          | Claude     |
+| `title`    | `Generate a title for this conversation:`                                       | OpenCode |
+| `webfetch` | (subagent +) `Web page content:`                                                | Claude   |
 
 ## False-positive traps
 

@@ -976,7 +976,8 @@ describe("classifyRequestKind", () => {
             messages: [
               {
                 role: "system",
-                content: "You are a file search specialist. You excel at navigating codebases.",
+                content:
+                  "You are a file search specialist. You excel at navigating codebases.",
               },
               { role: "user", content: "find the auth module" },
             ],

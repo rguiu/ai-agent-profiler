@@ -19,4 +19,5 @@ export {
   type GrowthPoint,
   type SessionAnalysis,
   type SessionContext,
+  type SessionToolCall,
 } from "./store.js";
