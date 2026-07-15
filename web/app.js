@@ -98,9 +98,22 @@ async function renameSession(id, current) {
 }
 window._renameSession = renameSession;
 
+// Rename button carries its id/name in data-attributes; a single delegated
+// listener (below) handles the click. Avoids fragile inline-onclick quoting —
+// session names can contain quotes that would break an inline handler.
 function renameBtn(id, current, small) {
-  return `<button class="rename-btn${small ? " del-sm" : ""}" onclick="event.stopPropagation();(async()=>{try{await window._renameSession('${esc(id)}',${JSON.stringify(current || "")})}catch(e){alert(e.message)}})()" title="Rename session">✎</button>`;
+  return `<button class="rename-btn${small ? " del-sm" : ""}" data-rename="${esc(id)}" data-name="${esc(current || "")}" title="Rename session">✎</button>`;
 }
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest && e.target.closest(".rename-btn[data-rename]");
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  renameSession(btn.dataset.rename, btn.dataset.name).catch((err) =>
+    alert(err.message),
+  );
+});
 
 function b64ToText(b64) {
   try {

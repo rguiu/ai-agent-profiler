@@ -43,10 +43,14 @@ export function buildProviderEnv(
   }
 
   // Bedrock: Claude Code uses ANTHROPIC_BEDROCK_BASE_URL (not the AWS SDK env var).
-  // The SDK sends requests to /model/{id}/converse-stream on this host.
+  // The SDK appends /model/{id}/converse-stream to this base. We embed the
+  // session id in the base path (/aap-session/{id}) so concurrent Bedrock
+  // agents are attributed correctly — the proxy strips this prefix before
+  // re-signing, so it never reaches AWS. Without it, Bedrock requests carry no
+  // session marker and fall back to the (mutable, race-prone) active session.
   const useBedrock = env?.CLAUDE_CODE_USE_BEDROCK;
   if (useBedrock && useBedrock !== "0" && config.providers.bedrock) {
-    out.ANTHROPIC_BEDROCK_BASE_URL = origin;
+    out.ANTHROPIC_BEDROCK_BASE_URL = `${origin}/aap-session/${sessionId}`;
   }
 
   return out;

@@ -78,6 +78,29 @@ describe("parseRoute", () => {
     expect(parseRoute("/model/some-model/converse", providers)).toBeNull();
   });
 
+  it("routes session-scoped Bedrock paths from the path, not the global", () => {
+    // The active-session fallback ("other-session") must be ignored when the
+    // path carries its own session id — this is the concurrent-session fix.
+    expect(
+      parseRoute(
+        "/aap-session/session-xyz/model/eu.anthropic.claude-opus-4-8/converse-stream",
+        withBedrock,
+        "other-session",
+      ),
+    ).toEqual({
+      sessionId: "session-xyz",
+      provider: "bedrock",
+      upstreamPath: "/model/eu.anthropic.claude-opus-4-8/converse-stream",
+    });
+  });
+
+  it("rejects an unsafe session id in a Bedrock path prefix", () => {
+    // Falls through to the bare /model/ match (no /model/ here) → null.
+    expect(
+      parseRoute("/aap-session/bad id!/model/x/converse", withBedrock),
+    ).toBeNull();
+  });
+
   it("routes Ollama /api/ paths with active session", () => {
     expect(parseRoute("/api/chat", withOllama, null, "ollama-sid")).toEqual({
       sessionId: "ollama-sid",
