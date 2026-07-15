@@ -806,11 +806,17 @@ function extractPrefixSegments(record: Record<string, unknown>): {
 
 // Stable serialization of a message for hashing: role + content only, so
 // unrelated fields (ids, cache_control flags, etc.) don't cause false breaks.
+// Content hash of a message (role + normalized text). Whitespace is collapsed
+// so trivial formatting differences don't read as changes — and, critically,
+// this MUST match MessageSummary.hash in summarizeMessages so the request-detail
+// "new vs previous" diff (which compares the two) doesn't false-positive.
 function hashMessage(message: unknown): string {
   const msg = asRecord(message);
   if (!msg) return fnv1a(JSON.stringify(message ?? null));
   const role = asString(msg.role) ?? "";
-  const content = extractResultText(msg.content ?? "");
+  const content = extractResultText(msg.content ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   return fnv1a(`${role}:${content}`);
 }
 

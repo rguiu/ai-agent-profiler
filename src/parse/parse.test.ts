@@ -451,6 +451,26 @@ describe("summarizeMessages", () => {
     expect(new Set(hashes).size).toBe(3);
   });
 
+  it("message hashes match the prefix fingerprint (diff invariant)", () => {
+    // The request-detail "new vs previous" diff compares summarizeMessages
+    // hashes against stored prefix-fingerprint hashes (parseTrace). They must
+    // use the identical formula, incl. whitespace normalization, or every
+    // message with a newline falsely reads as changed.
+    const events = requestTrace({
+      model: "claude",
+      system: "You are\n\n  Claude.",
+      messages: [
+        { role: "user", content: "hello\n\tworld" },
+        { role: "assistant", content: "hi   there" },
+      ],
+    });
+    const fp = parseTrace(events).fingerprint.messageHashes;
+    const summary = summarizeMessages(events)
+      .messages.filter((m) => m.role !== "system")
+      .map((m) => m.hash);
+    expect(summary).toEqual(fp);
+  });
+
   it("treats Anthropic top-level system as a synthetic message", () => {
     const stack = summarizeMessages(
       requestTrace({
