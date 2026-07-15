@@ -813,7 +813,10 @@ function extractPrefixSegments(record: Record<string, unknown>): {
 function hashMessage(message: unknown): string {
   const msg = asRecord(message);
   if (!msg) return fnv1a(JSON.stringify(message ?? null));
-  const role = asString(msg.role) ?? "";
+  // Role fallback "unknown" must match MessageSummary.hash in summarizeMessages
+  // exactly, or a role-less message hashes differently in the two paths and
+  // false-flags as changed in the request-detail diff.
+  const role = asString(msg.role) ?? "unknown";
   const content = extractResultText(msg.content ?? "")
     .replace(/\s+/g, " ")
     .trim();

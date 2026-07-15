@@ -709,8 +709,14 @@ function messageStackHtml(stack, requestId) {
   // Diff vs previous request: a message is "new" if its content hash wasn't
   // present in the previous request's message set. Matched by hash (set), not
   // index, so it's robust to the system-message offset in the two sources.
+  // The system prompt is EXCLUDED from the diff: previousMessageHashes come from
+  // the prefix fingerprint, which hashes record.messages only (system lives in
+  // systemHash), so a system row would never be in prevSet and would always
+  // false-flag as "new". Its stability is covered by the prefix-stability view.
   const prevSet = new Set(stack.previousMessageHashes || []);
   const hasPrev = Array.isArray(stack.previousMessageHashes);
+  const isNewMsg = (m) =>
+    hasPrev && m.role !== "system" && m.hash && !prevSet.has(m.hash);
   // The biggest few messages by tokens — the ones worth jumping to.
   const maxTokens = Math.max(1, ...stack.messages.map((m) => m.tokens));
 
@@ -722,7 +728,7 @@ function messageStackHtml(stack, requestId) {
       const result = m.toolResultFor
         ? ` <span class="muted">⇐ tool result</span>`
         : "";
-      const isNew = hasPrev && m.hash && !prevSet.has(m.hash);
+      const isNew = isNewMsg(m);
       const newFlag = isNew ? ` <span class="msg-new">● new</span>` : "";
       const isFocus = m.index === stack.lastUserIndex;
       const big = m.tokens >= maxTokens * 0.5 && m.tokens > 2000;
@@ -743,9 +749,7 @@ function messageStackHtml(stack, requestId) {
     })
     .join("");
 
-  const newCount = hasPrev
-    ? stack.messages.filter((m) => m.hash && !prevSet.has(m.hash)).length
-    : null;
+  const newCount = hasPrev ? stack.messages.filter(isNewMsg).length : null;
   const diffNote = hasPrev
     ? `<span class="muted">${newCount} new/changed vs previous request</span>`
     : `<span class="muted">no previous request to diff against</span>`;

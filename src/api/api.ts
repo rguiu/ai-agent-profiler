@@ -203,7 +203,13 @@ export function handleApi(
     const pos = prefixes.findIndex((p) => p.request_id === id);
     const previousMessageHashes =
       pos > 0 ? (prefixes[pos - 1]?.message_hashes ?? null) : null;
-    writeJson(res, 200, { ...stack, previousMessageHashes });
+    // Prefer the authoritative kind stored at parse time — it's classified from
+    // the full last-message text, whereas summarizeMessages re-derives it from a
+    // 600-char-clipped preview of the last *user* message and can disagree
+    // (e.g. a compaction phrase past char 600, or a trigger not on the last
+    // user message). Fall back to the stack's kind if not yet parsed.
+    const kind = detail.kind ?? stack.kind;
+    writeJson(res, 200, { ...stack, kind, previousMessageHashes });
     return true;
   }
 

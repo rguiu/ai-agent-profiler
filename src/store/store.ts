@@ -563,7 +563,7 @@ export class Store {
       FROM request_prefix p JOIN requests r ON r.id = p.request_id
       LEFT JOIN metrics m ON m.request_id = p.request_id
       WHERE p.session_id = ?
-      ORDER BY r.started_at
+      ORDER BY r.started_at, p.request_id
     `);
   }
 

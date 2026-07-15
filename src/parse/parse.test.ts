@@ -471,6 +471,18 @@ describe("summarizeMessages", () => {
     expect(summary).toEqual(fp);
   });
 
+  it("hashes a role-less message identically in both paths", () => {
+    // Both hashMessage and MessageSummary.hash must fall back to the same
+    // "unknown" role, or a message without a role false-flags as changed.
+    const events = requestTrace({
+      model: "claude",
+      messages: [{ content: "no role here" }],
+    });
+    const fp = parseTrace(events).fingerprint.messageHashes;
+    const summary = summarizeMessages(events).messages.map((m) => m.hash);
+    expect(summary).toEqual(fp);
+  });
+
   it("treats Anthropic top-level system as a synthetic message", () => {
     const stack = summarizeMessages(
       requestTrace({
