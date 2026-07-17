@@ -104,17 +104,27 @@ function registerSearchTools(server: McpServer, search: SearchStore): void {
       query: z.string().describe("Search terms (quoted phrases supported)"),
       session: z.string().optional().describe("Restrict to one session id"),
       repo: z.string().optional().describe("Repo substring filter"),
+      provider: z
+        .string()
+        .optional()
+        .describe("Provider filter (e.g. anthropic, deepseek)"),
+      project: z
+        .string()
+        .optional()
+        .describe("Project filter — matches repo or cwd substring"),
       kind: z
         .enum(["prompt", "response", "tool_call", "tool_result", "error"])
         .optional()
         .describe("Restrict to one chunk kind"),
       limit: z.number().optional().describe("Max hits (default 20)"),
     },
-    async ({ query, session, repo, kind, limit }) => {
+    async ({ query, session, repo, provider, project, kind, limit }) => {
       const hits = search.search({
         query,
         session,
         repo,
+        provider,
+        project,
         kinds: kind ? [kind] : undefined,
         limit,
       });

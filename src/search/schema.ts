@@ -11,6 +11,20 @@
 //               immutable (re-indexing deletes then re-inserts).
 // index_state — per-request indexing ledger; makes indexing idempotent and
 //               keyed by request_id, mirroring how parse tracks metrics.
+//
+// SEARCH_SCHEMA_VERSION is stored in PRAGMA user_version. Bump it whenever the
+// chunk shape changes: openSearchStore drops and recreates the tables, and the
+// indexer transparently rebuilds from raw traces (which stay authoritative).
+export const SEARCH_SCHEMA_VERSION = 2;
+
+export const SEARCH_DROP = `
+DROP TRIGGER IF EXISTS chunks_ai;
+DROP TRIGGER IF EXISTS chunks_ad;
+DROP TABLE IF EXISTS chunks_fts;
+DROP TABLE IF EXISTS chunks;
+DROP TABLE IF EXISTS index_state;
+`;
+
 export const SEARCH_SCHEMA = `
 CREATE TABLE IF NOT EXISTS chunks (
   id            INTEGER PRIMARY KEY,
@@ -23,6 +37,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   tool_name     TEXT,
   file_path     TEXT,
   model         TEXT,
+  provider      TEXT,
   request_kind  TEXT,
   repo          TEXT,
   cwd           TEXT,

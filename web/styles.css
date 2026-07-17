@@ -810,3 +810,10 @@ tr.keepalive:hover td {
   margin-top: 16px;
   font-size: 12px;
 }
+
+.search-pages {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+}

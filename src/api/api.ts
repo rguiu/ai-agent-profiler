@@ -223,8 +223,10 @@ function requireGet(req: IncomingMessage, res: ServerResponse): boolean {
   return false;
 }
 
-// GET /search?q=&kind=&session=&tool=&file=&repo=&model=&errors=1&limit=&offset=
+// GET /search?q=&kind=&session=&tool=&file=&repo=&model=&provider=&project=
+//            &errors=1&limit=&offset=      (paged: returns hits + total)
 // GET /search/status
+// GET /search/facets                        (distinct providers/projects/tools)
 // GET /search/chunks/{uid}  (full text of one indexed chunk)
 function handleSearch(
   req: IncomingMessage,
@@ -240,6 +242,11 @@ function handleSearch(
 
   if (pathname === "/search/status") {
     writeJson(res, 200, search.status());
+    return;
+  }
+
+  if (pathname === "/search/facets") {
+    writeJson(res, 200, search.facets());
     return;
   }
 
@@ -279,7 +286,7 @@ function handleSearch(
     return;
   }
 
-  const hits = search.search({
+  const page = search.searchPage({
     query: q,
     session: url.searchParams.get("session") ?? undefined,
     kinds,
@@ -287,6 +294,8 @@ function handleSearch(
     file: url.searchParams.get("file") ?? undefined,
     repo: url.searchParams.get("repo") ?? undefined,
     model: url.searchParams.get("model") ?? undefined,
+    provider: url.searchParams.get("provider") ?? undefined,
+    project: url.searchParams.get("project") ?? undefined,
     errorsOnly: url.searchParams.get("errors") === "1",
     since: url.searchParams.get("since") ?? undefined,
     until: url.searchParams.get("until") ?? undefined,
@@ -296,7 +305,7 @@ function handleSearch(
   writeJson(res, 200, {
     query: q,
     markers: { start: SNIPPET_START, end: SNIPPET_END },
-    hits,
+    ...page,
   });
 }
 

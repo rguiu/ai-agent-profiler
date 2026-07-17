@@ -18,6 +18,7 @@ export interface ChunkSource {
   sessionId: string;
   ts: string | null;
   model: string | null;
+  provider: string | null;
   requestKind: string | null;
   repo: string | null;
   cwd: string | null;

@@ -18,6 +18,8 @@ export function searchCli(args: string[]): void {
   const session = flagValue(args, "--session");
   const file = flagValue(args, "--file");
   const tool = flagValue(args, "--tool");
+  const provider = flagValue(args, "--provider");
+  const project = flagValue(args, "--project");
   const kindRaw = flagValue(args, "--kind");
   const limitRaw = flagValue(args, "--limit");
 
@@ -39,7 +41,15 @@ export function searchCli(args: string[]): void {
     return;
   }
 
-  const flagsWithValue = ["--session", "--file", "--tool", "--kind", "--limit"];
+  const flagsWithValue = [
+    "--session",
+    "--file",
+    "--tool",
+    "--kind",
+    "--limit",
+    "--provider",
+    "--project",
+  ];
   const queryTerms: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -52,9 +62,18 @@ export function searchCli(args: string[]): void {
     queryTerms.push(arg);
   }
   const query = queryTerms.join(" ");
-  if (!query && !session && !file && !tool && !errorsOnly && !kinds) {
+  if (
+    !query &&
+    !session &&
+    !file &&
+    !tool &&
+    !errorsOnly &&
+    !kinds &&
+    !provider &&
+    !project
+  ) {
     console.error(
-      "usage: aap search <query> [--kind k] [--session id] [--file path] [--tool name] [--errors] [--limit n] [--json]",
+      "usage: aap search <query> [--kind k] [--session id] [--file path] [--tool name] [--provider p] [--project p] [--errors] [--limit n] [--json]",
     );
     process.exitCode = 1;
     return;
@@ -68,6 +87,8 @@ export function searchCli(args: string[]): void {
       session,
       file,
       tool,
+      provider,
+      project,
       kinds,
       errorsOnly,
       limit,

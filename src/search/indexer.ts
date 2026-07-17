@@ -25,6 +25,7 @@ function toSource(target: SearchIndexTarget): ChunkSource {
     sessionId: target.session_id,
     ts: target.started_at,
     model: target.model,
+    provider: target.provider,
     requestKind: target.request_kind,
     repo: target.repo,
     cwd: target.cwd,

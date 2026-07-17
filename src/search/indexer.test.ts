@@ -138,6 +138,7 @@ describe("runIndex", () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]?.session_id).toBe("sess-1");
     expect(hits[0]?.model).toBe("claude-sonnet-4");
+    expect(hits[0]?.provider).toBe("anthropic");
     expect(hits[0]?.repo).toBe("github.com/acme/widget");
 
     search.close();

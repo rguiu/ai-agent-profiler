@@ -104,6 +104,7 @@ export interface SearchIndexTarget {
   session_id: string;
   trace_file: string;
   started_at: string | null;
+  provider: string | null;
   model: string | null;
   request_kind: string | null;
   repo: string | null;
@@ -371,7 +372,7 @@ export class Store {
     // Ordered oldest-first so history dedup attributes content to the request
     // where it first appeared.
     this.searchIndexTargetsStmt = db.prepare(`
-      SELECT r.id, r.session_id, r.trace_file, r.started_at,
+      SELECT r.id, r.session_id, r.trace_file, r.started_at, r.provider,
              m.model, m.kind AS request_kind,
              s.repo, s.cwd, s.client
       FROM requests r

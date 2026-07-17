@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import {
   openSearchStore,
   toFtsQuery,
@@ -13,10 +14,14 @@ import type { ChunkDraft, ChunkSource } from "./extract.js";
 
 const dirs: string[] = [];
 
-function tmpStore(): SearchStore {
+function tmpStoreDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "aap-search-"));
   dirs.push(dir);
-  return openSearchStore(dir);
+  return dir;
+}
+
+function tmpStore(): SearchStore {
+  return openSearchStore(tmpStoreDir());
 }
 
 afterEach(() => {
@@ -30,6 +35,7 @@ function source(requestId: string, sessionId = "sess-1"): ChunkSource {
     sessionId,
     ts: `2026-07-17T10:00:0${requestId.slice(-1)}.000Z`,
     model: "claude-sonnet-4",
+    provider: "anthropic",
     requestKind: "main",
     repo: "github.com/acme/widget",
     cwd: "/home/dev/widget",
@@ -184,6 +190,65 @@ describe("SearchStore", () => {
     }
   });
 
+  it("filters by provider and project, pages with totals, and reports facets", () => {
+    const store = tmpStore();
+    store.indexRequest("req-1", source("req-1"), [
+      draft("req-1:0:0", "alpha race one", { contentHash: "p1" }),
+      draft("req-1:1:0", "alpha race two", { contentHash: "p2" }),
+      draft("req-1:2:0", "alpha race three", {
+        contentHash: "p3",
+        toolName: "bash",
+        kind: "tool_call",
+      }),
+    ]);
+    store.indexRequest(
+      "req-9",
+      {
+        ...source("req-9", "sess-b"),
+        provider: "deepseek",
+        repo: null,
+        cwd: "/home/dev/jobs",
+      },
+      [draft("req-9:0:0", "alpha race in jobs", { contentHash: "p4" })],
+    );
+
+    expect(store.search({ query: "alpha", provider: "deepseek" })).toHaveLength(
+      1,
+    );
+    expect(store.search({ query: "alpha", project: "jobs" })).toHaveLength(1);
+    expect(store.search({ query: "alpha", project: "widget" })).toHaveLength(3);
+
+    const page1 = store.searchPage({ query: "alpha", limit: 2, offset: 0 });
+    expect(page1.total).toBe(4);
+    expect(page1.hits).toHaveLength(2);
+    const page2 = store.searchPage({ query: "alpha", limit: 2, offset: 2 });
+    expect(page2.hits).toHaveLength(2);
+    const uids = new Set(
+      [...page1.hits, ...page2.hits].map((h) => h.chunk_uid),
+    );
+    expect(uids.size).toBe(4);
+
+    const facets = store.facets();
+    expect(facets.providers.sort()).toEqual(["anthropic", "deepseek"]);
+    expect(facets.projects).toEqual([
+      "/home/dev/jobs",
+      "github.com/acme/widget",
+    ]);
+    expect(facets.tools).toEqual(["bash"]);
+    expect(facets.models).toEqual(["claude-sonnet-4"]);
+  });
+
+  it("counts browse-mode results without a query", () => {
+    const store = tmpStore();
+    store.indexRequest("req-1", source("req-1"), [
+      draft("req-1:0:0", "one", { contentHash: "b1" }),
+      draft("req-1:1:0", "two", { contentHash: "b2" }),
+    ]);
+    const page = store.searchPage({ query: "", session: "sess-1", limit: 1 });
+    expect(page.total).toBe(2);
+    expect(page.hits).toHaveLength(1);
+  });
+
   it("records failures and reports status", () => {
     const store = tmpStore();
     store.indexRequest("req-1", source("req-1"), [
@@ -218,5 +283,28 @@ describe("SearchStore", () => {
     ]);
     expect(store.getChunk("req-1:0:0")?.text).toBe("the full text lives here");
     expect(store.getChunk("missing")).toBeNull();
+  });
+
+  it("drops and rebuilds the index when the schema version changes", () => {
+    const dir = tmpStoreDir();
+    const store = openSearchStore(dir);
+    store.indexRequest("req-1", source("req-1"), [
+      draft("req-1:0:0", "old schema content"),
+    ]);
+    store.close();
+
+    // Simulate an index written by an older build.
+    const raw = new Database(join(dir, "search.sqlite"));
+    raw.pragma("user_version = 1");
+    raw.close();
+
+    const reopened = openSearchStore(dir);
+    expect(reopened.status().chunks).toBe(0);
+    expect(reopened.indexedRequestIds().size).toBe(0);
+    reopened.indexRequest("req-1", source("req-1"), [
+      draft("req-1:0:0", "new schema content"),
+    ]);
+    expect(reopened.search({ query: "new schema" })).toHaveLength(1);
+    reopened.close();
   });
 });

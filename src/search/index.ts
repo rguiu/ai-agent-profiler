@@ -14,6 +14,8 @@ export {
   SNIPPET_END,
   type SearchParams,
   type SearchHit,
+  type SearchPage,
+  type SearchFacets,
   type SearchStatus,
   type ChunkRow,
 } from "./search-store.js";

@@ -7,6 +7,7 @@ const SOURCE: ChunkSource = {
   sessionId: "sess-1",
   ts: "2026-07-17T10:00:00.000Z",
   model: "claude-sonnet-4",
+  provider: "anthropic",
   requestKind: "main",
   repo: "github.com/acme/widget",
   cwd: "/home/dev/widget",
