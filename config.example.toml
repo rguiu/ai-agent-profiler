@@ -60,3 +60,21 @@ upstream = "https://bedrock-runtime.eu-west-1.amazonaws.com"
 # outputPerMTok = 15.0
 # cacheInputPerMTok = 0.30
 # cacheWritePerMTok = 3.75
+[pricing."eu.anthropic.claude-sonnet-5"]
+inputPerMTok = 3.0
+outputPerMTok = 15.0
+cacheInputPerMTok = 0.30
+cacheWritePerMTok = 3.75
+
+[pricing."eu.anthropic.claude-opus-4-8"]
+inputPerMTok = 5.0
+outputPerMTok = 25.0
+cacheInputPerMTok = 0.50
+cacheWritePerMTok = 6.25
+
+[pricing."eu.anthropic.claude-opus-4-6-v1"]
+inputPerMTok = 5.0
+outputPerMTok = 25.0
+cacheInputPerMTok = 0.50
+cacheWritePerMTok = 6.25
+
