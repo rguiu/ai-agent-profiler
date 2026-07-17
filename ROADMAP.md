@@ -60,7 +60,7 @@ See `VISION.md` for _why_ and `ARCHITECTURE.md` for _how_.
 - [x] **Read API** — `/health`, `/sessions`, `/sessions/:id`, `/requests/:id` (`?events=1`), `/requests/:id/messages`, `/stats`, `/tools`, `/commands`.
 - [x] **Web UI** — dark-mode dashboard at `/ui`: tool-usage bars, shell-command breakdown, sessions, session detail (context-growth chart, tool usage, repeated tool calls, context cost, shell commands), request detail with reconstructed response, per-tool result tokens, and a per-request message-stack split view. No framework. _Remaining: latency/cost-over-time charts, live auto-refresh._
 - [x] **MCP server** (`aap mcp`) — 10 stdio tools for agent self-introspection: `list_sessions`, `get_session`, `get_request`, `search_requests`, `recommend`, `compare`, `stats`, `top_tools`, `command_breakdown`, `raw_sql`.
-- [~] **Search** — by model, tool, provider (via MCP `search_requests` + `raw_sql`). _Remaining: UI search bar; full-text search over prompts/filenames._
+- [x] **Search** — full-text engineering memory over captured traces + agent-native transcripts. See "Engineering memory" section below for what shipped and what's next.
 - [x] **Export** — session report as Markdown or JSON via `aap export <id> [--json]`.
 - [~] **Custom run metadata** — session-level tags via the control API and `aap run --meta key=value` (plus `AAP_META_*` env vars and `ARMADA_NODE_NAME`), stored on the session and never sent to the LLM. Per-request `x-aap-*` header channel still deferred.
 
@@ -76,6 +76,51 @@ Shipped while building the above, not in the M0–M4 scope:
 - **opencode routing** via injected `OPENCODE_CONFIG_CONTENT` (per-run session ids without editing `opencode.json`).
 - **Tool-call arguments** capture and a request **`Started`** timestamp column.
 - **Session tagging** (`aap tag <id> key=value`) + caller-pinned session ids (`AAP_SESSION_ID`), used by the benchmark harness to record verify results on a session after the run.
+
+---
+
+## Engineering memory (search) — shipped on `feat/search` (PR #17)
+
+**Shipped:** FTS5 index (`search.sqlite`, separate from the hot-path store, rebuildable
+from raw traces; schema version bump = automatic drop + rebuild). Chunk extraction for
+all provider formats with per-session content-hash dedup. Surfaces: REST (`/search`,
+`/search/facets`, `/search/status`), MCP (`search_history`, `search_edits`,
+`search_errors`, `find_previous_fix`, `recall_session`), CLI (`aap index`, `aap search`,
+`aap import`), UI Search tab (provider/project/tool/kind filters, pagination).
+`aap import` fills non-proxied gaps from Claude Code `~/.claude/projects` and opencode's
+local DB; session titles indexed as `title` chunks.
+
+### Next (in order)
+
+1. **Dogfood before building more.** Use the MCP tools from real sessions
+   (`recall_session` / `search_history` at task start). Success = the agent skips
+   re-exploration; collect queries that MISS to decide whether embeddings are needed.
+   The MCP tools have not yet been exercised by a real agent — do this first.
+2. **Post-review polish** (small, after #17 merges):
+   - Auto-import transcripts on a serve tick (`[search] importTranscripts`, default off;
+     currently manual `aap import`).
+   - `aap index --prune` — drop chunks orphaned by out-of-band session/trace deletion.
+   - Ranking: boost `title` and `compact` (summary) chunks in `recall_session`;
+     consider down-weighting bulky `tool_result` chunks.
+   - UI: facet/badge for source (`proxy` vs `claude-import` vs `opencode-import`).
+3. **Embeddings (v2)** — only if dogfooding shows lexical misses on conceptual queries
+   ("socket binding conflict" → "ZMQ port race"). Plan: `sqlite-vec` + local Ollama
+   embedding model (config-driven, off by default); chunk table already has stable
+   `chunk_uid`s to attach vectors without reindexing; hybrid rank = BM25 + cosine.
+4. **Knowledge extraction (v3, deferred)** — LLM-distilled durable facts ("chose
+   advisory locks because…") in a `facts` table linked to sessions. Opt-in, token cost,
+   needs prompt design. Revisit once months of history accumulate.
+
+### Known gaps / limitations to track
+
+- opencode import skips sessions overlapping a proxied session (same cwd + time window);
+  `--include-proxied` forces but can duplicate content across different session ids.
+- Pre-DB opencode versions (JSON-file storage) are not imported.
+- Only Claude Code + opencode transcripts covered; other agents (e.g. Codex CLI) are not.
+- `recall_session(commit=...)` from the original vision is unimplemented — would need
+  commit-hash extraction from `git commit` shell commands into chunk metadata.
+- Search covers proxied traffic + imported transcripts only; anything else never
+  captured is invisible (by design — raw data stays authoritative).
 
 ---
 
