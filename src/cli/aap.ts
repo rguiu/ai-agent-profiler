@@ -6,6 +6,7 @@ import { compareSessions } from "./compare.js";
 import { exportSession } from "./export.js";
 import { hook } from "./hook.js";
 import { idleGaps } from "./idle-gaps.js";
+import { importTranscripts } from "./import-cmd.js";
 import { index } from "./index-cmd.js";
 import { install } from "./install.js";
 import { intro } from "./intro.js";
@@ -26,6 +27,7 @@ Usage:
   aap run <agent>      Launch an agent through the profiler
   aap parse [--all]    Derive metrics from captured traces
   aap index [--all]    Build the full-text search index from captured traces
+  aap import           Import agent-native transcripts (Claude Code, opencode) into search
   aap search <query>   Search indexed history (prompts, responses, tools, errors)
   aap sessions         List captured sessions (rm <id> to delete)
   aap commands         Break down shell commands by token cost
@@ -56,6 +58,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "index":
       await index(argv.slice(1));
+      return;
+    case "import":
+      importTranscripts(argv.slice(1));
       return;
     case "search":
       searchCli(argv.slice(1));

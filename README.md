@@ -61,7 +61,9 @@ the LLM.
   prompt, response, tool call, file edit, shell command, and error the proxy has seen.
   Search it from the dashboard (`/ui` → Search), the CLI (`aap search`), REST
   (`/search`), or agent-facing MCP tools (`search_history`, `search_edits`,
-  `search_errors`, `find_previous_fix`, `recall_session`).
+  `search_errors`, `find_previous_fix`, `recall_session`). `aap import` also pulls
+  agent-native transcripts (Claude Code `~/.claude/projects`, opencode's local DB)
+  into the same index, covering sessions that never went through the proxy.
 - **MCP server** (`aap mcp`) — tools exposing the profiler's data for agent self-introspection.
 - **Optimize layer** — 9 request-rewriting strategies, **off by default**; on cached providers it deliberately does very little (see below).
 
@@ -120,6 +122,7 @@ aap run <agent>       # launch an agent through the profiler, e.g. aap run claud
                      #   tag a run: aap run --meta task=explain --meta iter=1 opencode
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
 aap index [--all]    # build the full-text search index from captured traces
+aap import           # import agent-native transcripts (Claude Code, opencode) into search
 aap search <query>   # search past prompts/responses/tools/errors (--errors, --file, --kind)
 aap sessions         # list captured sessions (aap sessions rm <id> to delete)
 aap commands         # break shell commands down by token cost

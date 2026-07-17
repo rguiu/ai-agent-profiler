@@ -965,6 +965,7 @@ const SEARCH_KINDS = [
   "response",
   "tool_call",
   "tool_result",
+  "title",
   "error",
 ];
 const SEARCH_PAGE_SIZE = 20;

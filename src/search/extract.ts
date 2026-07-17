@@ -9,7 +9,7 @@ import {
 } from "../parse/index.js";
 
 export type ChunkKind =
-  "prompt" | "response" | "tool_call" | "tool_result" | "error";
+  "prompt" | "response" | "tool_call" | "tool_result" | "title" | "error";
 
 // Denormalized request/session metadata stamped onto every chunk so search
 // results can be filtered and linked without joining back to aap.sqlite.
@@ -36,7 +36,9 @@ export interface ChunkDraft {
   text: string;
 }
 
-interface Item {
+// An extracted logical item before splitting/hashing. Produced from proxy
+// traces here and from agent-native transcripts in ./transcripts/.
+export interface ChunkItem {
   kind: ChunkKind;
   role: string | null;
   toolName: string | null;
@@ -44,6 +46,8 @@ interface Item {
   isError: boolean;
   text: string;
 }
+
+type Item = ChunkItem;
 
 // Chunk sizing: bounded so a single huge tool result (e.g. a whole-file read)
 // cannot bloat the index, split on line boundaries so snippets stay readable.
@@ -72,7 +76,7 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function filePathFromArgs(args: unknown): string | null {
+export function filePathFromArgs(args: unknown): string | null {
   let record: Record<string, unknown> | null;
   if (typeof args === "string") {
     if (args === "") return null;
@@ -134,13 +138,16 @@ function contentHash(kind: string, toolName: string | null, text: string) {
     .slice(0, 32);
 }
 
-// Walk the request body messages. History repeats across requests in a
-// session; the (session_id, content_hash) unique index deduplicates on insert.
-function itemsFromRequestMessages(events: TraceEvent[]): Item[] {
-  const record = parseRequestJson(events);
-  if (!record) return [];
+// Extract items from a single chat message (string content or Anthropic /
+// OpenAI / Bedrock block arrays). `toolNameById` accumulates tool_use id →
+// name across messages so tool results can be attributed to their tool.
+// Shared by trace extraction (below) and transcript import.
+export function itemsFromMessage(
+  role: string | null,
+  msg: Record<string, unknown>,
+  toolNameById: Map<string, string>,
+): ChunkItem[] {
   const items: Item[] = [];
-  const toolNameById = new Map<string, string>();
 
   const addToolCall = (id: string | null, name: string, args: unknown) => {
     if (id) toolNameById.set(id, name);
@@ -171,81 +178,90 @@ function itemsFromRequestMessages(events: TraceEvent[]): Item[] {
     });
   };
 
-  for (const message of asArray(record.messages)) {
-    const msg = asRecord(message);
-    if (!msg) continue;
-    const role = asString(msg.role);
-    if (role === "system" || role === "developer") continue;
+  if (role === "system" || role === "developer") return items;
 
-    if (role === "tool") {
-      addToolResult(asString(msg.tool_call_id), msg.content, false);
-      continue;
+  if (role === "tool") {
+    addToolResult(asString(msg.tool_call_id), msg.content, false);
+    return items;
+  }
+
+  // OpenAI-style assistant tool calls live outside content blocks.
+  for (const call of asArray(msg.tool_calls)) {
+    const callRecord = asRecord(call);
+    const fn = callRecord ? asRecord(callRecord.function) : null;
+    const name = fn ? asString(fn.name) : null;
+    if (name) {
+      addToolCall(
+        callRecord ? asString(callRecord.id) : null,
+        name,
+        fn?.arguments ?? "",
+      );
     }
+  }
 
-    // OpenAI-style assistant tool calls live outside content blocks.
-    for (const call of asArray(msg.tool_calls)) {
-      const callRecord = asRecord(call);
-      const fn = callRecord ? asRecord(callRecord.function) : null;
-      const name = fn ? asString(fn.name) : null;
-      if (name) {
-        addToolCall(
-          callRecord ? asString(callRecord.id) : null,
-          name,
-          fn?.arguments ?? "",
-        );
-      }
-    }
+  const textKind: ChunkKind = role === "assistant" ? "response" : "prompt";
+  const contentStr = asString(msg.content);
+  if (contentStr !== null) {
+    items.push({
+      kind: textKind,
+      role,
+      toolName: null,
+      filePath: null,
+      isError: false,
+      text: contentStr,
+    });
+    return items;
+  }
 
-    const textKind: ChunkKind = role === "assistant" ? "response" : "prompt";
-    const contentStr = asString(msg.content);
-    if (contentStr !== null) {
+  for (const block of asArray(msg.content)) {
+    const b = asRecord(block);
+    if (!b) continue;
+    if (b.type === "text" || b.type === "thinking") {
+      const text = asString(b.text) ?? asString(b.thinking) ?? "";
       items.push({
         kind: textKind,
         role,
         toolName: null,
         filePath: null,
         isError: false,
-        text: contentStr,
+        text,
       });
-      continue;
-    }
-
-    for (const block of asArray(msg.content)) {
-      const b = asRecord(block);
-      if (!b) continue;
-      if (b.type === "text" || b.type === "thinking") {
-        const text = asString(b.text) ?? asString(b.thinking) ?? "";
-        items.push({
-          kind: textKind,
-          role,
-          toolName: null,
-          filePath: null,
-          isError: false,
-          text,
-        });
-      } else if (b.type === "tool_use") {
-        const name = asString(b.name);
-        if (name) addToolCall(asString(b.id), name, b.input);
-      } else if (b.type === "tool_result") {
-        addToolResult(asString(b.tool_use_id), b.content, b.is_error === true);
-      } else {
-        // Bedrock converse blocks: {toolUse: {...}} / {toolResult: {...}}
-        const toolUse = asRecord(b.toolUse);
-        if (toolUse) {
-          const name = asString(toolUse.name);
-          if (name)
-            addToolCall(asString(toolUse.toolUseId), name, toolUse.input);
-        }
-        const toolResult = asRecord(b.toolResult);
-        if (toolResult) {
-          addToolResult(
-            asString(toolResult.toolUseId) ?? asString(b.toolUseId),
-            toolResult.content,
-            asString(toolResult.status) === "error",
-          );
-        }
+    } else if (b.type === "tool_use") {
+      const name = asString(b.name);
+      if (name) addToolCall(asString(b.id), name, b.input);
+    } else if (b.type === "tool_result") {
+      addToolResult(asString(b.tool_use_id), b.content, b.is_error === true);
+    } else {
+      // Bedrock converse blocks: {toolUse: {...}} / {toolResult: {...}}
+      const toolUse = asRecord(b.toolUse);
+      if (toolUse) {
+        const name = asString(toolUse.name);
+        if (name) addToolCall(asString(toolUse.toolUseId), name, toolUse.input);
+      }
+      const toolResult = asRecord(b.toolResult);
+      if (toolResult) {
+        addToolResult(
+          asString(toolResult.toolUseId) ?? asString(b.toolUseId),
+          toolResult.content,
+          asString(toolResult.status) === "error",
+        );
       }
     }
+  }
+  return items;
+}
+
+// Walk the request body messages. History repeats across requests in a
+// session; the (session_id, content_hash) unique index deduplicates on insert.
+function itemsFromRequestMessages(events: TraceEvent[]): Item[] {
+  const record = parseRequestJson(events);
+  if (!record) return [];
+  const items: Item[] = [];
+  const toolNameById = new Map<string, string>();
+  for (const message of asArray(record.messages)) {
+    const msg = asRecord(message);
+    if (!msg) continue;
+    items.push(...itemsFromMessage(asString(msg.role), msg, toolNameById));
   }
   return items;
 }
@@ -396,6 +412,32 @@ function itemsFromErrors(events: TraceEvent[]): Item[] {
   return items;
 }
 
+// Pure: split items into bounded parts and stamp stable uids + content
+// hashes. `idPrefix` is the synthetic or real request id chunks belong to.
+export function buildDrafts(
+  items: readonly ChunkItem[],
+  idPrefix: string,
+): ChunkDraft[] {
+  const drafts: ChunkDraft[] = [];
+  items.forEach((item, itemIndex) => {
+    if (!item.text.trim()) return;
+    splitText(item.text).forEach((part, partIndex) => {
+      if (!part.trim()) return;
+      drafts.push({
+        chunkUid: `${idPrefix}:${itemIndex}:${partIndex}`,
+        kind: item.kind,
+        role: item.role,
+        toolName: item.toolName,
+        filePath: item.filePath,
+        isError: item.isError,
+        contentHash: contentHash(item.kind, item.toolName, part),
+        text: part,
+      });
+    });
+  });
+  return drafts;
+}
+
 // Pure: trace events + request metadata -> deduplicatable chunk drafts.
 // Deterministic ordering gives every chunk a stable uid
 // ({requestId}:{item}:{part}) so re-indexing a request is idempotent and a
@@ -409,23 +451,5 @@ export function extractChunks(
     ...itemsFromResponse(events),
     ...itemsFromErrors(events),
   ];
-
-  const drafts: ChunkDraft[] = [];
-  items.forEach((item, itemIndex) => {
-    if (!item.text.trim()) return;
-    splitText(item.text).forEach((part, partIndex) => {
-      if (!part.trim()) return;
-      drafts.push({
-        chunkUid: `${source.requestId}:${itemIndex}:${partIndex}`,
-        kind: item.kind,
-        role: item.role,
-        toolName: item.toolName,
-        filePath: item.filePath,
-        isError: item.isError,
-        contentHash: contentHash(item.kind, item.toolName, part),
-        text: part,
-      });
-    });
-  });
-  return drafts;
+  return buildDrafts(items, source.requestId);
 }

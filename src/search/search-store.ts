@@ -79,6 +79,7 @@ const KINDS: readonly string[] = [
   "response",
   "tool_call",
   "tool_result",
+  "title",
   "error",
 ];
 

@@ -1,7 +1,11 @@
 export {
   extractChunks,
   splitText,
+  buildDrafts,
+  itemsFromMessage,
+  filePathFromArgs,
   type ChunkDraft,
+  type ChunkItem,
   type ChunkKind,
   type ChunkSource,
 } from "./extract.js";
@@ -20,3 +24,13 @@ export {
   type ChunkRow,
 } from "./search-store.js";
 export { runIndex, type IndexSummary, type IndexOptions } from "./indexer.js";
+export {
+  runTranscriptImport,
+  type TranscriptImportSummary,
+  type TranscriptImportOptions,
+} from "./transcripts/import.js";
+export {
+  overlapsProxiedSession,
+  defaultOpencodeDbPath,
+  type ProxiedSessionWindow,
+} from "./transcripts/opencode.js";
