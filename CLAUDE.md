@@ -26,7 +26,7 @@
 ```
 Proxy (hot) → Capture (async hot) → Store (hot)
                                       ↓
-Parse (off-hot) → Analyze / Recommend (off-hot)
+Parse (off-hot) → Analyze / Recommend / Search index (off-hot)
                                       ↓
 API / UI / MCP (read-only, off-hot)
 ```
@@ -37,12 +37,13 @@ API / UI / MCP (read-only, off-hot)
 4. **`src/parse/`** — Reads raw traces, extracts tokens (incl. cache hits), cost, tool calls, message-stack breakdown. Idempotent (keyed by `request_id`).
 5. **`src/analyze/`** — Shell-command classification, cache-regeneration detection, Claude Code transcript parsing.
 6. **`src/recommend/`** — Per-session findings: repeated reads, redundant calls, high amplification.
-7. **`src/api/`** — REST endpoints: `/health`, `/sessions`, `/requests`, `/stats`, `/tools`, `/commands`, `/kinds`.
-8. **`src/ui/`** — Serves the static `web/` dashboard at `/ui`.
-9. **`src/cli/`** — CLI entry (`aap.ts`) and subcommands: `serve`, `run`, `parse`, `sessions`, `commands`, `tag`, `export`, `compare`, `hook`, `install`, `mcp`.
-10. **`src/config/`** — TOML config loader + Zod schema. Resolution: `$AAP_CONFIG` → `~/.aap/config.toml` → `./config.toml`.
-11. **`src/hook/`** — Shell hook install system + wrapper templates (`git.sh`, `grep.sh`, `ls.sh`, etc.).
-12. **`src/session/`** — Session registry for active sessions.
+7. **`src/search/`** — Full-text search index (FTS5) over raw traces in a separate `search.sqlite`. Idempotent indexing (keyed by `request_id`, deduped per session by content hash), off-hot-path (serve tick + `aap index`). Queried via REST `/search`, MCP tools, `aap search`, and the UI Search tab.
+8. **`src/api/`** — REST endpoints: `/health`, `/sessions`, `/requests`, `/stats`, `/tools`, `/commands`, `/kinds`, `/search`.
+9. **`src/ui/`** — Serves the static `web/` dashboard at `/ui`.
+10. **`src/cli/`** — CLI entry (`aap.ts`) and subcommands: `serve`, `run`, `parse`, `index`, `search`, `sessions`, `commands`, `tag`, `export`, `compare`, `hook`, `install`, `mcp`.
+11. **`src/config/`** — TOML config loader + Zod schema. Resolution: `$AAP_CONFIG` → `~/.aap/config.toml` → `./config.toml`.
+12. **`src/hook/`** — Shell hook install system + wrapper templates (`git.sh`, `grep.sh`, `ls.sh`, etc.).
+13. **`src/session/`** — Session registry for active sessions.
 
 ## Key conventions
 

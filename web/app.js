@@ -960,11 +960,117 @@ function projectBars(items) {
     .join("")}</div>`;
 }
 
+const SEARCH_KINDS = [
+  "prompt",
+  "response",
+  "tool_call",
+  "tool_result",
+  "error",
+];
+
+function searchHitHtml(hit, markers) {
+  const snippet = esc(hit.snippet)
+    .replaceAll(markers.start, "<mark>")
+    .replaceAll(markers.end, "</mark>");
+  const toolTag = hit.tool_name
+    ? ` <span class="pill">${esc(hit.tool_name)}</span>`
+    : "";
+  const errTag = hit.is_error ? ` <span class="err">error</span>` : "";
+  const fileTag = hit.file_path
+    ? `<div class="mono muted search-file">${shortPath(hit.file_path, 70)}</div>`
+    : "";
+  return `<div class="search-hit">
+    <div class="search-hit-head">
+      <span class="pill">${esc(hit.kind)}</span>${toolTag}${errTag}
+      <span class="muted">${dt(hit.ts)}</span>
+      <span class="mono"><a href="#/sessions/${encodeURIComponent(hit.session_id)}">${shortId(hit.session_id)}</a></span>
+      <span class="mono"><a href="#/requests/${encodeURIComponent(hit.request_id)}">req ${shortId(hit.request_id)}</a></span>
+      ${hit.repo ? `<span class="muted">${esc(hit.repo)}</span>` : ""}
+    </div>
+    <div class="search-snippet">${snippet}</div>
+    ${fileTag}
+  </div>`;
+}
+
+async function searchView(hash) {
+  const qIdx = hash.indexOf("?");
+  const params = new URLSearchParams(qIdx === -1 ? "" : hash.slice(qIdx + 1));
+  const q = params.get("q") ?? "";
+  const kind = params.get("kind") ?? "";
+  const errors = params.get("errors") === "1";
+  const file = params.get("file") ?? "";
+
+  let status;
+  try {
+    status = await api("/search/status");
+  } catch {
+    app.innerHTML = `<h2>Search</h2><p class="empty">Search index is disabled. Enable <code>[search]</code> in config.toml and restart <code>aap serve</code>.</p>`;
+    return;
+  }
+
+  const kindOptions = ["", ...SEARCH_KINDS]
+    .map(
+      (k) =>
+        `<option value="${k}"${k === kind ? " selected" : ""}>${k || "all kinds"}</option>`,
+    )
+    .join("");
+
+  let resultsHtml = `<p class="empty">Search everything the proxy has captured: prompts, responses, tool calls, file edits, shell commands, errors.</p>`;
+  if (q || errors || file) {
+    const query = new URLSearchParams();
+    if (q) query.set("q", q);
+    if (kind) query.set("kind", kind);
+    if (errors) query.set("errors", "1");
+    if (file) query.set("file", file);
+    query.set("limit", "50");
+    const data = await api(`/search?${query.toString()}`);
+    resultsHtml = data.hits.length
+      ? `<p class="muted">${data.hits.length} hit(s)</p>` +
+        data.hits.map((h) => searchHitHtml(h, data.markers)).join("")
+      : `<p class="empty">No matches.</p>`;
+  }
+
+  app.innerHTML = `
+    <h2>Search</h2>
+    <form id="search-form" class="search-form">
+      <input type="search" id="search-q" placeholder="e.g. ZMQ port race, NullPointerException, advisory lock…" value="${esc(q)}" />
+      <select id="search-kind">${kindOptions}</select>
+      <input type="text" id="search-file" class="search-file-input" placeholder="file filter (e.g. src/store.py)" value="${esc(file)}" />
+      <label class="search-errors"><input type="checkbox" id="search-errors"${errors ? " checked" : ""} /> errors only</label>
+      <button type="submit">Search</button>
+    </form>
+    <div id="search-results">${resultsHtml}</div>
+    <p class="muted search-status">${num(status.indexedRequests)} requests indexed · ${num(status.chunks)} chunks${status.failedRequests ? ` · ${num(status.failedRequests)} failed` : ""}${status.lastIndexedAt ? ` · last indexed ${dt(status.lastIndexedAt)}` : ""}</p>
+  `;
+
+  document.getElementById("search-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const next = new URLSearchParams();
+    const nq = document.getElementById("search-q").value.trim();
+    const nk = document.getElementById("search-kind").value;
+    const nf = document.getElementById("search-file").value.trim();
+    const ne = document.getElementById("search-errors").checked;
+    if (nq) next.set("q", nq);
+    if (nk) next.set("kind", nk);
+    if (nf) next.set("file", nf);
+    if (ne) next.set("errors", "1");
+    const target = `#/search${next.toString() ? `?${next.toString()}` : ""}`;
+    if (location.hash === target) {
+      render();
+    } else {
+      location.hash = target;
+    }
+  });
+  document.getElementById("search-q").focus();
+}
+
 async function render() {
   const hash = location.hash.slice(1) || "/";
   try {
     if (hash === "/") return await dashboard();
     if (hash === "/sessions") return await sessions();
+    if (hash === "/search" || hash.startsWith("/search?"))
+      return await searchView(hash);
     const s = hash.match(/^\/sessions\/(.+)$/);
     if (s) return await sessionDetail(decodeURIComponent(s[1]));
     const q = hash.match(/^\/requests\/(.+)$/);

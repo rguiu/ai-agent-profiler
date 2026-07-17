@@ -97,6 +97,20 @@ export interface ParseTarget {
   trace_file: string;
 }
 
+// A parsed request ready for search indexing, joined with the session and
+// metrics metadata that gets denormalized onto every chunk.
+export interface SearchIndexTarget {
+  id: string;
+  session_id: string;
+  trace_file: string;
+  started_at: string | null;
+  model: string | null;
+  request_kind: string | null;
+  repo: string | null;
+  cwd: string | null;
+  client: string | null;
+}
+
 export interface MetricsRow {
   requestId: string;
   format: string;
@@ -294,6 +308,7 @@ export class Store {
   private readonly finishRequestStmt;
   private readonly allTargetsStmt;
   private readonly pendingTargetsStmt;
+  private readonly searchIndexTargetsStmt;
   private readonly upsertMetricsStmt;
   private readonly deleteToolCallsStmt;
   private readonly insertToolCallStmt;
@@ -350,6 +365,20 @@ export class Store {
       WHERE m.request_id IS NULL
         AND r.trace_file IS NOT NULL
         AND r.ended_at IS NOT NULL
+    `);
+    // Only parsed requests qualify for search indexing: the metrics JOIN
+    // guarantees model/kind are available and the trace was readable.
+    // Ordered oldest-first so history dedup attributes content to the request
+    // where it first appeared.
+    this.searchIndexTargetsStmt = db.prepare(`
+      SELECT r.id, r.session_id, r.trace_file, r.started_at,
+             m.model, m.kind AS request_kind,
+             s.repo, s.cwd, s.client
+      FROM requests r
+      JOIN metrics m ON m.request_id = r.id
+      JOIN sessions s ON s.id = r.session_id
+      WHERE r.trace_file IS NOT NULL AND r.ended_at IS NOT NULL
+      ORDER BY r.started_at ASC
     `);
     this.upsertMetricsStmt = db.prepare(`
       INSERT INTO metrics (request_id, format, model, input_tokens, output_tokens,
@@ -555,6 +584,10 @@ export class Store {
   requestsToParse(all: boolean): ParseTarget[] {
     const stmt = all ? this.allTargetsStmt : this.pendingTargetsStmt;
     return stmt.all() as ParseTarget[];
+  }
+
+  searchIndexTargets(): SearchIndexTarget[] {
+    return this.searchIndexTargetsStmt.all() as SearchIndexTarget[];
   }
 
   upsertMetrics(row: MetricsRow): void {

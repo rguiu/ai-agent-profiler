@@ -16,6 +16,13 @@ import {
 } from "../analyze/index.js";
 import { summarizeMessages, type TraceEvent } from "../parse/index.js";
 import { recommend } from "../recommend/index.js";
+import {
+  isChunkKind,
+  SNIPPET_START,
+  SNIPPET_END,
+  type ChunkKind,
+  type SearchStore,
+} from "../search/index.js";
 import type { Store } from "../store/index.js";
 
 export function handleApi(
@@ -23,7 +30,13 @@ export function handleApi(
   res: ServerResponse,
   pathname: string,
   store: Store,
+  search?: SearchStore | null,
 ): boolean {
+  if (pathname === "/search" || pathname.startsWith("/search/")) {
+    handleSearch(req, res, pathname, search ?? null);
+    return true;
+  }
+
   if (pathname === "/sessions") {
     if (requireGet(req, res)) writeJson(res, 200, store.listSessions());
     return true;
@@ -66,6 +79,7 @@ export function handleApi(
         }
       }
       store.deleteSession(s);
+      search?.deleteSession(s);
       writeJson(res, 200, { deleted: true });
       return true;
     }
@@ -207,6 +221,92 @@ function requireGet(req: IncomingMessage, res: ServerResponse): boolean {
   if (req.method === "GET") return true;
   writeError(res, 405, `method ${req.method ?? "?"} not allowed`);
   return false;
+}
+
+// GET /search?q=&kind=&session=&tool=&file=&repo=&model=&errors=1&limit=&offset=
+// GET /search/status
+// GET /search/chunks/{uid}  (full text of one indexed chunk)
+function handleSearch(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  search: SearchStore | null,
+): void {
+  if (!requireGet(req, res)) return;
+  if (!search) {
+    writeError(res, 503, "search index disabled ([search] enabled = false)");
+    return;
+  }
+
+  if (pathname === "/search/status") {
+    writeJson(res, 200, search.status());
+    return;
+  }
+
+  const chunkMatch = pathname.match(/^\/search\/chunks\/(.+)$/);
+  if (chunkMatch) {
+    const uid = decodeURIComponent(chunkMatch[1] ?? "");
+    const chunk = search.getChunk(uid);
+    if (!chunk) {
+      writeError(res, 404, `chunk "${uid}" not found`);
+      return;
+    }
+    writeJson(res, 200, chunk);
+    return;
+  }
+
+  if (pathname !== "/search") {
+    writeError(res, 404, "not found");
+    return;
+  }
+
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const q = url.searchParams.get("q") ?? "";
+  const kindParam = url.searchParams.get("kind");
+  let kinds: ChunkKind[] | undefined;
+  if (kindParam) {
+    const parsed = kindParam.split(",").filter(isChunkKind);
+    if (parsed.length === 0) {
+      writeError(res, 400, `invalid kind "${kindParam}"`);
+      return;
+    }
+    kinds = parsed;
+  }
+  const limit = intParam(url, "limit");
+  const offset = intParam(url, "offset");
+  if (limit === false || offset === false) {
+    writeError(res, 400, "limit/offset must be non-negative integers");
+    return;
+  }
+
+  const hits = search.search({
+    query: q,
+    session: url.searchParams.get("session") ?? undefined,
+    kinds,
+    tool: url.searchParams.get("tool") ?? undefined,
+    file: url.searchParams.get("file") ?? undefined,
+    repo: url.searchParams.get("repo") ?? undefined,
+    model: url.searchParams.get("model") ?? undefined,
+    errorsOnly: url.searchParams.get("errors") === "1",
+    since: url.searchParams.get("since") ?? undefined,
+    until: url.searchParams.get("until") ?? undefined,
+    limit,
+    offset,
+  });
+  writeJson(res, 200, {
+    query: q,
+    markers: { start: SNIPPET_START, end: SNIPPET_END },
+    hits,
+  });
+}
+
+// undefined = absent, false = invalid, number = parsed value.
+function intParam(url: URL, name: string): number | undefined | false {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) return false;
+  return value;
 }
 
 function extractId(pathname: string, prefix: string): string | null {

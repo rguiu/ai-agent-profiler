@@ -102,6 +102,7 @@ async function startStack(): Promise<Stack> {
       "claude-sonnet-4-20250514": { inputPerMTok: 3, outputPerMTok: 15 },
     },
     throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
+    search: { enabled: false, intervalMs: 5000, batchSize: 50 },
   };
   const store = openStore(dir);
   const registry = new SessionRegistry();

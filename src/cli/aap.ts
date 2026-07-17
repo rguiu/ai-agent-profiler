@@ -6,11 +6,13 @@ import { compareSessions } from "./compare.js";
 import { exportSession } from "./export.js";
 import { hook } from "./hook.js";
 import { idleGaps } from "./idle-gaps.js";
+import { index } from "./index-cmd.js";
 import { install } from "./install.js";
 import { intro } from "./intro.js";
 import { mcp } from "./mcp.js";
 import { parse } from "./parse.js";
 import { run } from "./run.js";
+import { searchCli } from "./search.js";
 import { serve } from "./serve.js";
 import { sessions } from "./sessions.js";
 import { tag } from "./tag.js";
@@ -23,6 +25,8 @@ Usage:
   aap serve            Start the profiler proxy
   aap run <agent>      Launch an agent through the profiler
   aap parse [--all]    Derive metrics from captured traces
+  aap index [--all]    Build the full-text search index from captured traces
+  aap search <query>   Search indexed history (prompts, responses, tools, errors)
   aap sessions         List captured sessions (rm <id> to delete)
   aap commands         Break down shell commands by token cost
   aap tag <id> k=v     Tag a session with metadata (e.g. verify=pass)
@@ -49,6 +53,12 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "parse":
       await parse(argv.slice(1));
+      return;
+    case "index":
+      await index(argv.slice(1));
+      return;
+    case "search":
+      searchCli(argv.slice(1));
       return;
     case "sessions":
       sessions(argv.slice(1));

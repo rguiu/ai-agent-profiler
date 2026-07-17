@@ -31,11 +31,20 @@ export const throttleSchema = z.object({
   timeoutMs: z.number().int().positive().default(180_000),
 });
 
+// Full-text search index over captured traces (search.sqlite). Indexing runs
+// off the hot path; disable to skip the background tick entirely.
+export const searchSchema = z.object({
+  enabled: z.boolean().default(true),
+  intervalMs: z.number().int().positive().default(5000),
+  batchSize: z.number().int().positive().default(50),
+});
+
 export const configSchema = z.object({
   server: serverSchema.prefault({}),
   sessions: sessionsSchema.prefault({}),
   storage: storageSchema.prefault({}),
   throttle: throttleSchema.prefault({}),
+  search: searchSchema.prefault({}),
   providers: z
     .record(z.string(), providerSchema)
     .refine((p) => Object.keys(p).length > 0, {

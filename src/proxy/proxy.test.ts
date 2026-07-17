@@ -69,6 +69,7 @@ function buildConfig(upstreamPort: number): Config {
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
     pricing: {},
     throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
+    search: { enabled: false, intervalMs: 5000, batchSize: 50 },
   };
 }
 

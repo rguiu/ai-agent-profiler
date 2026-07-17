@@ -10,6 +10,14 @@ import {
 } from "../analyze/index.js";
 import { collectSummaries } from "./compare.js";
 import { recommend } from "../recommend/index.js";
+import {
+  openSearchStore,
+  SNIPPET_START,
+  SNIPPET_END,
+  type ChunkKind,
+  type SearchHit,
+  type SearchStore,
+} from "../search/index.js";
 import { openStore, type Store } from "../store/index.js";
 
 function readEvents(traceFile: string): unknown[] | undefined {
@@ -23,6 +31,170 @@ function readEvents(traceFile: string): unknown[] | undefined {
   } catch {
     return undefined;
   }
+}
+
+function jsonResult(value: unknown): {
+  content: { type: "text"; text: string }[];
+} {
+  return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+// Replace the raw snippet control markers with visible ones for LLM output.
+function readableHits(hits: SearchHit[]): SearchHit[] {
+  return hits.map((h) => ({
+    ...h,
+    snippet: h.snippet
+      .replaceAll(SNIPPET_START, "«")
+      .replaceAll(SNIPPET_END, "»"),
+  }));
+}
+
+interface SessionGroup {
+  session_id: string;
+  repo: string | null;
+  cwd: string | null;
+  first_hit_ts: string | null;
+  hit_count: number;
+  files: string[];
+  samples: { kind: string; tool_name: string | null; snippet: string }[];
+}
+
+// Collapse chunk hits (BM25-ordered, best first) into per-session groups so
+// tools return "which sessions dealt with this" instead of raw fragments.
+function groupBySession(hits: SearchHit[], maxSessions: number) {
+  const groups = new Map<string, SessionGroup>();
+  for (const hit of readableHits(hits)) {
+    let group = groups.get(hit.session_id);
+    if (!group) {
+      if (groups.size >= maxSessions) continue;
+      group = {
+        session_id: hit.session_id,
+        repo: hit.repo,
+        cwd: hit.cwd,
+        first_hit_ts: hit.ts,
+        hit_count: 0,
+        files: [],
+        samples: [],
+      };
+      groups.set(hit.session_id, group);
+    }
+    group.hit_count++;
+    if (hit.ts && (!group.first_hit_ts || hit.ts < group.first_hit_ts)) {
+      group.first_hit_ts = hit.ts;
+    }
+    if (hit.file_path && !group.files.includes(hit.file_path)) {
+      group.files.push(hit.file_path);
+    }
+    if (group.samples.length < 3) {
+      group.samples.push({
+        kind: hit.kind,
+        tool_name: hit.tool_name,
+        snippet: hit.snippet,
+      });
+    }
+  }
+  return [...groups.values()];
+}
+
+function registerSearchTools(server: McpServer, search: SearchStore): void {
+  server.tool(
+    "search_history",
+    "Full-text search (BM25) across everything captured from past coding sessions: prompts, model responses, tool calls, tool results, and errors. Use before re-exploring a problem — e.g. search_history('ZMQ port race'). Returns matching snippets with session/request ids; follow up with get_session or get_request for detail.",
+    {
+      query: z.string().describe("Search terms (quoted phrases supported)"),
+      session: z.string().optional().describe("Restrict to one session id"),
+      repo: z.string().optional().describe("Repo substring filter"),
+      kind: z
+        .enum(["prompt", "response", "tool_call", "tool_result", "error"])
+        .optional()
+        .describe("Restrict to one chunk kind"),
+      limit: z.number().optional().describe("Max hits (default 20)"),
+    },
+    async ({ query, session, repo, kind, limit }) => {
+      const hits = search.search({
+        query,
+        session,
+        repo,
+        kinds: kind ? [kind] : undefined,
+        limit,
+      });
+      return jsonResult(readableHits(hits));
+    },
+  );
+
+  server.tool(
+    "search_edits",
+    "Find past edits/writes touching a file: tool calls whose arguments target a matching file path (Edit/Write/patch args include the changed content). Optional full-text query narrows within those, e.g. search_edits(file='src/store.py', query='advisory lock').",
+    {
+      file: z.string().describe("File path substring (e.g. src/store.py)"),
+      query: z.string().optional().describe("Optional search terms"),
+      session: z.string().optional().describe("Restrict to one session id"),
+      limit: z.number().optional().describe("Max hits (default 20)"),
+    },
+    async ({ file, query, session, limit }) => {
+      const hits = search.search({
+        query: query ?? "",
+        file,
+        session,
+        kinds: ["tool_call"],
+        limit,
+      });
+      return jsonResult(readableHits(hits));
+    },
+  );
+
+  server.tool(
+    "search_errors",
+    "Search past errors: failed tool results, HTTP error responses, and proxy-captured error events. E.g. search_errors('NullPointerException'). Empty query lists recent errors.",
+    {
+      query: z.string().optional().describe("Search terms (optional)"),
+      session: z.string().optional().describe("Restrict to one session id"),
+      limit: z.number().optional().describe("Max hits (default 20)"),
+    },
+    async ({ query, session, limit }) => {
+      const hits = search.search({
+        query: query ?? "",
+        session,
+        errorsOnly: true,
+        limit,
+      });
+      return jsonResult(readableHits(hits));
+    },
+  );
+
+  server.tool(
+    "find_previous_fix",
+    "Find sessions where a symbol/term was previously worked on: searches past edits and model explanations, grouped by session with sample snippets and touched files. E.g. find_previous_fix(symbol='TCPStore').",
+    {
+      symbol: z.string().describe("Symbol, error, or concept to look up"),
+      limit: z.number().optional().describe("Max sessions (default 5)"),
+    },
+    async ({ symbol, limit }) => {
+      const kinds: ChunkKind[] = ["tool_call", "response"];
+      const hits = search.search({ query: symbol, kinds, limit: 200 });
+      return jsonResult(groupBySession(hits, limit ?? 5));
+    },
+  );
+
+  server.tool(
+    "recall_session",
+    'Answer "have we solved anything similar before?": free-text search across all captured content, grouped into the most relevant past sessions with sample snippets. Follow up with get_session(id) for the full detail.',
+    {
+      query: z.string().describe("What you are about to work on"),
+      limit: z.number().optional().describe("Max sessions (default 5)"),
+    },
+    async ({ query, limit }) => {
+      const hits = search.search({ query, limit: 200 });
+      return jsonResult(groupBySession(hits, limit ?? 5));
+    },
+  );
+
+  server.tool(
+    "search_status",
+    "Search index health: how many requests are indexed, failures, chunk count, last index time.",
+    {},
+    async () => jsonResult(search.status()),
+  );
 }
 
 function registerTools(server: McpServer, store: Store): void {
@@ -276,15 +448,20 @@ function registerTools(server: McpServer, store: Store): void {
 export async function mcp(): Promise<void> {
   const config = loadConfig();
   const store = openStore(config.storage.dir);
+  const searchStore = config.search.enabled
+    ? openSearchStore(config.storage.dir)
+    : null;
 
   const server = new McpServer({ name: "aap", version: "1" });
   registerTools(server, store);
+  if (searchStore) registerSearchTools(server, searchStore);
 
   let closed = false;
   const closeStore = (): void => {
     if (closed) return;
     closed = true;
     store.close();
+    searchStore?.close();
   };
   process.on("SIGINT", () => {
     closeStore();
