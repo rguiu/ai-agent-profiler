@@ -19,6 +19,11 @@ const GROWTH_FACTOR = 3;
 // the content it newly added (miss − input growth) by this many tokens
 // indicates a genuine prefix reset, not just the freshly-appended turn.
 const PREFIX_RESET_ABS_MIN = 5000;
+// A request that ran this long is almost certainly a stalled stream: the client
+// (e.g. Claude Code) typically aborts around 5 min, so latencies pinned near
+// that ceiling read as timeouts even though the proxy logs a 200.
+const SLOW_REQUEST_MS = 120_000;
+const STALLED_REQUEST_MS = 240_000;
 
 function isReadLike(name: string): boolean {
   return /read|cat|view|open/i.test(name);
@@ -131,6 +136,8 @@ export function recommend(
     });
   }
 
+  reportSlowRequests(detail, recs);
+
   reconcilePrefixCache(analysis.growth, recs);
 
   const searchCommands = analysis.commands.filter(
@@ -169,6 +176,37 @@ export function recommend(
   }
 
   return recs;
+}
+
+// Surface requests whose latency indicates a stalled stream. The proxy logs
+// these as 200s (bytes did flow), so they are otherwise invisible — but a
+// request idling for minutes is what the user experiences as a "timeout" when
+// the client finally aborts. Common on large tool-use responses (file writes).
+function reportSlowRequests(
+  detail: SessionDetail,
+  recs: Recommendation[],
+): void {
+  const slow = detail.requests.filter(
+    (r) => (r.latency_ms ?? 0) >= SLOW_REQUEST_MS,
+  );
+  if (slow.length === 0) return;
+
+  const worst = Math.max(...slow.map((r) => r.latency_ms ?? 0));
+  const stalled = slow.filter(
+    (r) => (r.latency_ms ?? 0) >= STALLED_REQUEST_MS,
+  ).length;
+  const secs = (ms: number): string => (ms / 1000).toFixed(0);
+
+  recs.push({
+    kind: "slow_request",
+    severity: stalled > 0 ? "high" : "warn",
+    title: `${slow.length} request(s) took over ${secs(SLOW_REQUEST_MS)}s (slowest ~${secs(worst)}s)`,
+    detail: `${slow.length} request(s) ran unusually long${
+      stalled > 0
+        ? `, ${stalled} of them past ${secs(STALLED_REQUEST_MS)}s — near the point where the client aborts, which surfaces as a timeout`
+        : ""
+    }. The response bytes may have arrived quickly with the connection then idling: a stalled stream that never closed. Large tool-use responses (e.g. file writes) are the usual trigger.`,
+  });
 }
 
 // Reconcile the live prefix probe against ground truth: DeepSeek reports real

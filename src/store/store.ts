@@ -614,6 +614,15 @@ export class Store {
     };
   }
 
+  // Lean single-session lookup (no analysis queries). Used to rehydrate the
+  // in-memory registry on a miss after a prune or restart.
+  getSessionRow(id: string): SessionRow | undefined {
+    const raw = this.getSessionStmt.get(id) as
+      (Omit<SessionRow, "meta"> & { meta: string | null }) | undefined;
+    if (!raw) return undefined;
+    return { ...raw, meta: parseMeta(raw.meta) };
+  }
+
   globalToolUsage(): ToolUsage[] {
     return this.toolUsageGlobalStmt.all() as ToolUsage[];
   }
