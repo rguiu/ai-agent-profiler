@@ -16,6 +16,7 @@ import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
 import { forwardBedrock } from "./bedrock.js";
+import { LruMap } from "./lru.js";
 import { parseRoute } from "./route.js";
 import { needsShaping, shapeRequestBody } from "./shape.js";
 import { Throttle } from "./throttle.js";
@@ -31,6 +32,12 @@ const HOP_BY_HOP: ReadonlySet<string> = new Set([
   "upgrade",
 ]);
 
+/** Last request body per session, kept only for the [cache] hit diagnostic. */
+type PrevBodies = LruMap<string, { body: string; path: string }>;
+
+/** Cap on distinct sessions holding a cached previous body in memory. */
+const MAX_PREV_BODIES = 256;
+
 export interface ProxyState {
   activeBedrockSession: string | null;
   activeOllamaSession: string | null;
@@ -45,13 +52,26 @@ export function createProxyServer(
   search?: SearchStore | null,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
-  // Initialize active provider sessions from hydrated registry (survives restart)
+  // Seed the active provider sessions from persisted state (most-recent first)
+  // so single-session routing survives a restart even though the in-memory
+  // registry starts empty (no hydration).
   let initialBedrock: string | null = null;
   let initialOllama: string | null = null;
-  for (const s of registry.list()) {
-    if (providers.has("bedrock") && s.meta?.bedrock === "1")
+  for (const s of store?.recentSessions() ?? []) {
+    const meta = s.meta ? (JSON.parse(s.meta) as Record<string, string>) : null;
+    if (
+      initialBedrock === null &&
+      providers.has("bedrock") &&
+      meta?.bedrock === "1"
+    )
       initialBedrock = s.id;
-    if (providers.has("ollama") && s.meta?.ollama === "1") initialOllama = s.id;
+    if (
+      initialOllama === null &&
+      providers.has("ollama") &&
+      meta?.ollama === "1"
+    )
+      initialOllama = s.id;
+    if (initialBedrock !== null && initialOllama !== null) break;
   }
   const state: ProxyState = {
     activeBedrockSession: initialBedrock,
@@ -59,7 +79,9 @@ export function createProxyServer(
   };
 
   const throttle = new Throttle(config.throttle);
-  const prevBodies = new Map<string, { body: string; path: string }>();
+  // Bounded so long-lived/idle sessions can't accumulate full request bodies
+  // in memory. Only feeds the [cache] diagnostic, so eviction is harmless.
+  const prevBodies: PrevBodies = new LruMap(MAX_PREV_BODIES);
 
   return http.createServer((req, res) => {
     handle(
@@ -90,7 +112,7 @@ function handle(
   store?: Store,
   logger?: RequestLogger,
   throttle?: Throttle,
-  prevBodies?: Map<string, { body: string; path: string }>,
+  prevBodies?: PrevBodies,
   searchStore?: SearchStore | null,
 ): void {
   const rawUrl = req.url ?? "/";
@@ -214,7 +236,7 @@ function handleControl(
   registry: SessionRegistry,
   state: ProxyState,
   capture?: Capture,
-  prevBodies?: Map<string, { body: string; path: string }>,
+  prevBodies?: PrevBodies,
 ): boolean {
   if (pathname === "/health") {
     sendJson(res, 200, { status: "ok" });
@@ -306,7 +328,7 @@ interface ForwardObs {
   throttle?: Throttle;
   timeoutMs?: number;
   sessionId?: string | null;
-  prevBodies?: Map<string, { body: string; path: string }>;
+  prevBodies?: PrevBodies;
   cacheTtlUpgrade?: boolean;
   meta: Omit<
     RequestLogEntry,

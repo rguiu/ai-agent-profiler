@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { SessionDetail } from "../store/index.js";
 import { recommend } from "./recommend.js";
 
-function detail(overrides: Partial<SessionDetail["analysis"]>): SessionDetail {
+function detail(
+  overrides: Partial<SessionDetail["analysis"]>,
+  requests: SessionDetail["requests"] = [],
+): SessionDetail {
   return {
     session: {
       id: "s1",
@@ -14,7 +17,7 @@ function detail(overrides: Partial<SessionDetail["analysis"]>): SessionDetail {
       last_seen_at: null,
       meta: null,
     },
-    requests: [],
+    requests,
     analysis: {
       toolUsage: [],
       repeated: [],
@@ -237,5 +240,48 @@ describe("recommend", () => {
       }),
     );
     expect(recs.find((r) => r.kind === "inefficient_search")).toBeUndefined();
+  });
+
+  const req = (latency_ms: number): SessionDetail["requests"][number] =>
+    ({
+      id: "r",
+      provider: "bedrock",
+      method: "POST",
+      path: "/model/x",
+      status: 200,
+      latency_ms,
+      started_at: null,
+      ended_at: null,
+      request_bytes: null,
+      response_bytes: null,
+      error: null,
+      format: null,
+      model: null,
+      input_tokens: null,
+      cached_input_tokens: null,
+      cache_creation_input_tokens: null,
+      output_tokens: null,
+      stop_reason: null,
+      cost: null,
+      tool_call_count: null,
+      kind: null,
+    }) satisfies SessionDetail["requests"][number];
+
+  it("flags a slow request as a likely stalled stream", () => {
+    const recs = recommend(detail({}, [req(150_000)]));
+    const slow = recs.find((r) => r.kind === "slow_request");
+    expect(slow?.severity).toBe("warn");
+    expect(slow?.title).toContain("1 request");
+  });
+
+  it("escalates to high when a request stalls past the client abort window", () => {
+    const recs = recommend(detail({}, [req(299_500)]));
+    const slow = recs.find((r) => r.kind === "slow_request");
+    expect(slow?.severity).toBe("high");
+  });
+
+  it("does not flag fast requests", () => {
+    const recs = recommend(detail({}, [req(5_000)]));
+    expect(recs.find((r) => r.kind === "slow_request")).toBeUndefined();
   });
 });

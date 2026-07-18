@@ -7,6 +7,11 @@ import aws4 from "aws4";
 const execFileAsync = promisify(execFile);
 
 const UPSTREAM_TIMEOUT_MS = 120_000;
+// Once the response starts streaming, cap the gap BETWEEN chunks. Bedrock can
+// deliver a full response and then leave the connection open without sending
+// the terminating bytes; without this the socket idles until the client aborts
+// (~5 min), which the user experiences as a timeout on large tool-use replies.
+const STREAM_IDLE_TIMEOUT_MS = 60_000;
 
 interface Credentials {
   accessKeyId: string;
@@ -153,13 +158,30 @@ export function forwardBedrock(
             >;
             onResponse?.(status, respHeaders);
             res.writeHead(status, upstreamRes.headers);
+            // Guard against a stalled stream: reset an idle timer on each chunk
+            // and tear down the connection if the gap exceeds the cap, so the
+            // client sees a clean end instead of hanging to its own timeout.
+            const bumpIdle = (): void => {
+              clearTimeout(idleTimer);
+              idleTimer = setTimeout(() => {
+                upstreamReq.destroy(
+                  new Error(
+                    `Bedrock stream idle for ${STREAM_IDLE_TIMEOUT_MS}ms`,
+                  ),
+                );
+              }, STREAM_IDLE_TIMEOUT_MS);
+            };
+            bumpIdle();
             upstreamRes.on("data", (chunk: Buffer) => {
+              bumpIdle();
               onResponseChunk?.(chunk);
             });
+            upstreamRes.on("end", () => clearTimeout(idleTimer));
             upstreamRes.pipe(res);
           },
         );
 
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
         const deadlineTimer = setTimeout(() => {
           upstreamReq.destroy(
             new Error(
@@ -171,6 +193,7 @@ export function forwardBedrock(
         upstreamReq.on("timeout", () => upstreamReq.destroy());
         upstreamReq.on("error", (err) => {
           clearTimeout(deadlineTimer);
+          clearTimeout(idleTimer);
           if (!res.headersSent) {
             res.writeHead(502, { "content-type": "application/json" });
             res.end(
@@ -186,6 +209,7 @@ export function forwardBedrock(
 
         res.on("finish", finish);
         res.on("close", () => {
+          clearTimeout(idleTimer);
           if (!res.writableFinished) upstreamReq.destroy();
           finish();
         });

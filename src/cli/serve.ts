@@ -12,31 +12,36 @@ import { openStore } from "../store/index.js";
 
 const PARSE_INTERVAL_MS = 3000;
 const SHUTDOWN_TIMEOUT_MS = 5000;
+// Sessions untouched for 2h are swept from memory; they recover if seen again.
+const SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
+const SESSION_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
 
 export function serve(args?: string[]): void {
   const portIdx = args?.indexOf("--port") ?? -1;
   const portArg = portIdx >= 0 ? args?.[portIdx + 1] : undefined;
   const cliPort = portArg ? parseInt(portArg, 10) : undefined;
   const config = loadConfig();
-  const registry = new SessionRegistry();
   const store = openStore(config.storage.dir);
   const searchStore: SearchStore | null = config.search.enabled
     ? openSearchStore(config.storage.dir)
     : null;
 
-  // Hydrate in-memory registry from persisted sessions so that metadata
-  // (e.g. armada_node) survives a proxy restart mid-session.
-  const rows = store.recentSessions();
-  registry.hydrate(
-    rows.map((r) => ({
-      id: r.id,
-      client: r.client ?? undefined,
-      cwd: r.cwd ?? undefined,
-      repo: r.repo,
-      startedAt: r.started_at ?? new Date().toISOString(),
-      meta: r.meta ? (JSON.parse(r.meta) as Record<string, string>) : null,
-    })),
-  );
+  // The in-memory registry starts empty — persisted sessions are NOT hydrated
+  // on start (stale ones would otherwise sit in memory until the first prune).
+  // Instead the registry recovers a session lazily from the store on lookup, so
+  // its metadata (armada_node, cache_ttl, …) survives prune and restart.
+  const registry = new SessionRegistry(SESSION_IDLE_MS, (id) => {
+    const row = store.getSessionRow(id);
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      client: row.client ?? undefined,
+      cwd: row.cwd ?? undefined,
+      repo: row.repo,
+      startedAt: row.started_at ?? new Date().toISOString(),
+      meta: row.meta,
+    };
+  });
 
   const capture = new FileCapture(
     store,
@@ -57,9 +62,6 @@ export function serve(args?: string[]): void {
     console.log(`aap proxy listening on http://${config.server.host}:${port}`);
     console.log(`providers: ${Object.keys(config.providers).join(", ")}`);
     console.log(`storage: ${config.storage.dir}`);
-    if (rows.length > 0) {
-      console.log(`hydrated ${rows.length} session(s) from store`);
-    }
   });
 
   // Capture stays on the hot path; parsing runs on a background tick so that
@@ -109,6 +111,17 @@ export function serve(args?: string[]): void {
     : null;
   indexTimer?.unref();
 
+  // Sweep idle sessions out of the in-memory registry so long-running proxies
+  // don't accumulate them. Persisted state is untouched — a later request
+  // re-registers (recovers) the session.
+  const pruneTimer = setInterval(() => {
+    const removed = registry.prune();
+    if (removed > 0) {
+      console.log(`pruned ${removed} idle session(s) from memory`);
+    }
+  }, SESSION_PRUNE_INTERVAL_MS);
+  pruneTimer.unref();
+
   let shuttingDown = false;
   const shutdown = (): void => {
     if (shuttingDown) return;
@@ -116,6 +129,7 @@ export function serve(args?: string[]): void {
     console.log("shutting down — draining in-flight requests...");
     clearInterval(parseTimer);
     if (indexTimer) clearInterval(indexTimer);
+    clearInterval(pruneTimer);
 
     // Stop accepting new connections; existing ones finish naturally.
     server.close(() => {
