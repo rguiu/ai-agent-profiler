@@ -622,7 +622,7 @@ function lastMessagePromptText(content: unknown): string {
   return out;
 }
 
-function extractResultText(content: unknown): string {
+export function extractResultText(content: unknown): string {
   const asStr = asString(content);
   if (asStr !== null) return asStr;
   let out = "";
@@ -635,7 +635,7 @@ function extractResultText(content: unknown): string {
   return out;
 }
 
-function parseRequestJson(
+export function parseRequestJson(
   events: TraceEvent[],
 ): Record<string, unknown> | null {
   const requestEvent = events.find((e) => e.type === "request");
@@ -969,34 +969,44 @@ function extractBedrockModel(events: TraceEvent[]): string | null {
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
-export function parseTrace(events: TraceEvent[]): ParsedTrace {
-  const { toolResults, context } = parseRequestBody(events);
-  const base: ParsedTrace = {
-    format: "unknown",
-    model: null,
-    inputTokens: null,
-    cachedInputTokens: null,
-    cacheCreationTokens: null,
-    outputTokens: null,
-    stopReason: null,
-    toolCalls: [],
-    toolResults,
-    context,
-    streaming: false,
-  };
+export interface DecodedResponseBody {
+  status: number | null;
+  contentType: string;
+  body: Buffer;
+  text: string;
+}
 
+// Reassemble and decompress the captured response body. Returns null when the
+// trace has no response_body events (e.g. connection error before a response).
+export function decodeResponseBody(
+  events: TraceEvent[],
+): DecodedResponseBody | null {
   const responseEvent = events.find((e) => e.type === "response");
   const chunks = events
     .filter((e) => e.type === "response_body" && typeof e.data === "string")
     .map((e) => Buffer.from(e.data as string, "base64"));
-  if (chunks.length === 0) return base;
-
+  if (chunks.length === 0) return null;
   const body = decompress(
     Buffer.concat(chunks),
     headerValue(responseEvent?.headers, "content-encoding"),
   );
-  const contentType = headerValue(responseEvent?.headers, "content-type") ?? "";
-  const text = body.toString("utf8");
+  return {
+    status: responseEvent ? (asNumber(responseEvent.status) ?? null) : null,
+    contentType: headerValue(responseEvent?.headers, "content-type") ?? "",
+    body,
+    text: body.toString("utf8"),
+  };
+}
+
+// Decode the response body into a list of JSON payloads, handling SSE,
+// NDJSON, Bedrock binary event-streams, and whole-body JSON.
+export function decodeResponseObjects(events: TraceEvent[]): {
+  objects: unknown[];
+  streaming: boolean;
+} {
+  const decoded = decodeResponseBody(events);
+  if (!decoded) return { objects: [], streaming: false };
+  const { body, text, contentType } = decoded;
   const isBinaryEventStream = contentType.includes(
     "application/vnd.amazon.eventstream",
   );
@@ -1027,6 +1037,31 @@ export function parseTrace(events: TraceEvent[]): ParsedTrace {
     }
   }
   const streaming = isBinaryEventStream || isNdjson || isSSE || ndjsonStream;
+  return { objects, streaming };
+}
+
+export function parseTrace(events: TraceEvent[]): ParsedTrace {
+  const { toolResults, context } = parseRequestBody(events);
+  const base: ParsedTrace = {
+    format: "unknown",
+    model: null,
+    inputTokens: null,
+    cachedInputTokens: null,
+    cacheCreationTokens: null,
+    outputTokens: null,
+    stopReason: null,
+    toolCalls: [],
+    toolResults,
+    context,
+    streaming: false,
+  };
+
+  const decoded = decodeResponseBody(events);
+  if (!decoded) return base;
+  const { objects, streaming } = decodeResponseObjects(events);
+  const isBinaryEventStream = decoded.contentType.includes(
+    "application/vnd.amazon.eventstream",
+  );
   if (objects.length === 0) return { ...base, streaming };
 
   if (looksAnthropic(objects)) {

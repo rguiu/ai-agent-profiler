@@ -2,6 +2,11 @@ import { FileCapture } from "../capture/index.js";
 import { loadConfig } from "../config/index.js";
 import { runParse } from "../parse/index.js";
 import { consoleRequestLogger, createProxyServer } from "../proxy/index.js";
+import {
+  openSearchStore,
+  runIndex,
+  type SearchStore,
+} from "../search/index.js";
 import { SessionRegistry } from "../session/index.js";
 import { openStore } from "../store/index.js";
 
@@ -17,6 +22,9 @@ export function serve(args?: string[]): void {
   const cliPort = portArg ? parseInt(portArg, 10) : undefined;
   const config = loadConfig();
   const store = openStore(config.storage.dir);
+  const searchStore: SearchStore | null = config.search.enabled
+    ? openSearchStore(config.storage.dir)
+    : null;
 
   // The in-memory registry starts empty — persisted sessions are NOT hydrated
   // on start (stale ones would otherwise sit in memory until the first prune).
@@ -46,6 +54,7 @@ export function serve(args?: string[]): void {
     capture,
     store,
     consoleRequestLogger(),
+    searchStore,
   );
 
   const port = cliPort ?? config.server.port;
@@ -76,6 +85,32 @@ export function serve(args?: string[]): void {
   }, PARSE_INTERVAL_MS);
   parseTimer.unref();
 
+  // Search indexing follows the same off-hot-path pattern as parsing: small
+  // batches on a timer, writing to its own search.sqlite so the proxy's
+  // store is never contended.
+  let indexing = false;
+  const indexTimer = searchStore
+    ? setInterval(() => {
+        if (indexing) return;
+        indexing = true;
+        runIndex(store, searchStore, { limit: config.search.batchSize })
+          .then((summary) => {
+            if (summary.indexed > 0) {
+              console.log(
+                `indexed ${summary.indexed} request(s) (${summary.chunks} chunks)`,
+              );
+            }
+          })
+          .catch((err: Error) => {
+            console.error(`background index failed: ${err.message}`);
+          })
+          .finally(() => {
+            indexing = false;
+          });
+      }, config.search.intervalMs)
+    : null;
+  indexTimer?.unref();
+
   // Sweep idle sessions out of the in-memory registry so long-running proxies
   // don't accumulate them. Persisted state is untouched — a later request
   // re-registers (recovers) the session.
@@ -93,11 +128,13 @@ export function serve(args?: string[]): void {
     shuttingDown = true;
     console.log("shutting down — draining in-flight requests...");
     clearInterval(parseTimer);
+    if (indexTimer) clearInterval(indexTimer);
     clearInterval(pruneTimer);
 
     // Stop accepting new connections; existing ones finish naturally.
     server.close(() => {
       store.close();
+      searchStore?.close();
       process.exit(0);
     });
 
@@ -108,6 +145,7 @@ export function serve(args?: string[]): void {
       );
       server.closeAllConnections();
       store.close();
+      searchStore?.close();
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     forceTimer.unref();

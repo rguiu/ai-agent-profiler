@@ -10,6 +10,7 @@ export {
   serverSchema,
   sessionsSchema,
   storageSchema,
+  searchSchema,
   modelPricingSchema,
   type Config,
   type ProviderConfig,

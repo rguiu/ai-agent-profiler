@@ -32,6 +32,7 @@ export default tseslint.config(
         alert: "readonly",
         TextDecoder: "readonly",
         Uint8Array: "readonly",
+        URLSearchParams: "readonly",
         console: "readonly",
       },
     },

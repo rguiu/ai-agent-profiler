@@ -5,6 +5,7 @@ export {
   type RequestRow,
   type RequestFinish,
   type ParseTarget,
+  type SearchIndexTarget,
   type MetricsRow,
   type SessionSummary,
   type SessionRow,

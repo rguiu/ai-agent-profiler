@@ -11,6 +11,7 @@ import type { Capture, RequestTrace } from "../capture/index.js";
 import { handleApi } from "../api/index.js";
 import { applyCacheTtlUpgrade } from "../cache/ttl-upgrade.js";
 import { SessionRegistry, type SessionInfo } from "../session/index.js";
+import type { SearchStore } from "../search/index.js";
 import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
@@ -48,6 +49,7 @@ export function createProxyServer(
   capture?: Capture,
   store?: Store,
   logger?: RequestLogger,
+  search?: SearchStore | null,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
   // Seed the active provider sessions from persisted state (most-recent first)
@@ -94,6 +96,7 @@ export function createProxyServer(
       logger,
       throttle,
       prevBodies,
+      search,
     );
   });
 }
@@ -110,6 +113,7 @@ function handle(
   logger?: RequestLogger,
   throttle?: Throttle,
   prevBodies?: PrevBodies,
+  searchStore?: SearchStore | null,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
@@ -119,7 +123,7 @@ function handle(
   if (handleControl(req, res, pathname, registry, state, capture, prevBodies))
     return;
   if (handleUi(req, res, pathname)) return;
-  if (store && handleApi(req, res, pathname, store)) return;
+  if (store && handleApi(req, res, pathname, store, searchStore)) return;
 
   const route = parseRoute(
     pathname,

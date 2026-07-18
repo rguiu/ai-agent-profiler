@@ -74,7 +74,7 @@ export async function runParse(
   return { total: targets.length, parsed, failed };
 }
 
-async function readTraceEvents(file: string): Promise<TraceEvent[]> {
+export async function readTraceEvents(file: string): Promise<TraceEvent[]> {
   const content = await readFile(file, "utf8");
   const events: TraceEvent[] = [];
   for (const line of content.split("\n")) {

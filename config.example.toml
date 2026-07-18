@@ -15,6 +15,16 @@ idleTimeoutMs = 300000
 # Directory for the SQLite index (aap.sqlite) and raw NDJSON traces (traces/).
 dir = "data"
 
+[search]
+# Full-text search index over captured traces (search.sqlite, FTS5).
+# Indexing runs off the hot path: a background tick inside `aap serve`, plus
+# `aap index` for manual/backfill runs. Rebuildable at any time from traces.
+enabled = true
+# How often the serve background indexer looks for new requests (ms).
+intervalMs = 5000
+# Max requests indexed per tick (keeps each pass short).
+batchSize = 50
+
 # Provider routes. The request path prefix /<session_id>/<provider>/ selects one.
 [providers.anthropic]
 upstream = "https://api.anthropic.com"

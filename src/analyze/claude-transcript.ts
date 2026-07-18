@@ -53,6 +53,8 @@ export interface ReconstructedMessage {
   uuid: string;
   isCompactSummary: boolean;
   usage?: TranscriptUsage;
+  timestamp?: string;
+  model?: string;
 }
 
 export interface ToolResultInfo {
@@ -65,6 +67,8 @@ export interface ToolResultInfo {
 
 export interface ParsedTranscript {
   path: string;
+  sessionId: string | null;
+  cwd: string | null;
   totalEvents: number;
   chainedEvents: number;
   activePathEvents: number;
@@ -241,12 +245,27 @@ export function parseTranscript(path: string): ParsedTranscript {
         uuid: e.uuid!,
         isCompactSummary: e.isCompactSummary === true,
         usage: e.message.usage,
+        timestamp: typeof e.timestamp === "string" ? e.timestamp : undefined,
+        model:
+          typeof e.message.model === "string" ? e.message.model : undefined,
       });
     }
   }
 
+  let sessionId: string | null = null;
+  let cwd: string | null = null;
+  for (const e of events) {
+    if (sessionId === null && typeof e.sessionId === "string") {
+      sessionId = e.sessionId;
+    }
+    if (cwd === null && typeof e.cwd === "string") cwd = e.cwd;
+    if (sessionId !== null && cwd !== null) break;
+  }
+
   return {
     path,
+    sessionId,
+    cwd,
     totalEvents: events.length,
     chainedEvents: chained.length,
     activePathEvents: path_.length,

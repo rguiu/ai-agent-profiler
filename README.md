@@ -57,7 +57,14 @@ the LLM.
 - **Recommendations** — actionable findings per session (repeated reads, redundant calls,
   high amplification, context duplication, inefficient search→read).
 - **Export & compare** — session reports as Markdown/JSON; sessions side by side.
-- **MCP server** (`aap mcp`) — 10 tools exposing the profiler's data for agent self-introspection.
+- **Persistent engineering memory** — a local full-text index (SQLite FTS5) over every
+  prompt, response, tool call, file edit, shell command, and error the proxy has seen.
+  Search it from the dashboard (`/ui` → Search), the CLI (`aap search`), REST
+  (`/search`), or agent-facing MCP tools (`search_history`, `search_edits`,
+  `search_errors`, `find_previous_fix`, `recall_session`). `aap import` also pulls
+  agent-native transcripts (Claude Code `~/.claude/projects`, opencode's local DB)
+  into the same index, covering sessions that never went through the proxy.
+- **MCP server** (`aap mcp`) — tools exposing the profiler's data for agent self-introspection.
 - **Optimize layer** — 9 request-rewriting strategies, **off by default**; on cached providers it deliberately does very little (see below).
 
 See [`ROADMAP.md`](ROADMAP.md) for what's next.
@@ -114,6 +121,9 @@ aap serve             # start the proxy + read API (prints a line per request)
 aap run <agent>       # launch an agent through the profiler, e.g. aap run claude
                      #   tag a run: aap run --meta task=explain --meta iter=1 opencode
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
+aap index [--all]    # build the full-text search index from captured traces
+aap import           # import agent-native transcripts (Claude Code, opencode) into search
+aap search <query>   # search past prompts/responses/tools/errors (--errors, --file, --kind)
 aap sessions         # list captured sessions (aap sessions rm <id> to delete)
 aap commands         # break shell commands down by token cost
 aap tag <id> k=v     # tag a session with metadata (e.g. verify=pass)
@@ -135,6 +145,8 @@ GET /requests/:id?events=1     # request detail + raw trace events
 GET /requests/:id/messages     # per-message context breakdown (roles, sizes)
 GET /tools                     # global tool-usage totals
 GET /commands                  # shell-command breakdown (?session=<id> to scope)
+GET /search?q=...              # full-text search over indexed traces (&kind=&file=&errors=1)
+GET /search/status             # index health: requests indexed, chunks, failures
 GET /health
 ```
 
@@ -229,8 +241,17 @@ works — and its caveats — differ per provider:
 ### Self-introspection via MCP
 
 `aap mcp` starts a stdio MCP server so an agent can query its own captured behaviour —
-"which requests cost the most?", "which file did I read most often?". Add it to
-`opencode.json`:
+"which requests cost the most?", "which file did I read most often?". It also exposes
+the search index as memory tools, so an agent can ask "have we solved anything similar
+before?" instead of re-exploring the repository:
+
+- `search_history("ZMQ port race")` — full-text over prompts, responses, tools, errors
+- `search_edits(file="src/store.py")` — past edits touching a file
+- `search_errors("NullPointerException")` — past failures
+- `find_previous_fix(symbol="TCPStore")` / `recall_session(query=...)` — relevant past
+  sessions, grouped with sample snippets (summaries + links, never raw transcripts)
+
+Add it to `opencode.json`:
 
 ```json
 {
