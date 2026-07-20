@@ -34,6 +34,8 @@ export default tseslint.config(
         Uint8Array: "readonly",
         URLSearchParams: "readonly",
         console: "readonly",
+        DecompressionStream: "readonly",
+        Response: "readonly",
       },
     },
   },

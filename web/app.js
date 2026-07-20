@@ -102,6 +102,86 @@ function b64ToText(b64) {
   }
 }
 
+async function decompressResponse(events) {
+  const responseEvent = events.find((e) => e.type === "response");
+  const encoding = responseEvent?.headers?.["content-encoding"];
+  let raw;
+  if (!encoding) {
+    raw = events
+      .filter((e) => e.type === "response_body")
+      .map((e) => b64ToText(e.data))
+      .join("");
+  } else {
+    try {
+      const chunks = events
+        .filter((e) => e.type === "response_body" && e.data)
+        .map((e) => {
+          const bin = atob(e.data);
+          return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+        });
+      if (chunks.length === 0)
+        return `[${encoding}-encoded — run \`aap parse\` for metrics]`;
+      const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+      const merged = new Uint8Array(totalLen);
+      let off = 0;
+      for (const c of chunks) {
+        merged.set(c, off);
+        off += c.length;
+      }
+      const format =
+        encoding === "gzip"
+          ? "gzip"
+          : encoding === "deflate"
+            ? "deflate"
+            : encoding === "br"
+              ? "br"
+              : "gzip";
+      const ds = new DecompressionStream(format);
+      const writer = ds.writable.getWriter();
+      writer.write(merged);
+      writer.close();
+      const buf = await new Response(ds.readable).arrayBuffer();
+      raw = new TextDecoder("utf-8", { fatal: false }).decode(buf);
+    } catch {
+      return `[${encoding}-encoded — run \`aap parse\` for metrics]`;
+    }
+  }
+  return extractDisplayText(raw);
+}
+
+// Parse raw response body (SSE or JSON) into human-readable text.
+function extractDisplayText(raw) {
+  if (!raw) return "";
+  // Anthropic SSE: data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}
+  if (raw.startsWith("event:") || raw.startsWith("data:")) {
+    let out = "";
+    for (const line of raw.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      try {
+        const obj = JSON.parse(line.slice(5).trim());
+        if (obj?.delta?.type === "text_delta" && obj.delta.text) {
+          out += obj.delta.text;
+        }
+      } catch {
+        /* skip malformed lines */
+      }
+    }
+    if (out) return out;
+  }
+  // OpenAI / DeepSeek JSON: {"choices":[{"message":{"content":"..."}}]}
+  try {
+    const obj = JSON.parse(raw);
+    const content =
+      obj?.choices?.[0]?.message?.content ||
+      obj?.choices?.[0]?.text ||
+      obj?.content;
+    if (typeof content === "string" && content.trim()) return content;
+  } catch {
+    /* not JSON */
+  }
+  return raw;
+}
+
 async function dashboard() {
   const [stats, sessions, tools, commands, kinds, idleGaps] = await Promise.all(
     [
@@ -339,42 +419,42 @@ function conversationHtml(requests, tcByRequest, chains, regen, selectedId) {
   const chainReadIds = new Set((chains || []).map((c) => c.readRequestId));
   const chainSearchIds = new Set((chains || []).map((c) => c.searchRequestId));
 
-  return `<div class="conv-tree">${requests
-    .map((r, i) => {
-      const tcs = tcByRequest[r.id] || [];
-      const hasTools = tcs.length > 0;
-      const newIn = r.input_tokens ?? 0;
-      const cachedIn = r.cached_input_tokens ?? 0;
-      const totalIn = newIn + cachedIn;
-      const tokensLabel =
-        totalIn > 0
-          ? `${num(totalIn)} in${cachedIn > 0 ? ` (${num(newIn)} new + ${num(cachedIn)} cached)` : ""} → ${r.output_tokens != null ? num(r.output_tokens) + " out" : "—"}`
-          : "—";
-      const kind = r.kind || "unknown";
-      const rg = regenMap[r.id];
-      const ka = r.keep_alive;
-      const isSearch = chainSearchIds.has(r.id);
-      const isRead = chainReadIds.has(r.id);
+  function renderRow(r, i, hidden) {
+    const tcs = tcByRequest[r.id] || [];
+    const newIn = r.input_tokens ?? 0;
+    const cachedIn = r.cached_input_tokens ?? 0;
+    const totalIn = newIn + cachedIn;
+    const tokensLabel =
+      totalIn > 0
+        ? `${num(totalIn)} in${cachedIn > 0 ? ` (${num(newIn)} new + ${num(cachedIn)} cached)` : ""} → ${r.output_tokens != null ? num(r.output_tokens) + " out" : "—"}`
+        : "—";
+    const kind = r.kind || "unknown";
+    const rg = regenMap[r.id];
+    const ka = r.keep_alive;
+    const isSearch = chainSearchIds.has(r.id);
+    const isRead = chainReadIds.has(r.id);
 
-      const regenBadge = rg
-        ? ` <span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
+    const regenBadge = rg
+      ? ` <span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
+      : "";
+    const chainBadge = isSearch
+      ? ' <span class="chain-badge chain-search" title="search→read chain: locate step">locate</span>'
+      : isRead
+        ? ' <span class="chain-badge chain-read" title="search→read chain: read step">read</span>'
         : "";
-      const chainBadge = isSearch
-        ? ' <span class="chain-badge chain-search" title="search→read chain: locate step">locate</span>'
-        : isRead
-          ? ' <span class="chain-badge chain-read" title="search→read chain: read step">read</span>'
-          : "";
-      const kaBadge = ka ? ' <span class="ka-badge">♻ keep-alive</span>' : "";
-      const rowCls = [
-        "conv-row",
-        selectedId === r.id ? "selected" : "",
-        ka ? "keepalive" : "",
-        rg ? `regen-${esc(rg.severity)}` : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
+    const kaBadge = ka ? ' <span class="ka-badge">♻ keep-alive</span>' : "";
+    const rowCls = [
+      "conv-row",
+      selectedId === r.id ? "selected" : "",
+      ka ? "keepalive" : "",
+      rg ? `regen-${esc(rg.severity)}` : "",
+      hidden ? "hidden-child" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
 
-      const toolPreviews = hasTools
+    const toolPreviews =
+      tcs.length > 0
         ? `<div class="conv-tools-inline">${tcs
             .map((tc, j) => {
               const result =
@@ -386,44 +466,96 @@ function conversationHtml(requests, tcByRequest, chains, regen, selectedId) {
             .join("")}</div>`
         : "";
 
-      const rowMeta = [
-        `<span class="conv-seq">#${i + 1}</span>`,
-        kindBadge(kind),
-        statusCell(r.status),
-        `<span class="conv-model mono">${esc(r.model) || "?"}</span>`,
-        `<span class="conv-tokens">${tokensLabel}</span>`,
-        `<span class="conv-cost num">${cost(r.cost)}</span>`,
-        r.latency_ms != null
-          ? `<span class="muted">${num(r.latency_ms)}ms</span>`
-          : "",
-        regenBadge,
-        chainBadge,
-        kaBadge,
-      ]
-        .filter(Boolean)
-        .join(" ");
+    const rowMeta = [
+      `<span class="conv-seq">#${requests.indexOf(r) + 1}</span>`,
+      kindBadge(kind),
+      statusCell(r.status),
+      `<span class="conv-model mono">${esc(r.model) || "?"}</span>`,
+      `<span class="conv-tokens">${tokensLabel}</span>`,
+      `<span class="conv-cost num">${cost(r.cost)}</span>`,
+      r.latency_ms != null
+        ? `<span class="muted">${num(r.latency_ms)}ms</span>`
+        : "",
+      regenBadge,
+      chainBadge,
+      kaBadge,
+    ]
+      .filter(Boolean)
+      .join(" ");
 
-      return `<div class="${rowCls}" id="req-${esc(r.id)}" onclick="window._selectRequest('${esc(r.id)}')">
-        <div class="conv-row-head">${rowMeta}</div>
-        ${toolPreviews}
-      </div>`;
+    return `<div class="${rowCls}" id="req-${esc(r.id)}" onclick="window._selectRequest('${esc(r.id)}')">
+    <div class="conv-row-head">${rowMeta}</div>
+    ${toolPreviews}
+  </div>`;
+  }
+
+  // Group consecutive tool_result requests so they render as a single
+  // collapsed summary row unless expanded.
+  const groups = [];
+  for (let i = 0; i < requests.length; i++) {
+    const r = requests[i];
+    const kind = r.kind || "unknown";
+    if (kind !== "tool_result") {
+      groups.push({ kind: "single", items: [r] });
+      continue;
+    }
+    const group = [];
+    while (
+      i < requests.length &&
+      (requests[i].kind || "unknown") === "tool_result"
+    ) {
+      group.push(requests[i]);
+      i++;
+    }
+    i--;
+    groups.push({ kind: "tool_group", items: group });
+  }
+
+  return `<div class="conv-tree">${groups
+    .map((g) => {
+      if (g.kind === "single") {
+        return renderRow(g.items[0]);
+      }
+      const items = g.items;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const aggCost = items.reduce((s, r) => s + (r.cost ?? 0), 0);
+      const aggLatency = items.reduce((s, r) => s + (r.latency_ms ?? 0), 0);
+      const aggInput = items.reduce(
+        (s, r) => s + (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0),
+        0,
+      );
+      const aggOutput = items.reduce((s, r) => s + (r.output_tokens ?? 0), 0);
+      const allToolNames = new Set();
+      for (const r of items) {
+        for (const tc of tcByRequest[r.id] || []) allToolNames.add(tc.name);
+      }
+      const toolList = [...allToolNames].slice(0, 6).join(", ");
+      const overflow =
+        allToolNames.size > 6 ? ` +${allToolNames.size - 6} more` : "";
+
+      return `<details class="conv-group"${
+        items.some((r) => r.id === selectedId) ? " open" : ""
+      }>
+    <summary class="conv-group-summary">
+      <span class="conv-seq">#${requests.indexOf(first) + 1}-${requests.indexOf(last) + 1}</span>
+      ${kindBadge("tool_result")}
+      <span class="muted">${items.length} requests</span>
+      <span class="conv-model mono">${esc(first.model) || "?"}</span>
+      <span class="conv-tokens">${num(aggInput)} in → ${num(aggOutput)} out</span>
+      <span class="conv-cost num">${cost(aggCost)}</span>
+      <span class="muted">${num(aggLatency)}ms</span>
+      <span class="conv-tool" style="font-size:11px">${esc(toolList)}${overflow}</span>
+    </summary>
+    ${items.map((r) => renderRow(r, requests.indexOf(r), true)).join("")}
+  </details>`;
     })
     .join("")}</div>`;
 }
 
 function detailPanelHtml(r, stack) {
   const events = r.events || [];
-  const responseEvent = events.find((e) => e.type === "response");
-  const encoding =
-    responseEvent &&
-    responseEvent.headers &&
-    responseEvent.headers["content-encoding"];
-  const responseText = encoding
-    ? `[${encoding}-encoded — run \`aap parse\` for metrics]`
-    : events
-        .filter((e) => e.type === "response_body")
-        .map((e) => b64ToText(e.data))
-        .join("");
+  const responseText = r._responseText ?? "";
 
   const userMsgs =
     stack && stack.messages
@@ -521,9 +653,13 @@ function detailPanelHtml(r, stack) {
         : `<h3>${esc(responseLabel)}</h3><pre>${esc(responseText)}</pre>`
       : "";
 
+  const isSummaryKind =
+    kind === "recap" || kind === "compact" || kind === "title";
+
   return `
     ${userPromptHtml}
     ${toolResultDeliveries}
+    ${isSummaryKind ? responsePreview : ""}
     <div class="kv">
       <div class="k">${kindBadge(r.kind)}</div><div class="v">${esc(r.model) || "—"}</div>
       <div class="k">provider</div><div class="v">${esc(r.provider)}</div>
@@ -537,7 +673,7 @@ function detailPanelHtml(r, stack) {
     </div>
     ${toolsHtml}
     ${contextHtml}
-    ${responsePreview}
+    ${isSummaryKind ? "" : responsePreview}
     ${eventsHtml}`;
 }
 
@@ -573,6 +709,11 @@ async function sessionDetail(id) {
         api(`/requests/${encodeURIComponent(selectedId)}?events=1`),
         api(`/requests/${encodeURIComponent(selectedId)}/messages`),
       ]);
+      if (selectedDetail) {
+        selectedDetail._responseText = await decompressResponse(
+          selectedDetail.events || [],
+        );
+      }
     } catch {
       selectedDetail = null;
     }
@@ -602,6 +743,11 @@ async function sessionDetail(id) {
         api(`/requests/${encodeURIComponent(requestId)}?events=1`),
         api(`/requests/${encodeURIComponent(requestId)}/messages`),
       ]);
+      if (selectedDetail) {
+        selectedDetail._responseText = await decompressResponse(
+          selectedDetail.events || [],
+        );
+      }
     } catch {
       selectedDetail = null;
       selectedStack = null;
@@ -752,17 +898,7 @@ async function requestDetail(id) {
     api(`/requests/${encodeURIComponent(id)}/messages`),
   ]);
   const events = r.events || [];
-  const responseEvent = events.find((e) => e.type === "response");
-  const encoding =
-    responseEvent &&
-    responseEvent.headers &&
-    responseEvent.headers["content-encoding"];
-  const responseText = encoding
-    ? `[${encoding}-encoded — run \`aap parse\` for metrics]`
-    : events
-        .filter((e) => e.type === "response_body")
-        .map((e) => b64ToText(e.data))
-        .join("");
+  const responseText = await decompressResponse(events);
   const toolCalls = r.toolCalls || [];
 
   app.innerHTML = `
