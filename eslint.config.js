@@ -36,6 +36,7 @@ export default tseslint.config(
         console: "readonly",
         DecompressionStream: "readonly",
         Response: "readonly",
+        requestAnimationFrame: "readonly",
       },
     },
   },

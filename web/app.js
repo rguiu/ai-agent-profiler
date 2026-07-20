@@ -197,16 +197,45 @@ async function dashboard() {
     stats.input_tokens > 0
       ? Math.round((stats.cached_input_tokens / stats.input_tokens) * 100)
       : 0;
+  const avgIn =
+    stats.requests > 0 ? Math.round(stats.input_tokens / stats.requests) : 0;
+  const avgCost = stats.sessions > 0 ? stats.cost / stats.sessions : 0;
   const cards = [
     ["Sessions", num(stats.sessions)],
     ["Requests", num(stats.requests)],
-    [
-      "Input tokens",
-      `${num(stats.input_tokens)}${cacheRate > 0 ? ` <span class="muted">(${cacheRate}% cached)</span>` : ""}`,
-    ],
+    ["Cache hit", `${cacheRate}%`],
+    ["Input tokens", `${num(stats.input_tokens)} · ~${num(avgIn)}/req`],
     ["Output tokens", num(stats.output_tokens)],
-    ["Est. cost", cost(stats.cost)],
+    ["Est. cost", `${cost(stats.cost)} · ${cost(avgCost)}/session`],
   ];
+
+  const topSessions = [...sessions]
+    .filter((s) => s.cost > 0 || s.request_count > 0)
+    .sort((a, b) => b.cost - a.cost);
+  const mostCostly = topSessions[0];
+  const mostReqs = [...sessions].sort(
+    (a, b) => b.request_count - a.request_count,
+  )[0];
+  const bestCache = [...sessions]
+    .filter((s) => s.input_tokens > 0)
+    .sort(
+      (a, b) =>
+        b.cached_input_tokens / b.input_tokens -
+        a.cached_input_tokens / a.input_tokens,
+    )[0];
+
+  function topSessionCard(s, label, detail) {
+    if (!s) return "";
+    const title = s.title || shortId(s.id);
+    return `<a class="top-session-card" href="#/sessions/${encodeURIComponent(s.id)}">
+      <div class="top-session-label">${label}</div>
+      <div class="top-session-title">${esc(title)}</div>
+      <div class="top-session-detail muted">${detail}</div>
+    </a>`;
+  }
+
+  const toolMax = Math.max(...tools.map((t) => t.count), 1);
+
   app.innerHTML = `
     <h2>Dashboard</h2>
     <div class="cards">
@@ -217,17 +246,67 @@ async function dashboard() {
         )
         .join("")}
     </div>
-    <h2>Cache idle gaps</h2>
-    ${idleGapsHtml(idleGaps)}
-    <h2>Cost by kind</h2>
-    ${kindBreakdownTable(kinds)}
-    <h2>Tool usage</h2>
-    ${toolBars(tools)}
-    <h2>Shell commands</h2>
-    ${commandsTable(commands)}
-    <h2>Recent sessions</h2>
-    ${sessionsRows(sessions.slice(0, 15))}
-  `;
+    <div class="dashboard-grid">
+      <div>
+        <h2>Top sessions</h2>
+        <div class="top-sessions">
+          ${topSessionCard(
+            mostCostly,
+            "Most expensive",
+            `${cost(mostCostly?.cost)} · ${num(mostCostly?.request_count || 0)} reqs`,
+          )}
+          ${topSessionCard(
+            mostReqs,
+            "Most requests",
+            `${cost(mostReqs?.cost)} · ${num(mostReqs?.request_count || 0)} reqs`,
+          )}
+          ${topSessionCard(
+            bestCache,
+            "Best cache rate",
+            bestCache && bestCache.input_tokens > 0
+              ? `${Math.round((bestCache.cached_input_tokens / bestCache.input_tokens) * 100)}% · ${num(bestCache.request_count)} reqs`
+              : "",
+          )}
+        </div>
+        <h2>Cache idle gaps</h2>
+        ${idleGapsHtml(idleGaps)}
+      </div>
+      <div>
+        <h2>Cost by kind</h2>
+        ${kindBreakdownTable(kinds)}
+      </div>
+    </div>
+    <div class="dashboard-subgrid">
+      ${
+        tools.length > 8
+          ? `<div class="collapsible"><h2>Tool usage</h2>${toolBars(tools, toolMax)}</div>`
+          : `<div><h2>Tool usage</h2>${toolBars(tools, toolMax)}</div>`
+      }
+      ${
+        commands.length > 8
+          ? `<div class="collapsible"><h2>Shell commands</h2>${commandsTable(commands)}</div>`
+          : `<div><h2>Shell commands</h2>${commandsTable(commands)}</div>`
+      }
+    </div>`;
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".collapsible").forEach((c) => {
+      const rows = c.querySelectorAll(".bar-row, table tbody tr");
+      if (rows.length <= 8) return;
+      const label = c.querySelector(".bars") ? "tool" : "command";
+      for (let i = 8; i < rows.length; i++)
+        rows[i].classList.add("collapsed-row");
+      const btn = document.createElement("button");
+      btn.className = "show-toggle";
+      btn.textContent = `Show all (${rows.length} ${label}s)`;
+      btn.onclick = () => {
+        const expanded = c.classList.toggle("expanded");
+        btn.textContent = expanded
+          ? "Show less"
+          : `Show all (${rows.length} ${label}s)`;
+      };
+      c.appendChild(btn);
+    });
+  });
 }
 
 // Global cost/token breakdown by request kind, from the /kinds endpoint.
@@ -273,10 +352,10 @@ function commandsTable(rows) {
       .join("")}</tbody></table>`;
 }
 
-function toolBars(items) {
+function toolBars(items, scale) {
   if (!items || !items.length)
     return `<p class="empty">No tool calls recorded. Run <code>aap parse</code>.</p>`;
-  const max = Math.max(...items.map((t) => t.count), 1);
+  const max = scale ?? Math.max(...items.map((t) => t.count), 1);
   return `<div class="bars">${items
     .map((t) => {
       const amp = t.result_tokens
