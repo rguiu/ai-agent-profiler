@@ -44,6 +44,7 @@ export type RequestKind =
   | "compact"
   | "recap"
   | "quota"
+  | "tool_result"
   | "unknown";
 
 export interface ParsedContext {
@@ -733,6 +734,11 @@ export function classifyRequestKind(
   }
 
   if (s.includes("quota") || s.includes("usage limit")) return "quota";
+  // Only "main" when the last message has genuine user text. Tool-result
+  // carriers and auto-generated turns have empty lastMessageText (tool_result
+  // blocks are excluded by lastMessagePromptText, and role:"tool" messages
+  // are filtered upstream in parseRequestBody).
+  if (!lastMessageText) return "unknown";
   return "main";
 }
 
@@ -783,9 +789,14 @@ function parseRequestBody(events: TraceEvent[]): {
     }
   }
   const lastMessage = asRecord(messages[messages.length - 1]);
+  const lastMessageRole = asString(lastMessage?.role);
   const lastMessageText = lastMessage
     ? lastMessagePromptText(lastMessage.content)
     : "";
+  // OpenAI-format tool messages (role:"tool") carry results, not user intent
+  // text. lastMessagePromptText extracts string content from them, which would
+  // otherwise look like a user prompt to classifyRequestKind.
+  const userText = lastMessageRole === "tool" ? "" : lastMessageText;
 
   // Accumulate system messages from the messages array — OpenAI/DeepSeek format
   // carries system instructions inside role:"system" entries rather than a
@@ -820,7 +831,35 @@ function parseRequestBody(events: TraceEvent[]): {
   // any role:"system" messages from the array (OpenAI/DeepSeek). Using the last
   // message ONLY (not the whole transcript) avoids false positives from prior
   // summaries echoed back into context.
-  const kind = classifyRequestKind(systemText, lastMessageText);
+  let kind = classifyRequestKind(systemText, userText);
+  // Detect tool-result carriers: the last message delivers tool output back
+  // to the model without any new user-intent text. OpenAI/DeepSeek use
+  // role:"tool"; Anthropic uses role:"user" with only tool_result blocks.
+  if (kind === "unknown" && lastMessage) {
+    const role = asString(lastMessage.role);
+    if (role === "tool") {
+      kind = "tool_result";
+    } else if (role === "user") {
+      const blocks = asArray(lastMessage.content);
+      if (blocks.length > 0) {
+        let onlyToolResults = true;
+        for (const block of blocks) {
+          const b = asRecord(block);
+          if (!b) continue;
+          const t = asString(b.type);
+          if (
+            t !== "tool_result" &&
+            t !== "toolResult" &&
+            !asRecord(b.toolResult)
+          ) {
+            onlyToolResults = false;
+            break;
+          }
+        }
+        if (onlyToolResults) kind = "tool_result";
+      }
+    }
+  }
 
   // Tools: Anthropic uses record.tools, Bedrock uses record.toolConfig.tools
   let tools = asArray(record.tools);
@@ -996,6 +1035,45 @@ export function decodeResponseBody(
     body,
     text: body.toString("utf8"),
   };
+}
+
+// Extract the plain-text content from a response trace (Anthropic SSE or
+// OpenAI/DeepSeek JSON). Used to harvest title-gen and recap summaries.
+export function extractResponseText(events: TraceEvent[]): string | null {
+  const decoded = decodeResponseBody(events);
+  if (!decoded) return null;
+  const { text } = decoded;
+
+  // Anthropic SSE: text deltas from content_block_delta events
+  const sse = extractSSE(text);
+  if (sse.length > 0) {
+    let out = "";
+    for (const obj of sse) {
+      const r = asRecord(obj);
+      if (!r) continue;
+      const delta = asRecord(r.delta);
+      if (delta && asString(delta.type) === "text_delta") {
+        out += asString(delta.text) ?? "";
+      }
+    }
+    if (out) return out;
+  }
+
+  // OpenAI / DeepSeek: whole JSON with choices[0].message.content
+  try {
+    const json = JSON.parse(text);
+    const choices = asArray(asRecord(json)?.choices);
+    if (choices.length > 0) {
+      const choice = asRecord(choices[0]);
+      const message = asRecord(choice?.message);
+      const content = asString(message?.content);
+      if (content) return content;
+    }
+  } catch {
+    // Not valid JSON
+  }
+
+  return null;
 }
 
 // Decode the response body into a list of JSON payloads, handling SSE,

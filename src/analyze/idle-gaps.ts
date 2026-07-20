@@ -18,6 +18,7 @@ export interface IdleGapsResult {
   sessionsAnalyzed: number;
   globalBuckets: GapBucket[];
   sessions: SessionIdleGaps[];
+  coldRefreshTokens: number;
 }
 
 const FIVE_MIN_MS = 5 * 60 * 1000;
@@ -50,12 +51,22 @@ function p90(sorted: number[]): number {
 }
 
 export function analyzeIdleGaps(
-  rows: Array<{ session_id: string; started_at: string }>,
+  rows: Array<{
+    session_id: string;
+    started_at: string;
+    cache_creation_tokens: number;
+  }>,
 ): IdleGapsResult {
-  const bySession = new Map<string, string[]>();
+  const bySession = new Map<
+    string,
+    Array<{ ts: string; cacheCreationTokens: number }>
+  >();
   for (const row of rows) {
     const list = bySession.get(row.session_id) ?? [];
-    list.push(row.started_at);
+    list.push({
+      ts: row.started_at,
+      cacheCreationTokens: row.cache_creation_tokens,
+    });
     bySession.set(row.session_id, list);
   }
 
@@ -67,14 +78,19 @@ export function analyzeIdleGaps(
   };
   let totalGaps = 0;
   let sessionsWithGaps = 0;
+  let coldRefreshTokens = 0;
 
-  for (const [sessionId, timestamps] of bySession) {
-    if (timestamps.length < 2) continue;
+  for (const [sessionId, entries] of bySession) {
+    if (entries.length < 2) continue;
     const gaps: number[] = [];
-    for (let i = 1; i < timestamps.length; i++) {
-      const prev = new Date(timestamps[i - 1]!).getTime();
-      const curr = new Date(timestamps[i]!).getTime();
-      gaps.push(curr - prev);
+    for (let i = 1; i < entries.length; i++) {
+      const prev = new Date(entries[i - 1]!.ts).getTime();
+      const curr = new Date(entries[i]!.ts).getTime();
+      const ms = curr - prev;
+      gaps.push(ms);
+      if (ms > FIVE_MIN_MS) {
+        coldRefreshTokens += entries[i]!.cacheCreationTokens;
+      }
     }
     if (gaps.length === 0) continue;
     sessionsWithGaps++;
@@ -94,7 +110,7 @@ export function analyzeIdleGaps(
     const sorted = [...gaps].sort((a, b) => a - b);
     sessions.push({
       sessionId,
-      requestCount: timestamps.length,
+      requestCount: entries.length,
       gaps: gaps.length,
       buckets: [
         {
@@ -141,5 +157,6 @@ export function analyzeIdleGaps(
       },
     ],
     sessions,
+    coldRefreshTokens,
   };
 }

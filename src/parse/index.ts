@@ -6,6 +6,7 @@ export {
   decodeResponseBody,
   decodeResponseObjects,
   extractResultText,
+  extractResponseText,
   type ParsedTrace,
   type TraceEvent,
   type MessageStack,

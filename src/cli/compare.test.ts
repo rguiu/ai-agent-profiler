@@ -13,6 +13,8 @@ function makeDetail(id: string, requests: number): SessionDetail {
       first_seen_at: null,
       last_seen_at: null,
       meta: null,
+      title: null,
+      summary: null,
     },
     requests: Array.from({ length: requests }, (_, i) => ({
       id: `${id}-r${i}`,

@@ -896,10 +896,12 @@ describe("classifyRequestKind", () => {
     ).toBe("main");
   });
 
-  it("treats a normal interactive system prompt as main", () => {
+  it("returns unknown for system prompt without user text", () => {
+    // A system prompt alone is not enough — only a request whose last message
+    // has genuine user-intent text is classified as "main".
     expect(
       classifyRequestKind("You are an interactive agent that helps users."),
-    ).toBe("main");
+    ).toBe("unknown");
   });
 
   it("returns unknown when there is no system prompt or last message", () => {
@@ -958,12 +960,12 @@ describe("classifyRequestKind", () => {
     ).toBe("compact");
   });
 
-  it("treats an OpenCode main prompt as main", () => {
+  it("returns unknown when OpenCode main prompt has no user text", () => {
     expect(
       classifyRequestKind(
         "You are opencode, an interactive CLI tool that helps users.",
       ),
-    ).toBe("main");
+    ).toBe("unknown");
   });
 
   it("detects OpenAI-format system messages in the messages array (integration)", () => {
@@ -987,6 +989,175 @@ describe("classifyRequestKind", () => {
       { type: "end" },
     ];
     expect(parseTrace(events).context.kind).toBe("search");
+  });
+
+  it("classifies an Anthropic tool-result carrier as tool_result", () => {
+    const events: TraceEvent[] = [
+      { type: "request", headers: { "content-type": "application/json" } },
+      {
+        type: "request_body",
+        data: Buffer.from(
+          JSON.stringify({
+            system: [{ text: "You are Claude Code." }],
+            messages: [
+              { role: "user", content: "earlier user message" },
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "t1",
+                    name: "Bash",
+                    input: { command: "ls" },
+                  },
+                ],
+              },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "t1",
+                    content: "file1.txt\nfile2.txt",
+                  },
+                ],
+              },
+            ],
+          }),
+        ).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    expect(parseTrace(events).context.kind).toBe("tool_result");
+  });
+
+  it("classifies an OpenAI tool-role message as tool_result", () => {
+    const events: TraceEvent[] = [
+      { type: "request", headers: { "content-type": "application/json" } },
+      {
+        type: "request_body",
+        data: Buffer.from(
+          JSON.stringify({
+            messages: [
+              { role: "system", content: "You are a helpful assistant." },
+              { role: "user", content: "list files" },
+              {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    id: "call_1",
+                    type: "function",
+                    function: { name: "Bash", arguments: '{"command":"ls"}' },
+                  },
+                ],
+              },
+              {
+                role: "tool",
+                tool_call_id: "call_1",
+                content: "file1.txt\nfile2.txt",
+              },
+            ],
+          }),
+        ).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    expect(parseTrace(events).context.kind).toBe("tool_result");
+  });
+
+  it("keeps user message with text as main, not tool_result", () => {
+    const events: TraceEvent[] = [
+      { type: "request", headers: { "content-type": "application/json" } },
+      {
+        type: "request_body",
+        data: Buffer.from(
+          JSON.stringify({
+            system: [{ text: "You are Claude Code." }],
+            messages: [
+              { role: "user", content: "earlier" },
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "t1",
+                    name: "Read",
+                    input: { file_path: "foo.ts" },
+                  },
+                ],
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "tool_result", tool_use_id: "t1", content: "data" },
+                  { type: "text", text: "now fix this file" },
+                ],
+              },
+            ],
+          }),
+        ).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    expect(parseTrace(events).context.kind).toBe("main");
+  });
+
+  it("classifies an Anthropic tool-result carrier without system prompt", () => {
+    const events: TraceEvent[] = [
+      { type: "request", headers: { "content-type": "application/json" } },
+      {
+        type: "request_body",
+        data: Buffer.from(
+          JSON.stringify({
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  { type: "tool_use", id: "t1", name: "Bash", input: {} },
+                ],
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "tool_result", tool_use_id: "t1", content: "out" },
+                ],
+              },
+            ],
+          }),
+        ).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    expect(parseTrace(events).context.kind).toBe("tool_result");
+  });
+
+  it("classifies a tool-role message without system prompt as tool_result", () => {
+    const events: TraceEvent[] = [
+      { type: "request", headers: { "content-type": "application/json" } },
+      {
+        type: "request_body",
+        data: Buffer.from(
+          JSON.stringify({
+            messages: [
+              {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "c1",
+                    type: "function",
+                    function: { name: "Read", arguments: "{}" },
+                  },
+                ],
+              },
+              { role: "tool", tool_call_id: "c1", content: "data" },
+            ],
+          }),
+        ).toString("base64"),
+      },
+      { type: "end" },
+    ];
+    expect(parseTrace(events).context.kind).toBe("tool_result");
   });
 
   it("populates context.kind (recap) on a parsed trace", () => {

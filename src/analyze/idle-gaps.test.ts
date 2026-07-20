@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { analyzeIdleGaps } from "./idle-gaps.js";
 
-function ts(iso: string): { session_id: string; started_at: string } {
-  return { session_id: "s1", started_at: iso };
+function ts(
+  iso: string,
+  cc = 0,
+): { session_id: string; started_at: string; cache_creation_tokens: number } {
+  return { session_id: "s1", started_at: iso, cache_creation_tokens: cc };
 }
 
 describe("analyzeIdleGaps", () => {
@@ -74,12 +77,38 @@ describe("analyzeIdleGaps", () => {
 
   it("handles multiple sessions", () => {
     const result = analyzeIdleGaps([
-      { session_id: "s1", started_at: "2024-01-01T00:00:00Z" },
-      { session_id: "s1", started_at: "2024-01-01T00:03:00Z" },
-      { session_id: "s2", started_at: "2024-01-01T01:00:00Z" },
-      { session_id: "s2", started_at: "2024-01-01T02:00:00Z" },
+      {
+        session_id: "s1",
+        started_at: "2024-01-01T00:00:00Z",
+        cache_creation_tokens: 0,
+      },
+      {
+        session_id: "s1",
+        started_at: "2024-01-01T00:03:00Z",
+        cache_creation_tokens: 0,
+      },
+      {
+        session_id: "s2",
+        started_at: "2024-01-01T01:00:00Z",
+        cache_creation_tokens: 0,
+      },
+      {
+        session_id: "s2",
+        started_at: "2024-01-01T02:00:00Z",
+        cache_creation_tokens: 0,
+      },
     ]);
     expect(result.sessionsAnalyzed).toBe(2);
     expect(result.totalGaps).toBe(2);
+  });
+
+  it("accumulates cold-refresh cache write tokens for gaps >5min", () => {
+    const result = analyzeIdleGaps([
+      ts("2024-01-01T00:00:00Z", 100),
+      ts("2024-01-01T00:01:00Z", 0), // <5min gap, 0 tokens (warm cache)
+      ts("2024-01-01T00:10:00Z", 500), // >5min gap, 500 tokens written
+      ts("2024-01-01T00:11:00Z", 0), // <5min gap, 0 tokens
+    ]);
+    expect(result.coldRefreshTokens).toBe(500); // only the 3rd request had a cold gap
   });
 });

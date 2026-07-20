@@ -214,6 +214,43 @@ describe("Store", () => {
     });
   });
 
+  it("updateSessionTitle stores and returns a session title", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({ id: "s1", startedAt: "t" });
+    expect(store.updateSessionTitle("s1", "Refactor store tests")).toBe(true);
+    expect(store.updateSessionTitle("missing", "nope")).toBe(false);
+    const detail = store.getSession("s1");
+    store.close();
+    expect(detail?.session.title).toBe("Refactor store tests");
+  });
+
+  it("updateSessionSummary stores and returns a session summary", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({ id: "s1", startedAt: "t" });
+    expect(store.updateSessionSummary("s1", "User stepped away briefly.")).toBe(
+      true,
+    );
+    expect(store.updateSessionSummary("missing", "nope")).toBe(false);
+    const detail = store.getSession("s1");
+    store.close();
+    expect(detail?.session.summary).toBe("User stepped away briefly.");
+  });
+
+  it("listSessions includes title and summary when set", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertSession({ id: "s1", startedAt: "t" });
+    store.updateSessionTitle("s1", "Debug auth issue");
+    store.updateSessionSummary("s1", "Fixed OAuth token refresh.");
+    const sessions = store.listSessions();
+    store.close();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.title).toBe("Debug auth issue");
+    expect(sessions[0]?.summary).toBe("Fixed OAuth token refresh.");
+  });
+
   it("stores and reads back session metadata", () => {
     const dir = tmpDir();
     const store = openStore(dir);

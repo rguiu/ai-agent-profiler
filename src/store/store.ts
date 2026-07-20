@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at    TEXT,
   first_seen_at TEXT,
   last_seen_at  TEXT,
-  meta          TEXT
+  meta          TEXT,
+  title         TEXT,
+  summary       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS requests (
@@ -95,6 +97,7 @@ export interface RequestFinish {
 export interface ParseTarget {
   id: string;
   trace_file: string;
+  session_id: string;
 }
 
 // A parsed request ready for search indexing, joined with the session and
@@ -147,6 +150,8 @@ export interface SessionSummary {
   cost: number;
   tool_calls: number;
   meta: Record<string, string> | null;
+  title: string | null;
+  summary: string | null;
 }
 
 export interface SessionRow {
@@ -158,6 +163,8 @@ export interface SessionRow {
   first_seen_at: string | null;
   last_seen_at: string | null;
   meta: Record<string, string> | null;
+  title: string | null;
+  summary: string | null;
 }
 
 export interface SessionRequest {
@@ -245,6 +252,7 @@ export interface Stats {
   requests: number;
   input_tokens: number;
   cached_input_tokens: number;
+  cache_creation_tokens: number;
   output_tokens: number;
   cost: number;
 }
@@ -358,10 +366,10 @@ export class Store {
       WHERE id = @id
     `);
     this.allTargetsStmt = db.prepare(`
-      SELECT id, trace_file FROM requests WHERE trace_file IS NOT NULL
+      SELECT id, trace_file, session_id FROM requests WHERE trace_file IS NOT NULL
     `);
     this.pendingTargetsStmt = db.prepare(`
-      SELECT r.id, r.trace_file FROM requests r
+      SELECT r.id, r.trace_file, r.session_id FROM requests r
       LEFT JOIN metrics m ON m.request_id = r.id
       WHERE m.request_id IS NULL
         AND r.trace_file IS NOT NULL
@@ -434,7 +442,7 @@ export class Store {
       },
     );
     this.listSessionsStmt = db.prepare(`
-      SELECT s.id, s.client, s.cwd, s.repo, s.started_at, s.first_seen_at, s.last_seen_at, s.meta,
+      SELECT s.id, s.client, s.cwd, s.repo, s.started_at, s.first_seen_at, s.last_seen_at, s.meta, s.title, s.summary,
              COUNT(r.id) AS request_count,
              COALESCE(SUM(m.input_tokens), 0) + COALESCE(SUM(m.cached_input_tokens), 0) AS input_tokens,
              COALESCE(SUM(m.cached_input_tokens), 0) AS cached_input_tokens,
@@ -482,7 +490,8 @@ export class Store {
         COALESCE((SELECT SUM(input_tokens) FROM metrics), 0) + COALESCE((SELECT SUM(cached_input_tokens) FROM metrics), 0) AS input_tokens,
         COALESCE((SELECT SUM(cached_input_tokens) FROM metrics), 0) AS cached_input_tokens,
         COALESCE((SELECT SUM(output_tokens) FROM metrics), 0) AS output_tokens,
-        COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost
+        COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost,
+        COALESCE((SELECT SUM(cache_creation_input_tokens) FROM metrics), 0) AS cache_creation_tokens
     `);
     this.kindBreakdownStmt = db.prepare(`
       SELECT COALESCE(kind, 'unknown') AS kind,
@@ -675,6 +684,24 @@ export class Store {
     return true;
   }
 
+  updateSessionTitle(id: string, title: string): boolean {
+    const row = this.getSessionStmt.get(id) as { id: string } | undefined;
+    if (!row) return false;
+    this.db
+      .prepare("UPDATE sessions SET title = ? WHERE id = ?")
+      .run(title, id);
+    return true;
+  }
+
+  updateSessionSummary(id: string, summary: string): boolean {
+    const row = this.getSessionStmt.get(id) as { id: string } | undefined;
+    if (!row) return false;
+    this.db
+      .prepare("UPDATE sessions SET summary = ? WHERE id = ?")
+      .run(summary, id);
+    return true;
+  }
+
   sessionIdsByMeta(key: string, value: string): string[] {
     const rows = this.db
       .prepare(
@@ -723,15 +750,25 @@ export class Store {
     return this.sessionToolCallsStmt.all(sessionId) as SessionToolCall[];
   }
 
-  requestTimestamps(): Array<{ session_id: string; started_at: string }> {
+  requestTimestamps(): Array<{
+    session_id: string;
+    started_at: string;
+    cache_creation_tokens: number;
+  }> {
     return this.db
       .prepare(
-        `SELECT r.session_id, r.started_at
+        `SELECT r.session_id, r.started_at,
+                COALESCE(m.cache_creation_input_tokens, 0) AS cache_creation_tokens
          FROM requests r
+         LEFT JOIN metrics m ON m.request_id = r.id
          WHERE r.started_at IS NOT NULL AND r.keep_alive = 0
          ORDER BY r.session_id, r.started_at`,
       )
-      .all() as Array<{ session_id: string; started_at: string }>;
+      .all() as Array<{
+      session_id: string;
+      started_at: string;
+      cache_creation_tokens: number;
+    }>;
   }
 
   projects(): Array<{
@@ -912,6 +949,8 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "kind", "TEXT");
   ensureColumn(db, "requests", "keep_alive", "INTEGER");
   ensureColumn(db, "sessions", "meta", "TEXT");
+  ensureColumn(db, "sessions", "title", "TEXT");
+  ensureColumn(db, "sessions", "summary", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,
   // otherwise pre-existing databases fail before ensureColumn can run.
   db.exec(
