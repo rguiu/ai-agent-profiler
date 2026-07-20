@@ -236,6 +236,14 @@ async function dashboard() {
 
   const toolMax = Math.max(...tools.map((t) => t.count), 1);
 
+  const providerCosts = new Map();
+  for (const s of sessions) {
+    const p = s.client || "unknown";
+    providerCosts.set(p, (providerCosts.get(p) || 0) + (s.cost ?? 0));
+  }
+  const providersArr = [...providerCosts.entries()].sort((a, b) => b[1] - a[1]);
+  const maxProviderCost = Math.max(...providersArr.map(([, c]) => c), 1);
+
   app.innerHTML = `
     <h2>Dashboard</h2>
     <div class="cards">
@@ -274,6 +282,8 @@ async function dashboard() {
       <div>
         <h2>Cost by kind</h2>
         ${kindBreakdownTable(kinds)}
+        <h2>Cost by provider</h2>
+        ${providerBars(providersArr, maxProviderCost)}
       </div>
     </div>
     <div class="dashboard-subgrid">
@@ -362,6 +372,16 @@ function toolBars(items, scale) {
         ? ` · ~${num(t.result_tokens)} result tok`
         : "";
       return `<div class="bar-row"><span class="bar-label mono">${esc(t.name)}</span><span class="bar-track"><span class="bar-fill" style="width:${((t.count / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${num(t.count)}${amp}</span></div>`;
+    })
+    .join("")}</div>`;
+}
+
+function providerBars(items, maxCost) {
+  if (!items || !items.length) return "";
+  return `<div class="bars">${items
+    .map(([name, c]) => {
+      const pct = ((c / maxCost) * 100).toFixed(1);
+      return `<div class="bar-row"><span class="bar-label"><span class="provider-badge provider-${esc(name)}">${esc(name)}</span></span><span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span><span class="bar-val num">${cost(c)}</span></div>`;
     })
     .join("")}</div>`;
 }

@@ -1170,6 +1170,8 @@ tr.keepalive:hover td {
   font-family: var(--mono);
   text-transform: uppercase;
   letter-spacing: 0.3px;
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
 }
 .provider-opencode {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
