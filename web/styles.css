@@ -69,6 +69,19 @@ header button {
 header button:hover {
   border-color: var(--accent);
 }
+header nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 0.15s;
+}
+header nav a:hover {
+  color: var(--text);
+}
+header nav a.active {
+  color: var(--accent);
+}
 
 main {
   padding: 20px;

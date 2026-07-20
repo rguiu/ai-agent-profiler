@@ -1718,19 +1718,21 @@ async function searchView(hash) {
   if (!hasFilters) document.getElementById("search-q").focus();
 }
 
+let currentHash = "/";
+
 async function render() {
-  const hash = location.hash.slice(1) || "/";
+  currentHash = location.hash.slice(1) || "/";
   try {
-    if (hash === "/") return await dashboard();
-    if (hash === "/sessions") return await sessions();
-    if (hash === "/search" || hash.startsWith("/search?"))
-      return await searchView(hash);
-    const s = hash.match(/^\/sessions\/(.+)$/);
+    if (currentHash === "/") return await dashboard();
+    if (currentHash === "/sessions") return await sessions();
+    if (currentHash === "/search" || currentHash.startsWith("/search?"))
+      return await searchView(currentHash);
+    const s = currentHash.match(/^\/sessions\/(.+)$/);
     if (s) return await sessionDetail(decodeURIComponent(s[1]));
-    const q = hash.match(/^\/requests\/(.+)$/);
+    const q = currentHash.match(/^\/requests\/(.+)$/);
     if (q) return await requestDetail(decodeURIComponent(q[1]));
-    if (hash === "/introspections") return await introspections();
-    const i = hash.match(/^\/introspections\/(.+)$/);
+    if (currentHash === "/introspections") return await introspections();
+    const i = currentHash.match(/^\/introspections\/(.+)$/);
     if (i) return await introspectionDetail(decodeURIComponent(i[1]));
     app.innerHTML = `<p class="empty">Not found.</p>`;
   } catch (err) {
