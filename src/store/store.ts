@@ -750,15 +750,25 @@ export class Store {
     return this.sessionToolCallsStmt.all(sessionId) as SessionToolCall[];
   }
 
-  requestTimestamps(): Array<{ session_id: string; started_at: string }> {
+  requestTimestamps(): Array<{
+    session_id: string;
+    started_at: string;
+    cache_creation_tokens: number;
+  }> {
     return this.db
       .prepare(
-        `SELECT r.session_id, r.started_at
+        `SELECT r.session_id, r.started_at,
+                COALESCE(m.cache_creation_input_tokens, 0) AS cache_creation_tokens
          FROM requests r
+         LEFT JOIN metrics m ON m.request_id = r.id
          WHERE r.started_at IS NOT NULL AND r.keep_alive = 0
          ORDER BY r.session_id, r.started_at`,
       )
-      .all() as Array<{ session_id: string; started_at: string }>;
+      .all() as Array<{
+      session_id: string;
+      started_at: string;
+      cache_creation_tokens: number;
+    }>;
   }
 
   projects(): Array<{
