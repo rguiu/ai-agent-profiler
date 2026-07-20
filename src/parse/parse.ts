@@ -44,6 +44,7 @@ export type RequestKind =
   | "compact"
   | "recap"
   | "quota"
+  | "tool_result"
   | "unknown";
 
 export interface ParsedContext {
@@ -830,7 +831,35 @@ function parseRequestBody(events: TraceEvent[]): {
   // any role:"system" messages from the array (OpenAI/DeepSeek). Using the last
   // message ONLY (not the whole transcript) avoids false positives from prior
   // summaries echoed back into context.
-  const kind = classifyRequestKind(systemText, userText);
+  let kind = classifyRequestKind(systemText, userText);
+  // Detect tool-result carriers: the last message delivers tool output back
+  // to the model without any new user-intent text. OpenAI/DeepSeek use
+  // role:"tool"; Anthropic uses role:"user" with only tool_result blocks.
+  if (kind === "unknown" && lastMessage) {
+    const role = asString(lastMessage.role);
+    if (role === "tool") {
+      kind = "tool_result";
+    } else if (role === "user") {
+      const blocks = asArray(lastMessage.content);
+      if (blocks.length > 0) {
+        let onlyToolResults = true;
+        for (const block of blocks) {
+          const b = asRecord(block);
+          if (!b) continue;
+          const t = asString(b.type);
+          if (
+            t !== "tool_result" &&
+            t !== "toolResult" &&
+            !asRecord(b.toolResult)
+          ) {
+            onlyToolResults = false;
+            break;
+          }
+        }
+        if (onlyToolResults) kind = "tool_result";
+      }
+    }
+  }
 
   // Tools: Anthropic uses record.tools, Bedrock uses record.toolConfig.tools
   let tools = asArray(record.tools);

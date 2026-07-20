@@ -226,7 +226,7 @@ async function dashboard() {
     <h2>Shell commands</h2>
     ${commandsTable(commands)}
     <h2>Recent sessions</h2>
-    ${sessionsTable(sessions.slice(0, 15))}
+    ${sessionsRows(sessions.slice(0, 15))}
   `;
 }
 
@@ -353,53 +353,202 @@ function growthChart(points) {
   </div>`;
 }
 
-function sessionsTable(sessions) {
+function cacheBadge(s) {
+  if (!s.input_tokens) return "";
+  const rate = Math.round((s.cached_input_tokens / s.input_tokens) * 100);
+  if (rate === 0) return "";
+  const cls =
+    rate >= 80 ? "cache-high" : rate >= 40 ? "cache-mid" : "cache-low";
+  return `<span class="cache-badge ${cls}">${rate}% cached</span>`;
+}
+
+function sessionsRows(sessions) {
   if (!sessions.length) return `<p class="empty">No sessions captured yet.</p>`;
-  return `<table>
-    <thead><tr>
-      <th>Session</th><th>Node</th><th>cwd</th>
-      <th class="num">Reqs</th><th class="num">In (total)</th><th class="num">Out</th>
-      <th class="num">Tools</th><th class="num">Cost</th><th>Last seen</th>
-      <th></th>
-    </tr></thead>
-    <tbody>
-    ${sessions
-      .map((s) => {
-        const cacheHint =
-          s.cached_input_tokens > 0 && s.input_tokens > 0
-            ? ` <span class="muted">(${Math.round((s.cached_input_tokens / s.input_tokens) * 100)}% cached)</span>`
-            : "";
-        return `<tr>
-      <td><a class="mono" href="#/sessions/${encodeURIComponent(s.id)}">${shortId(s.id)}</a></td>
-      <td>${esc((s.meta && s.meta.armada_node) || s.client) || "<span class='muted'>—</span>"}</td>
-      <td class="mono muted">${esc(s.cwd) || "—"}</td>
-      <td class="num">${num(s.request_count)}</td>
-      <td class="num">${num(s.input_tokens)}${cacheHint}</td>
-      <td class="num">${num(s.output_tokens)}</td>
-      <td class="num">${num(s.tool_calls)}</td>
-      <td class="num">${cost(s.cost)}</td>
-      <td class="mono muted">${esc((s.last_seen_at || "").replace("T", " ").slice(0, 19))}</td>
-      <td>${deleteBtn(`/sessions/${encodeURIComponent(s.id)}`, `session ${shortId(s.id)}`, true)}</td>
-    </tr>`;
-      })
-      .join("")}
-    </tbody></table>`;
+  return sessions
+    .map((s) => {
+      const title = s.title
+        ? `<a class="session-title" href="#/sessions/${encodeURIComponent(s.id)}">${esc(s.title)}</a>`
+        : `<a class="session-title mono" href="#/sessions/${encodeURIComponent(s.id)}">${shortId(s.id)}</a>`;
+      const summary = s.summary
+        ? `<div class="session-summary muted">${esc(s.summary.slice(0, 140))}${s.summary.length > 140 ? "…" : ""}</div>`
+        : "";
+      const meta = [
+        s.cwd ? `<span class="mono muted">${esc(s.cwd)}</span>` : "",
+        s.last_seen_at
+          ? `<span class="muted">${esc(s.last_seen_at.replace("T", " ").slice(0, 16))}</span>`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const duration = formatDuration(s.first_seen_at, s.last_seen_at);
+      const badge = cacheBadge(s);
+      return `<div class="session-row" onclick="location.href='#/sessions/${encodeURIComponent(s.id)}'">
+        <div class="session-info">
+          ${title}
+          ${summary}
+          <div class="session-meta">${meta || '<span class="muted">—</span>'}</div>
+        </div>
+        <div class="session-stats">
+          <span class="stat">${num(s.request_count)} reqs</span>
+          ${badge}
+          <span class="stat num">${cost(s.cost)}</span>
+          <span class="stat muted">${duration}</span>
+        </div>
+        <div class="session-delete">${deleteBtn(`/sessions/${encodeURIComponent(s.id)}`, `session ${shortId(s.id)}`, true)}</div>
+      </div>`;
+    })
+    .join("");
 }
 
 async function sessions() {
   const list = await api("/sessions");
+  const filters = {
+    provider: "",
+    cwd: "",
+    minReqs: 0,
+    minCached: 0,
+    sort: "newest",
+  };
   let currentPage = 0;
   const PAGE = 25;
-  const totalPages = Math.ceil(list.length / PAGE);
+
+  const providers = [
+    ...new Set(list.map((s) => s.client).filter(Boolean)),
+  ].sort();
+
+  const cwdCounts = new Map();
+  for (const s of list) {
+    const cwd = s.cwd || "(none)";
+    cwdCounts.set(cwd, (cwdCounts.get(cwd) || 0) + 1);
+  }
+  const cwds = [...cwdCounts.entries()].sort((a, b) => b[1] - a[1]);
+
+  function apply() {
+    let filtered = [...list];
+    if (filters.provider)
+      filtered = filtered.filter((s) => s.client === filters.provider);
+    if (filters.cwd)
+      filtered = filtered.filter((s) =>
+        (s.cwd || "").toLowerCase().includes(filters.cwd.toLowerCase()),
+      );
+    if (filters.minReqs > 0)
+      filtered = filtered.filter((s) => s.request_count >= filters.minReqs);
+    if (filters.minCached > 0)
+      filtered = filtered.filter((s) => {
+        if (!s.input_tokens) return false;
+        return (
+          (s.cached_input_tokens / s.input_tokens) * 100 >= filters.minCached
+        );
+      });
+    switch (filters.sort) {
+      case "oldest":
+        filtered.sort(
+          (a, b) =>
+            new Date(a.last_seen_at || 0) - new Date(b.last_seen_at || 0),
+        );
+        break;
+      case "most-reqs":
+        filtered.sort((a, b) => b.request_count - a.request_count);
+        break;
+      case "highest-cost":
+        filtered.sort((a, b) => b.cost - a.cost);
+        break;
+      case "highest-cache":
+        filtered.sort((a, b) => {
+          const ar =
+            a.input_tokens > 0 ? a.cached_input_tokens / a.input_tokens : 0;
+          const br =
+            b.input_tokens > 0 ? b.cached_input_tokens / b.input_tokens : 0;
+          return br - ar;
+        });
+        break;
+      default:
+        filtered.sort(
+          (a, b) =>
+            new Date(b.last_seen_at || 0) - new Date(a.last_seen_at || 0),
+        );
+    }
+    return filtered;
+  }
 
   function renderPage() {
+    const filtered = apply();
+    const totalPages = Math.ceil(filtered.length / PAGE);
+    currentPage = Math.min(currentPage, Math.max(0, totalPages - 1));
     const start = currentPage * PAGE;
-    const pageItems = list.slice(start, start + PAGE);
+    const pageItems = filtered.slice(start, start + PAGE);
     const pagination =
       totalPages > 1
         ? `<div class="pagination" data-target="sessions-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === currentPage ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
         : "";
-    app.innerHTML = `<h2>Sessions (${list.length})</h2>${pagination}${sessionsTable(pageItems)}${pagination}`;
+
+    const changed =
+      filtered.length !== list.length
+        ? ` <span class="muted">(${filtered.length} shown / ${list.length} total)</span>`
+        : "";
+
+    app.innerHTML = `
+    <h2>Sessions (${num(list.length)})${changed}</h2>
+    <div class="filter-bar">
+      <select id="filter-provider">
+        <option value="">All providers</option>
+        ${providers.map((p) => `<option value="${esc(p)}"${filters.provider === p ? " selected" : ""}>${esc(p)}</option>`).join("")}
+      </select>
+      <select id="filter-cwd">
+        <option value="">All directories</option>
+        ${cwds.map(([cwd, count]) => `<option value="${esc(cwd)}"${filters.cwd === cwd ? " selected" : ""}>${esc(cwd)} (${count})</option>`).join("")}
+      </select>
+      <input type="number" id="filter-minreqs" placeholder="Min reqs" value="${filters.minReqs || ""}" min="0" style="width:90px">
+      <input type="number" id="filter-mincache" placeholder="Min cache %" value="${filters.minCached || ""}" min="0" max="100" style="width:100px">
+      <select id="filter-sort">
+        <option value="newest" ${filters.sort === "newest" ? "selected" : ""}>Newest</option>
+        <option value="oldest" ${filters.sort === "oldest" ? "selected" : ""}>Oldest</option>
+        <option value="most-reqs" ${filters.sort === "most-reqs" ? "selected" : ""}>Most reqs</option>
+        <option value="highest-cost" ${filters.sort === "highest-cost" ? "selected" : ""}>Highest cost</option>
+        <option value="highest-cache" ${filters.sort === "highest-cache" ? "selected" : ""}>Best cache</option>
+      </select>
+      <button id="filter-reset" class="btn">Reset</button>
+    </div>
+    ${pagination}
+    ${sessionsRows(pageItems)}
+    ${pagination}`;
+
+    document.getElementById("filter-cwd").addEventListener("change", (e) => {
+      filters.cwd = e.target.value;
+      currentPage = 0;
+      renderPage();
+    });
+    document.getElementById("filter-cwd").addEventListener("input", (e) => {
+      filters.cwd = e.target.value;
+      currentPage = 0;
+      renderPage();
+    });
+    document.getElementById("filter-minreqs").addEventListener("input", (e) => {
+      filters.minReqs = Number(e.target.value) || 0;
+      currentPage = 0;
+      renderPage();
+    });
+    document
+      .getElementById("filter-mincache")
+      .addEventListener("input", (e) => {
+        filters.minCached = Number(e.target.value) || 0;
+        currentPage = 0;
+        renderPage();
+      });
+    document.getElementById("filter-sort").addEventListener("change", (e) => {
+      filters.sort = e.target.value;
+      currentPage = 0;
+      renderPage();
+    });
+    document.getElementById("filter-reset").addEventListener("click", () => {
+      filters.provider = "";
+      filters.cwd = "";
+      filters.minReqs = 0;
+      filters.minCached = 0;
+      filters.sort = "newest";
+      currentPage = 0;
+      renderPage();
+    });
     document
       .querySelectorAll(".pagination[data-target='sessions-page'] .page-btn")
       .forEach((btn) => {
