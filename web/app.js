@@ -47,6 +47,7 @@ const KIND_LABELS = {
   compact: "compact",
   recap: "recap",
   quota: "quota",
+  tool_result: "tool msg",
   unknown: "?",
 };
 const kindBadge = (kind) => {
@@ -430,8 +431,9 @@ function detailPanelHtml(r, stack) {
       : [];
   const lastUserMsg =
     userMsgs.length > 0 ? userMsgs[userMsgs.length - 1] : null;
+  const showPrompt = r.kind === "main";
   const userPromptHtml =
-    lastUserMsg && lastUserMsg.preview
+    showPrompt && lastUserMsg && lastUserMsg.preview
       ? `<h3>Prompt${userMsgs.length > 1 ? ` (user msg #${lastUserMsg.index + 1} of ${stack.messageCount} total)` : ""}</h3><blockquote class="user-prompt"><pre>${esc(lastUserMsg.preview)}</pre></blockquote>`
       : "";
 
@@ -469,15 +471,59 @@ function detailPanelHtml(r, stack) {
     (r.cached_input_tokens ?? 0) +
     (r.cache_creation_input_tokens ?? 0);
 
+  const kind = r.kind || "unknown";
+
+  const toolResultMsgs =
+    stack && stack.messages
+      ? stack.messages.filter((m) => m.toolResultFor || m.role === "tool")
+      : [];
+  const toolResultDeliveries =
+    toolResultMsgs.length > 0
+      ? `<details class="delivered-results">
+      <summary>Delivered results (${toolResultMsgs.length} tool output${toolResultMsgs.length !== 1 ? "s" : ""})</summary>
+      <div class="msg-list">${toolResultMsgs
+        .map((m) => {
+          const toolName = m.toolCallNames?.[0] || m.toolResultFor || "";
+          return `<details class="msg"><summary><span class="pill role-tool">${esc(toolName || "tool")}</span> <span class="num mono">~${num(m.tokens)} tok</span></summary><div class="mono msg-body">${esc(m.preview) || '<span class="muted">(empty)</span>'}</div></details>`;
+        })
+        .join("")}</div>
+      </details>`
+      : "";
+
+  const showContextSection = stack && stack.messageCount;
+  const contextHtml =
+    showContextSection && kind === "main"
+      ? `<h3>Context sent (${stack.messageCount} messages)</h3>${messageStackHtml(stack)}`
+      : showContextSection
+        ? `<details>
+    <summary>Context sent (${stack.messageCount} messages)</summary>
+    ${messageStackHtml(stack)}
+  </details>`
+        : "";
+
+  const toolsHtml =
+    toolCalls.length > 0
+      ? `<h3>Tools (${toolCalls.length})</h3>${toolCallsHtml(toolCalls)}`
+      : "";
+
+  const responseLabel =
+    kind === "recap"
+      ? "Recap"
+      : kind === "compact"
+        ? "Compacted summary"
+        : kind === "title"
+          ? "Session title"
+          : "Response";
   const responsePreview =
     responseText.length > 0
       ? responseText.length > 10000
-        ? `<details><summary>Response (${fmtBytes(responseText.length)})</summary><pre>${esc(responseText)}</pre></details>`
-        : `<h3>Response</h3><pre>${esc(responseText)}</pre>`
+        ? `<details><summary>${esc(responseLabel)} (${fmtBytes(responseText.length)})</summary><pre>${esc(responseText)}</pre></details>`
+        : `<h3>${esc(responseLabel)}</h3><pre>${esc(responseText)}</pre>`
       : "";
 
   return `
     ${userPromptHtml}
+    ${toolResultDeliveries}
     <div class="kv">
       <div class="k">${kindBadge(r.kind)}</div><div class="v">${esc(r.model) || "—"}</div>
       <div class="k">provider</div><div class="v">${esc(r.provider)}</div>
@@ -489,9 +535,8 @@ function detailPanelHtml(r, stack) {
       <div class="k">tokens (out)</div><div class="v">${r.output_tokens != null ? num(r.output_tokens) : "—"}</div>
       <div class="k">cost</div><div class="v">${cost(r.cost)}</div>
     </div>
-    <h3>Tools (${toolCalls.length})</h3>
-    ${toolCallsHtml(toolCalls)}
-    ${stack && stack.messageCount ? `<h3>Context sent (${stack.messageCount} messages)</h3>${messageStackHtml(stack)}` : ""}
+    ${toolsHtml}
+    ${contextHtml}
     ${responsePreview}
     ${eventsHtml}`;
 }
@@ -628,6 +673,7 @@ function costByKind(requests) {
   if (!requests || !requests.length) return `<p class="empty">No requests.</p>`;
   const order = [
     "main",
+    "tool_result",
     "search",
     "subagent",
     "guide",
