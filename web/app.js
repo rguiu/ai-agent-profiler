@@ -197,6 +197,11 @@ async function dashboard() {
     stats.input_tokens > 0
       ? Math.round((stats.cached_input_tokens / stats.input_tokens) * 100)
       : 0;
+  const cacheWriteTokens = stats.cache_creation_tokens || 0;
+  const cacheWriteCost =
+    stats.input_tokens > 0
+      ? (cacheWriteTokens / stats.input_tokens) * stats.cost
+      : 0;
   const avgIn =
     stats.requests > 0 ? Math.round(stats.input_tokens / stats.requests) : 0;
   const avgCost = stats.sessions > 0 ? stats.cost / stats.sessions : 0;
@@ -204,6 +209,12 @@ async function dashboard() {
     ["Sessions", num(stats.sessions)],
     ["Requests", num(stats.requests)],
     ["Cache hit", `${cacheRate}%`],
+    [
+      "Cache writes",
+      cacheWriteTokens > 0
+        ? `~${num(cacheWriteTokens)} tok · ${cost(cacheWriteCost)}`
+        : "none",
+    ],
     ["Input tokens", `${num(stats.input_tokens)} · ~${num(avgIn)}/req`],
     ["Output tokens", num(stats.output_tokens)],
     ["Est. cost", `${cost(stats.cost)} · ${cost(avgCost)}/session`],
@@ -278,6 +289,7 @@ async function dashboard() {
         </div>
         <h2>Cache idle gaps</h2>
         ${idleGapsHtml(idleGaps)}
+        ${cacheWriteTokens > 0 ? `<p class="muted">~${cost(cacheWriteCost)} cache write cost total. Reducing gaps &gt;5 min (${idleGaps?.globalBuckets?.find((b) => b.bucket === "5m-1h")?.percent || 0}% of gaps + ${idleGaps?.globalBuckets?.find((b) => b.bucket === ">1h")?.percent || 0}% of gaps &gt;1h) would lower cold-refresh bills.</p>` : ""}
       </div>
       <div>
         <h2>Cost by kind</h2>

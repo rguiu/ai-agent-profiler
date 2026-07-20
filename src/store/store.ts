@@ -252,6 +252,7 @@ export interface Stats {
   requests: number;
   input_tokens: number;
   cached_input_tokens: number;
+  cache_creation_tokens: number;
   output_tokens: number;
   cost: number;
 }
@@ -489,7 +490,8 @@ export class Store {
         COALESCE((SELECT SUM(input_tokens) FROM metrics), 0) + COALESCE((SELECT SUM(cached_input_tokens) FROM metrics), 0) AS input_tokens,
         COALESCE((SELECT SUM(cached_input_tokens) FROM metrics), 0) AS cached_input_tokens,
         COALESCE((SELECT SUM(output_tokens) FROM metrics), 0) AS output_tokens,
-        COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost
+        COALESCE((SELECT SUM(cost) FROM metrics), 0) AS cost,
+        COALESCE((SELECT SUM(cache_creation_input_tokens) FROM metrics), 0) AS cache_creation_tokens
     `);
     this.kindBreakdownStmt = db.prepare(`
       SELECT COALESCE(kind, 'unknown') AS kind,
