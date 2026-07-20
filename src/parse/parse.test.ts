@@ -896,10 +896,12 @@ describe("classifyRequestKind", () => {
     ).toBe("main");
   });
 
-  it("treats a normal interactive system prompt as main", () => {
+  it("returns unknown for system prompt without user text", () => {
+    // A system prompt alone is not enough — only a request whose last message
+    // has genuine user-intent text is classified as "main".
     expect(
       classifyRequestKind("You are an interactive agent that helps users."),
-    ).toBe("main");
+    ).toBe("unknown");
   });
 
   it("returns unknown when there is no system prompt or last message", () => {
@@ -958,12 +960,12 @@ describe("classifyRequestKind", () => {
     ).toBe("compact");
   });
 
-  it("treats an OpenCode main prompt as main", () => {
+  it("returns unknown when OpenCode main prompt has no user text", () => {
     expect(
       classifyRequestKind(
         "You are opencode, an interactive CLI tool that helps users.",
       ),
-    ).toBe("main");
+    ).toBe("unknown");
   });
 
   it("detects OpenAI-format system messages in the messages array (integration)", () => {
