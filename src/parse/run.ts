@@ -3,6 +3,7 @@ import type { Config } from "../config/index.js";
 import type { Store } from "../store/index.js";
 import {
   computeCost,
+  extractResponseText,
   parseTrace,
   type ParsedToolResult,
   type TraceEvent,
@@ -57,6 +58,17 @@ export async function runParse(
       });
       store.replaceToolCalls(target.id, result.toolCalls);
       for (const toolResult of result.toolResults) toolResults.push(toolResult);
+
+      if (target.session_id && result.context.kind === "title") {
+        const responseText = extractResponseText(events);
+        if (responseText)
+          store.updateSessionTitle(target.session_id, responseText);
+      } else if (target.session_id && result.context.kind === "recap") {
+        const responseText = extractResponseText(events);
+        if (responseText)
+          store.updateSessionSummary(target.session_id, responseText);
+      }
+
       parsed++;
     } catch (err) {
       failed++;

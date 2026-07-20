@@ -373,6 +373,9 @@ function sessionsRows(sessions) {
         ? `<div class="session-summary muted">${esc(s.summary.slice(0, 140))}${s.summary.length > 140 ? "…" : ""}</div>`
         : "";
       const meta = [
+        s.client
+          ? `<span class="provider-badge provider-${esc(s.client)}">${esc(s.client)}</span>`
+          : "",
         s.cwd ? `<span class="mono muted">${esc(s.cwd)}</span>` : "",
         s.last_seen_at
           ? `<span class="muted">${esc(s.last_seen_at.replace("T", " ").slice(0, 16))}</span>`
@@ -412,34 +415,43 @@ async function sessions() {
   let currentPage = 0;
   const PAGE = 25;
 
-  const providers = [
-    ...new Set(list.map((s) => s.client).filter(Boolean)),
-  ].sort();
-
-  const cwdCounts = new Map();
-  for (const s of list) {
-    const cwd = s.cwd || "(none)";
-    cwdCounts.set(cwd, (cwdCounts.get(cwd) || 0) + 1);
-  }
-  const cwds = [...cwdCounts.entries()].sort((a, b) => b[1] - a[1]);
-
-  function apply() {
+  function applyExcept(except) {
     let filtered = [...list];
-    if (filters.provider)
+    if (except !== "provider" && filters.provider)
       filtered = filtered.filter((s) => s.client === filters.provider);
-    if (filters.cwd)
-      filtered = filtered.filter((s) =>
-        (s.cwd || "").toLowerCase().includes(filters.cwd.toLowerCase()),
-      );
-    if (filters.minReqs > 0)
+    if (except !== "cwd" && filters.cwd)
+      filtered = filtered.filter((s) => (s.cwd || "(none)") === filters.cwd);
+    if (except !== "minReqs" && filters.minReqs > 0)
       filtered = filtered.filter((s) => s.request_count >= filters.minReqs);
-    if (filters.minCached > 0)
+    if (except !== "minCached" && filters.minCached > 0)
       filtered = filtered.filter((s) => {
         if (!s.input_tokens) return false;
         return (
           (s.cached_input_tokens / s.input_tokens) * 100 >= filters.minCached
         );
       });
+    return filtered;
+  }
+
+  function sortedProviders(base) {
+    const counts = new Map();
+    for (const s of base) {
+      if (s.client) counts.set(s.client, (counts.get(s.client) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }
+
+  function sortedCwds(base) {
+    const counts = new Map();
+    for (const s of base) {
+      const cwd = s.cwd || "(none)";
+      counts.set(cwd, (counts.get(cwd) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }
+
+  function apply() {
+    const filtered = applyExcept(null);
     switch (filters.sort) {
       case "oldest":
         filtered.sort(
@@ -473,6 +485,8 @@ async function sessions() {
 
   function renderPage() {
     const filtered = apply();
+    const providers = sortedProviders(applyExcept("provider"));
+    const cwds = sortedCwds(applyExcept("cwd"));
     const totalPages = Math.ceil(filtered.length / PAGE);
     currentPage = Math.min(currentPage, Math.max(0, totalPages - 1));
     const start = currentPage * PAGE;
@@ -492,7 +506,7 @@ async function sessions() {
     <div class="filter-bar">
       <select id="filter-provider">
         <option value="">All providers</option>
-        ${providers.map((p) => `<option value="${esc(p)}"${filters.provider === p ? " selected" : ""}>${esc(p)}</option>`).join("")}
+        ${providers.map(([p, count]) => `<option value="${esc(p)}"${filters.provider === p ? " selected" : ""}>${esc(p)} (${count})</option>`).join("")}
       </select>
       <select id="filter-cwd">
         <option value="">All directories</option>
@@ -513,12 +527,14 @@ async function sessions() {
     ${sessionsRows(pageItems)}
     ${pagination}`;
 
+    document
+      .getElementById("filter-provider")
+      .addEventListener("change", (e) => {
+        filters.provider = e.target.value;
+        currentPage = 0;
+        renderPage();
+      });
     document.getElementById("filter-cwd").addEventListener("change", (e) => {
-      filters.cwd = e.target.value;
-      currentPage = 0;
-      renderPage();
-    });
-    document.getElementById("filter-cwd").addEventListener("input", (e) => {
       filters.cwd = e.target.value;
       currentPage = 0;
       renderPage();
@@ -638,34 +654,35 @@ function conversationHtml(requests, tcByRequest, chains, regen, selectedId) {
   </div>`;
   }
 
-  // Group consecutive tool_result requests so they render as a single
-  // collapsed summary row unless expanded.
+  // Group consecutive tool_result and search requests so they render as a
+  // single collapsed summary row unless expanded.
+  const groupKinds = new Set(["tool_result", "search"]);
   const groups = [];
   for (let i = 0; i < requests.length; i++) {
     const r = requests[i];
     const kind = r.kind || "unknown";
-    if (kind !== "tool_result") {
+    if (!groupKinds.has(kind)) {
       groups.push({ kind: "single", items: [r] });
       continue;
     }
     const group = [];
-    while (
-      i < requests.length &&
-      (requests[i].kind || "unknown") === "tool_result"
-    ) {
+    while (i < requests.length && (requests[i].kind || "unknown") === kind) {
       group.push(requests[i]);
       i++;
     }
     i--;
-    groups.push({ kind: "tool_group", items: group });
+    groups.push({ kind: "group", groupKind: kind, items: group });
   }
 
-  return `<div class="conv-tree">${groups
+  const hasGroups = groups.some((g) => g.kind === "group");
+
+  return `<div class="conv-tree">${hasGroups ? `<div class="conv-tree-actions"><button class="btn btn-sm" onclick="document.querySelectorAll('.conv-group').forEach(g => g.open = true)">Expand all</button> <button class="btn btn-sm" onclick="document.querySelectorAll('.conv-group').forEach(g => g.open = false)">Collapse all</button></div>` : ""}${groups
     .map((g) => {
       if (g.kind === "single") {
         return renderRow(g.items[0]);
       }
       const items = g.items;
+      const kind = g.groupKind;
       const first = items[0];
       const last = items[items.length - 1];
       const aggCost = items.reduce((s, r) => s + (r.cost ?? 0), 0);
@@ -688,7 +705,7 @@ function conversationHtml(requests, tcByRequest, chains, regen, selectedId) {
       }>
     <summary class="conv-group-summary">
       <span class="conv-seq">#${requests.indexOf(first) + 1}-${requests.indexOf(last) + 1}</span>
-      ${kindBadge("tool_result")}
+      ${kindBadge(kind)}
       <span class="muted">${items.length} requests</span>
       <span class="conv-model mono">${esc(first.model) || "?"}</span>
       <span class="conv-tokens">${num(aggInput)} in → ${num(aggOutput)} out</span>
@@ -713,6 +730,10 @@ function detailPanelHtml(r, stack) {
   const lastUserMsg =
     userMsgs.length > 0 ? userMsgs[userMsgs.length - 1] : null;
   const showPrompt = r.kind === "main";
+  const searchTaskHtml =
+    r.kind === "search" && userMsgs.length > 0
+      ? `<h3>Search task</h3><blockquote class="user-prompt"><pre>${esc(userMsgs[0].preview)}</pre></blockquote>`
+      : "";
   const userPromptHtml =
     showPrompt && lastUserMsg && lastUserMsg.preview
       ? `<h3>Prompt${userMsgs.length > 1 ? ` (user msg #${lastUserMsg.index + 1} of ${stack.messageCount} total)` : ""}</h3><blockquote class="user-prompt"><pre>${esc(lastUserMsg.preview)}</pre></blockquote>`
@@ -794,7 +815,9 @@ function detailPanelHtml(r, stack) {
         ? "Compacted summary"
         : kind === "title"
           ? "Session title"
-          : "Response";
+          : kind === "search"
+            ? "Search results"
+            : "Response";
   const responsePreview =
     responseText.length > 0
       ? responseText.length > 10000
@@ -805,8 +828,47 @@ function detailPanelHtml(r, stack) {
   const isSummaryKind =
     kind === "recap" || kind === "compact" || kind === "title";
 
+  // Search kind: extract grep/glob/read patterns from tool calls
+  let searchSummaryHtml = "";
+  if (kind === "search" && toolCalls.length > 0) {
+    const grepPatterns = [];
+    const globPatterns = [];
+    const readFiles = [];
+    for (const tc of toolCalls) {
+      const name = tc.name || "";
+      let args = {};
+      try {
+        if (tc.arguments) args = JSON.parse(tc.arguments);
+      } catch {
+        /* ignore */
+      }
+      if (/grep|Grep|rg|search/i.test(name) && args.pattern)
+        grepPatterns.push(args.pattern);
+      else if (/glob|Glob/i.test(name) && args.pattern)
+        globPatterns.push(args.pattern);
+      else if (/read|Read|view/i.test(name) && args.file_path)
+        readFiles.push(args.file_path);
+    }
+    const parts = [];
+    if (grepPatterns.length)
+      parts.push(
+        `<span class="muted">grep:</span> ${grepPatterns.map((p) => `<code>${esc(p)}</code>`).join(", ")}`,
+      );
+    if (globPatterns.length)
+      parts.push(
+        `<span class="muted">glob:</span> ${globPatterns.map((p) => `<code>${esc(p)}</code>`).join(", ")}`,
+      );
+    if (readFiles.length)
+      parts.push(
+        `<span class="muted">files:</span> ${readFiles.map((f) => `<code>${esc(f.slice(-40))}</code>`).join(", ")}`,
+      );
+    if (parts.length)
+      searchSummaryHtml = `<div class="search-summary">${parts.join(" · ")}</div>`;
+  }
+
   return `
     ${userPromptHtml}
+    ${searchTaskHtml}
     ${toolResultDeliveries}
     ${isSummaryKind ? responsePreview : ""}
     <div class="kv">
@@ -820,6 +882,7 @@ function detailPanelHtml(r, stack) {
       <div class="k">tokens (out)</div><div class="v">${r.output_tokens != null ? num(r.output_tokens) : "—"}</div>
       <div class="k">cost</div><div class="v">${cost(r.cost)}</div>
     </div>
+    ${searchSummaryHtml}
     ${toolsHtml}
     ${contextHtml}
     ${isSummaryKind ? "" : responsePreview}

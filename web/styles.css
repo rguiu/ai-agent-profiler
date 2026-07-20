@@ -650,6 +650,26 @@ tr.keepalive:hover td {
   opacity: 1;
 }
 
+.conv-tree-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.btn-sm {
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn-sm:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 /* Split layout for session detail */
 
 .split-layout {
@@ -968,6 +988,22 @@ tr.keepalive:hover td {
   color: var(--text);
 }
 
+.search-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.search-summary code {
+  font-size: 12px;
+  color: var(--accent);
+}
+
 /* Session summary callout */
 .session-summary {
   margin: 0 0 20px;
@@ -1123,6 +1159,33 @@ tr.keepalive:hover td {
 .cache-badge.cache-low {
   background: color-mix(in srgb, var(--bad) 12%, transparent);
   color: var(--bad);
+}
+
+.provider-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.provider-opencode {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.provider-claude {
+  background: color-mix(in srgb, #d4a574 18%, transparent);
+  color: #d4a574;
+}
+.provider-stackpilot {
+  background: color-mix(in srgb, #c084fc 18%, transparent);
+  color: #c084fc;
+}
+.provider-npx {
+  background: color-mix(in srgb, var(--good) 18%, transparent);
+  color: var(--good);
 }
 .session-delete {
   flex-shrink: 0;

@@ -16,6 +16,8 @@ function detail(
       first_seen_at: null,
       last_seen_at: null,
       meta: null,
+      title: null,
+      summary: null,
     },
     requests,
     analysis: {
