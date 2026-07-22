@@ -876,6 +876,26 @@ describe("classifyRequestKind", () => {
     ).toBe("recap");
   });
 
+  it("detects a background-task notification from the last message", () => {
+    expect(
+      classifyRequestKind(
+        "You are an interactive agent.",
+        "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.",
+      ),
+    ).toBe("notification");
+  });
+
+  it("classifies a notification banner ahead of a plain main turn", () => {
+    // The banner carries real user-role text, so without the rule it would be
+    // counted as a user-driven "main" turn and inflate the user turn count.
+    expect(
+      classifyRequestKind(
+        "You are an interactive agent that helps users.",
+        "[SYSTEM NOTIFICATION - NOT USER INPUT] background task 'build' finished.",
+      ),
+    ).toBe("notification");
+  });
+
   it("detects compaction from the last message", () => {
     expect(
       classifyRequestKind(

@@ -1,4 +1,5 @@
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
+import { redactSecrets } from "../capture/redact.js";
 
 export interface TraceEvent {
   type: string;
@@ -34,6 +35,11 @@ export interface ParsedToolResult {
 // their trigger is in the LAST message, not the system block:
 //   recap    — "The user stepped away…": a short mid-session catch-up summary
 //   compact  — full-history summarisation for context compaction
+//   notification — an async background-task event the client injects as a
+//                  user-role turn ("[SYSTEM NOTIFICATION - NOT USER INPUT]…"):
+//                  a backgrounded job finishing, a scheduled wakeup, a subagent
+//                  completing. Carries real user-role text, so it would
+//                  otherwise be miscounted as a user-driven "main" turn.
 export type RequestKind =
   | "main"
   | "subagent"
@@ -44,6 +50,7 @@ export type RequestKind =
   | "compact"
   | "recap"
   | "quota"
+  | "notification"
   | "tool_result"
   | "unknown";
 
@@ -670,6 +677,14 @@ export function classifyRequestKind(
   lastMessageText = "",
 ): RequestKind {
   const last = lastMessageText.toLowerCase();
+  // Notification: an async background-task event the client injects as a
+  // user-role turn, wrapped in a guard banner so the model doesn't read the
+  // event as the human answering a pending question. Runs on the main model
+  // with a normal system prompt, so the banner is the only signal. Checked
+  // before "main" would otherwise claim it (it carries real user-role text).
+  if (last.includes("[system notification - not user input]")) {
+    return "notification";
+  }
   // Recap: a short mid-session catch-up the client injects as the last user
   // message. Runs on the main model, so only the instruction identifies it.
   if (last.includes("the user stepped away") && last.includes("recap")) {
@@ -1119,6 +1134,26 @@ export function decodeResponseObjects(events: TraceEvent[]): {
 }
 
 export function parseTrace(events: TraceEvent[]): ParsedTrace {
+  return redactParsedTrace(parseTraceInner(events));
+}
+
+// Scrub high-confidence secrets (tokens, keys, KEY=VALUE assignments) that can
+// appear inline in captured tool-call arguments — e.g. a credential pasted into
+// a Bash command body. Raw NDJSON traces stay byte-faithful; this only protects
+// the derived SQLite + search indexes, which is what `parseTrace` feeds.
+function redactParsedTrace(trace: ParsedTrace): ParsedTrace {
+  if (trace.toolCalls.length === 0) return trace;
+  return {
+    ...trace,
+    toolCalls: trace.toolCalls.map((call) =>
+      call.arguments
+        ? { ...call, arguments: redactSecrets(call.arguments) }
+        : call,
+    ),
+  };
+}
+
+function parseTraceInner(events: TraceEvent[]): ParsedTrace {
   const { toolResults, context } = parseRequestBody(events);
   const base: ParsedTrace = {
     format: "unknown",

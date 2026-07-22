@@ -54,6 +54,7 @@ const KIND_LABELS = {
   compact: "compact",
   recap: "recap",
   quota: "quota",
+  notification: "notification",
   tool_result: "tool msg",
   unknown: "?",
 };
@@ -1151,6 +1152,7 @@ function costByKind(requests) {
     "compact",
     "title",
     "quota",
+    "notification",
     "unknown",
   ];
   const agg = {};
