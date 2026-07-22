@@ -2,9 +2,10 @@
  * LRU cache for task results with TTL expiration.
  */
 export class ResultCache {
-  #entries = new Map(); // key -> { value, expiresAt, accessCount }
+  #entries = new Map(); // key -> { value, expiresAt, accessCount, lru }
   #maxSize;
   #defaultTtl;
+  #lruGen = 0;
 
   /**
    * @param {number} maxSize - Maximum cached entries
@@ -29,7 +30,7 @@ export class ResultCache {
       value,
       expiresAt: Date.now() + ttl,
       accessCount: 0,
-      lastAccess: Date.now(),
+      lru: ++this.#lruGen,
     });
     return this;
   }
@@ -43,8 +44,8 @@ export class ResultCache {
       return undefined;
     }
     entry.accessCount++;
-    entry.lastAccess = Date.now();
-    return entry;
+    entry.lru = ++this.#lruGen;
+    return entry.value;
   }
 
   /** Check if a key exists and is not expired. */
@@ -114,16 +115,24 @@ export class ResultCache {
    * @returns {string[]}
    */
   topKeys(n) {
-    throw new Error("not implemented: ResultCache.topKeys");
+    const now = Date.now();
+    const entries = [];
+    for (const [key, entry] of this.#entries) {
+      if (now <= entry.expiresAt) {
+        entries.push({ key, accessCount: entry.accessCount });
+      }
+    }
+    entries.sort((a, b) => b.accessCount - a.accessCount);
+    return entries.slice(0, n).map((e) => e.key);
   }
 
   #evictLRU() {
     let target = null;
-    let targetAccess = -Infinity;
+    let minLru = Infinity;
     for (const [key, entry] of this.#entries) {
-      if (entry.lastAccess > targetAccess) {
+      if (entry.lru < minLru) {
         target = key;
-        targetAccess = entry.lastAccess;
+        minLru = entry.lru;
       }
     }
     if (target) this.#entries.delete(target);

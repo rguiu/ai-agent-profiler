@@ -76,12 +76,18 @@ export class PriorityQueue {
    * @returns {this}
    */
   merge(other) {
-    throw new Error("not implemented: PriorityQueue.merge");
+    if (this === other) return this;
+    const entries = [...other.#heap];
+    for (const entry of entries) {
+      this.#heap.push({ item: entry.item, priority: entry.priority });
+      this.#bubbleUp(this.#heap.length - 1);
+    }
+    return this;
   }
 
   #bubbleUp(i) {
     while (i > 0) {
-      const parent = Math.floor(i / 2);
+      const parent = Math.floor((i - 1) / 2);
       if (this.#heap[parent].priority <= this.#heap[i].priority) break;
       [this.#heap[parent], this.#heap[i]] = [this.#heap[i], this.#heap[parent]];
       i = parent;

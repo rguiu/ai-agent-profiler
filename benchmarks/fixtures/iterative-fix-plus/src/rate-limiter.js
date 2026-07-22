@@ -57,7 +57,11 @@ export class RateLimiter {
    * @returns {number} milliseconds until `n` tokens are available (>= 0)
    */
   peekWait(n = 1) {
-    throw new Error("not implemented: RateLimiter.peekWait");
+    this.#refill();
+    if (n <= 0) return 0;
+    if (this.#tokens >= n) return 0;
+    const tokensNeeded = n - this.#tokens;
+    return Math.ceil(tokensNeeded / this.#refillRate);
   }
 
   /** Acquire multiple tokens at once. */

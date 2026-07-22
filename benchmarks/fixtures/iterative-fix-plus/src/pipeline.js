@@ -36,8 +36,7 @@ export class Pipeline {
 
     for (const stage of this.#stages) {
       if (this.#aborted) break;
-      const results = await this.#runStage(stage);
-      this.#context = results;
+      await this.#runStage(stage);
     }
     return this.#context;
   }
@@ -52,7 +51,6 @@ export class Pipeline {
 
   async #runStage(stage) {
     const scheduler = new Scheduler({ maxConcurrency: 4 });
-    const results = {};
 
     for (const task of stage.tasks) {
       scheduler.add({
@@ -64,17 +62,23 @@ export class Pipeline {
           const cacheKey = `${stage.name}:${task.id}`;
           const cached = this.#cache.get(cacheKey);
           if (cached !== undefined) {
-            results[task.id] = cached;
+            this.#context[task.id] = cached;
             return;
           }
           const result = await task.fn({ ...this.#context, signal });
           this.#cache.set(cacheKey, result);
-          results[task.id] = result;
+          this.#context[task.id] = result;
+          if (
+            result !== null &&
+            typeof result === "object" &&
+            !Array.isArray(result)
+          ) {
+            Object.assign(this.#context, result);
+          }
         },
       });
     }
 
     await scheduler.run();
-    return results;
   }
 }

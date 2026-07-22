@@ -62,7 +62,15 @@ export class Scheduler {
   async run() {
     this.#bus.emit("scheduler:start", this.stats);
     while (this.#queue.size > 0 || this.#running.size > 0) {
+      const prevRunning = this.#running.size;
       this.#scheduleReady();
+      if (
+        this.#running.size === 0 &&
+        prevRunning === 0 &&
+        this.#queue.size > 0
+      ) {
+        break;
+      }
       if (this.#running.size > 0) {
         await Promise.race([...this.#running.values()].map((r) => r.promise));
       }
@@ -94,17 +102,21 @@ export class Scheduler {
   }
 
   #scheduleReady() {
+    const deferred = [];
     while (this.#running.size < this.#maxConcurrency && this.#queue.size > 0) {
-      const task = this.#queue.peek();
+      const task = this.#queue.pop();
       if (!task) break;
       if (
         task.deps.length > 0 &&
-        task.deps.some((d) => this.#completed.has(d))
+        !task.deps.every((d) => this.#completed.has(d))
       ) {
-        break; // blocked
+        deferred.push(task);
+        continue;
       }
-      this.#queue.pop();
       this.#execute(task);
+    }
+    for (const task of deferred) {
+      this.#queue.push(task, task.priority);
     }
   }
 

@@ -36,8 +36,7 @@ export class EventBus {
   emit(event, data) {
     this.#history.push({ event, data, ts: Date.now() });
     if (this.#history.length > this.#maxHistory) {
-      this.#history.splice(0, 0, ...this.#history.splice(this.#maxHistory));
-      this.#history.length = this.#maxHistory;
+      this.#history = this.#history.slice(-this.#maxHistory);
     }
     const set = this.#listeners.get(event);
     if (set) {
