@@ -11,7 +11,11 @@ const UPSTREAM_TIMEOUT_MS = 120_000;
 // deliver a full response and then leave the connection open without sending
 // the terminating bytes; without this the socket idles until the client aborts
 // (~5 min), which the user experiences as a timeout on large tool-use replies.
-const STREAM_IDLE_TIMEOUT_MS = 60_000;
+// The cap must stay well above the longest legitimate inter-chunk gap: extended
+// thinking and large tool-use payloads (e.g. writing a big file) routinely
+// pause >60s before the next chunk, so a tighter cap tears down healthy streams
+// and surfaces as "Connection closed mid-response" on the client.
+const STREAM_IDLE_TIMEOUT_MS = 180_000;
 
 interface Credentials {
   accessKeyId: string;
@@ -151,6 +155,11 @@ export function forwardBedrock(
           },
           (upstreamRes) => {
             clearTimeout(deadlineTimer);
+            // Streaming has started: the whole-response deadline no longer
+            // applies. Disable the socket inactivity timeout so it can't fire
+            // before the (larger) inter-chunk idle cap and tear down a healthy
+            // but slow stream (extended thinking, large tool-use payloads).
+            upstreamReq.setTimeout(0);
             const status = upstreamRes.statusCode ?? 502;
             const respHeaders = upstreamRes.headers as Record<
               string,
@@ -194,6 +203,9 @@ export function forwardBedrock(
         upstreamReq.on("error", (err) => {
           clearTimeout(deadlineTimer);
           clearTimeout(idleTimer);
+          // Surface the teardown reason: without this, idle-cap and deadline
+          // kills are indistinguishable from real upstream errors in traces.
+          process.stderr.write(`[bedrock] upstream error: ${err.message}\n`);
           if (!res.headersSent) {
             res.writeHead(502, { "content-type": "application/json" });
             res.end(
