@@ -538,7 +538,8 @@ tr.keepalive:hover td {
 .kind-badge.kind-recap,
 .kind-badge.kind-compact,
 .kind-badge.kind-title,
-.kind-badge.kind-quota {
+.kind-badge.kind-quota,
+.kind-badge.kind-notification {
   background: color-mix(in srgb, var(--warn) 20%, transparent);
   color: var(--warn);
 }
