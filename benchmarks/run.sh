@@ -115,7 +115,7 @@ fi
 case "$AGENT" in
   opencode) INVOKE="run --auto" ;;
   claude)   INVOKE="-p --dangerously-skip-permissions" ;;
-  stackpilot) INVOKE="-p --yolo" ;;
+  stackpilot) INVOKE="--yolo -p" ;;
   *) echo "unknown agent: $AGENT (use opencode, claude, or stackpilot)" >&2; exit 1 ;;
 esac
 
