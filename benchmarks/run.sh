@@ -5,7 +5,7 @@
 # Usage:
 #   ./benchmarks/run.sh <agent> [target] [options]
 #
-#   <agent>              opencode | claude
+#   <agent>              opencode | claude | stackpilot
 #
 # Target (what codebase the tasks run against — default: fixture "csv-parser"):
 #   --fixture <name>     a bundled fixture under benchmarks/fixtures/ (csv-parser, task-queue)
@@ -113,9 +113,10 @@ fi
 [ -n "$AGENT" ] || { usage; exit 1; }
 
 case "$AGENT" in
-  opencode) INVOKE="run --auto" ;;                       # opencode run --auto "<prompt>"
-  claude)   INVOKE="-p --dangerously-skip-permissions" ;; # claude -p ... "<prompt>"
-  *) echo "unknown agent: $AGENT (use opencode or claude)" >&2; exit 1 ;;
+  opencode) INVOKE="run --auto" ;;
+  claude)   INVOKE="-p --dangerously-skip-permissions" ;;
+  stackpilot) INVOKE="-p --yolo" ;;
+  *) echo "unknown agent: $AGENT (use opencode, claude, or stackpilot)" >&2; exit 1 ;;
 esac
 
 SCRATCH="${AAP_BENCH_SCRATCH:-/tmp/aap-bench}"
