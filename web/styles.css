@@ -1318,3 +1318,30 @@ tr.keepalive:hover td {
 .trace-events .event .type {
   color: var(--accent);
 }
+
+.sparkline {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+.projects-section {
+  margin-top: 16px;
+}
+
+.projects-section h2 {
+  margin-bottom: 8px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.chart-legend .lg,
+.lg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}

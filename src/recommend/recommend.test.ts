@@ -72,7 +72,9 @@ describe("recommend", () => {
   it("flags high tool-result amplification", () => {
     const recs = recommend(
       detail({
-        toolUsage: [{ name: "bash", count: 2, result_tokens: 12000 }],
+        toolUsage: [
+          { name: "bash", count: 2, result_tokens: 12000, error_count: 0 },
+        ],
       }),
     );
     expect(recs[0]?.kind).toBe("high_amplification");
@@ -219,7 +221,9 @@ describe("recommend", () => {
   it("flags a search→read pattern as evidence for a locate-and-read tool", () => {
     const recs = recommend(
       detail({
-        toolUsage: [{ name: "read", count: 4, result_tokens: 500 }],
+        toolUsage: [
+          { name: "read", count: 4, result_tokens: 500, error_count: 0 },
+        ],
         commands: [
           { command: "grep", category: "search", count: 3, resultTokens: 200 },
           { command: "ls", category: "search", count: 2, resultTokens: 80 },

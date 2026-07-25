@@ -15,10 +15,13 @@ export interface ParsedToolCall {
   arguments: string;
 }
 
+export type ToolError = "success" | "error" | "timeout" | "unknown";
+
 export interface ParsedToolResult {
   id: string;
   bytes: number;
   tokens: number;
+  error: ToolError;
 }
 
 // What triggered a request. "main" is the user-driven interactive loop; every
@@ -612,6 +615,46 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+const TOOL_ERROR_PATTERNS = [
+  /(?:^|\n)(?:Error|ERROR|Fatal|FATAL):/,
+  /command not found/i,
+  /permission denied/i,
+  /No such file or directory/i,
+  /cannot access/i,
+  /ENOENT/i,
+  /EACCES/i,
+  /EPERM/i,
+  /connection refused/i,
+  /timed?[ -]?out/i,
+  /(?:^|\n)fatal:/i,
+  /is not recognized as an/i,
+  /Module not found/i,
+  /Cannot find module/i,
+  /ImportError/i,
+  /Traceback \(most recent call last\)/i,
+];
+
+function classifyToolError(text: string, toolName: string): ToolError {
+  if (!text || text.trim().length === 0) {
+    return "unknown";
+  }
+
+  for (const pattern of TOOL_ERROR_PATTERNS) {
+    if (pattern.test(text)) {
+      if (/timed?[ -]?out/i.test(text)) return "timeout";
+      return "error";
+    }
+  }
+
+  // Bash-specific: look for non-zero exit code indicators
+  if (/^(?:bash|sh|shell|zsh)$/i.test(toolName)) {
+    if (/exit code:?\s*(?!0\b)\d+/i.test(text)) return "error";
+    if (/exited with (?!0\b)\d+/i.test(text)) return "error";
+  }
+
+  return "success";
+}
+
 // Extract only the human/prompt TEXT of a message, ignoring tool_result and
 // other structured blocks. Used for kind classification: recap/compaction
 // instructions arrive as plain text, and a tool_result echoing those phrases
@@ -777,13 +820,18 @@ function parseRequestBody(events: TraceEvent[]): {
 
   const messages = asArray(record.messages);
   const toolResults: ParsedToolResult[] = [];
-  const add = (id: string | null, content: unknown): void => {
+  const add = (
+    id: string | null,
+    content: unknown,
+    toolName?: string,
+  ): void => {
     if (!id) return;
     const text = extractResultText(content);
     toolResults.push({
       id,
       bytes: Buffer.byteLength(text),
       tokens: estimateTokens(text),
+      error: classifyToolError(text, toolName ?? ""),
     });
   };
 

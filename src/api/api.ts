@@ -190,6 +190,45 @@ export function handleApi(
     return true;
   }
 
+  if (pathname === "/stats/latency") {
+    if (!requireGet(req, res)) return true;
+    const stats = store.latencyStats();
+    writeJson(res, 200, {
+      byModel: Object.fromEntries(stats.byModel),
+      byKind: Object.fromEntries(stats.byKind),
+    });
+    return true;
+  }
+
+  if (pathname === "/stats/trend") {
+    if (!requireGet(req, res)) return true;
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const days = Math.max(
+      1,
+      Math.min(365, parseInt(url.searchParams.get("days") ?? "30", 10) || 30),
+    );
+    writeJson(res, 200, store.trend(days));
+    return true;
+  }
+
+  if (pathname === "/models") {
+    if (!requireGet(req, res)) return true;
+    writeJson(res, 200, store.modelSummaries());
+    return true;
+  }
+
+  if (pathname === "/projects") {
+    if (!requireGet(req, res)) return true;
+    writeJson(res, 200, store.projects());
+    return true;
+  }
+
+  if (pathname === "/tools/errors") {
+    if (!requireGet(req, res)) return true;
+    writeJson(res, 200, store.toolErrorRates());
+    return true;
+  }
+
   if (pathname === "/introspections") {
     if (!requireGet(req, res)) return true;
     writeJson(res, 200, listIntrospections());

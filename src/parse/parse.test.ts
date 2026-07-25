@@ -217,8 +217,8 @@ describe("parseTrace", () => {
     ];
     const result = parseTrace(events);
     expect(result.toolResults).toEqual([
-      { id: "t1", bytes: 4, tokens: 1 },
-      { id: "c2", bytes: 6, tokens: 2 },
+      { id: "t1", bytes: 4, tokens: 1, error: "success" },
+      { id: "c2", bytes: 6, tokens: 2, error: "success" },
     ]);
     expect(result.context.messageCount).toBe(2);
     expect(result.context.systemTokens).toBeGreaterThan(0);

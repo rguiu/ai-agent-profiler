@@ -80,7 +80,12 @@ export async function runParse(
   // produced them, matched by tool id. Done after all calls are (re)written so
   // it is order-independent within a run.
   for (const toolResult of toolResults) {
-    store.recordToolResult(toolResult.id, toolResult.bytes, toolResult.tokens);
+    store.recordToolResult(
+      toolResult.id,
+      toolResult.bytes,
+      toolResult.tokens,
+      toolResult.error,
+    );
   }
 
   return { total: targets.length, parsed, failed };

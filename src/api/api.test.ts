@@ -189,6 +189,7 @@ describe("read API", () => {
         tool_id: "call_1",
         result_bytes: null,
         result_tokens: null,
+        error: null,
       },
     ]);
     expect(detail.events).toBeUndefined();
@@ -223,7 +224,9 @@ describe("read API", () => {
     const tools = (await (
       await fetch(`http://127.0.0.1:${port}/tools`)
     ).json()) as Array<{ name: string; count: number; result_tokens: number }>;
-    expect(tools).toEqual([{ name: "run_bash", count: 1, result_tokens: 0 }]);
+    expect(tools).toEqual([
+      { name: "run_bash", count: 1, result_tokens: 0, error_count: 0 },
+    ]);
 
     const detail = (await (
       await fetch(`http://127.0.0.1:${port}/sessions/s1`)
@@ -239,7 +242,7 @@ describe("read API", () => {
       };
     };
     expect(detail.analysis.toolUsage).toEqual([
-      { name: "run_bash", count: 1, result_tokens: 0 },
+      { name: "run_bash", count: 1, result_tokens: 0, error_count: 0 },
     ]);
     expect(detail.analysis.growth).toHaveLength(1);
     expect(detail.analysis.repeated).toEqual([]);

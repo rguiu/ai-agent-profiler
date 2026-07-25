@@ -191,16 +191,27 @@ function extractDisplayText(raw) {
 }
 
 async function dashboard() {
-  const [stats, sessions, tools, commands, kinds, idleGaps] = await Promise.all(
-    [
-      api("/stats"),
-      api("/sessions"),
-      api("/tools"),
-      api("/commands"),
-      api("/kinds"),
-      api("/stats/idle-gaps"),
-    ],
-  );
+  const [
+    stats,
+    sessions,
+    tools,
+    commands,
+    kinds,
+    idleGaps,
+    latency,
+    trend,
+    projects,
+  ] = await Promise.all([
+    api("/stats"),
+    api("/sessions"),
+    api("/tools"),
+    api("/commands"),
+    api("/kinds"),
+    api("/stats/idle-gaps"),
+    api("/stats/latency").catch(() => null),
+    api("/stats/trend?days=7").catch(() => null),
+    api("/projects").catch(() => null),
+  ]);
   const cacheRate =
     stats.input_tokens > 0
       ? Math.round((stats.cached_input_tokens / stats.input_tokens) * 100)
@@ -209,6 +220,9 @@ async function dashboard() {
   const avgIn =
     stats.requests > 0 ? Math.round(stats.input_tokens / stats.requests) : 0;
   const avgCost = stats.sessions > 0 ? stats.cost / stats.sessions : 0;
+  const latP50 = latency?.byModel ? formatLatencyGlobal(latency) : null;
+  const trendHtml = trend ? cacheTrendSparkline(trend) : "";
+
   const cards = [
     ["Sessions", num(stats.sessions)],
     ["Requests", num(stats.requests)],
@@ -219,6 +233,8 @@ async function dashboard() {
     ],
     ["Output tokens", numCompact(stats.output_tokens)],
     ["Est. cost", `$${stats.cost.toFixed(2)} · $${avgCost.toFixed(2)}/session`],
+    ...(latP50 ? [["Latency (p50)", latP50]] : []),
+    ...(trendHtml ? [["Cache trend (7d)", trendHtml]] : []),
   ];
 
   const topSessions = [...sessions]
@@ -310,7 +326,8 @@ async function dashboard() {
           ? `<div class="collapsible"><h2>Shell commands</h2>${commandsTable(commands)}</div>`
           : `<div><h2>Shell commands</h2>${commandsTable(commands)}</div>`
       }
-    </div>`;
+    </div>
+    ${projects && projects.length > 0 ? projectsSection(projects) : ""}`;
   requestAnimationFrame(() => {
     document.querySelectorAll(".collapsible").forEach((c) => {
       const rows = c.querySelectorAll(".bar-row, table tbody tr");
@@ -384,7 +401,11 @@ function toolBars(items, scale) {
       const amp = t.result_tokens
         ? ` · ~${num(t.result_tokens)} result tok`
         : "";
-      return `<div class="bar-row"><span class="bar-label mono">${esc(t.name)}</span><span class="bar-track"><span class="bar-fill" style="width:${((t.count / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${num(t.count)}${amp}</span></div>`;
+      const errRate =
+        t.error_count > 0
+          ? ` · <span class="err">${t.error_count} err (${((t.error_count / t.count) * 100).toFixed(0)}%)</span>`
+          : "";
+      return `<div class="bar-row"><span class="bar-label mono">${esc(t.name)}</span><span class="bar-track"><span class="bar-fill" style="width:${((t.count / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${num(t.count)}${amp}${errRate}</span></div>`;
     })
     .join("")}</div>`;
 }
@@ -1438,8 +1459,17 @@ async function introspectionDetail(id) {
       tools.length
         ? `
     <h2>Tool insights</h2>
-    <table><thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Result tokens</th></tr></thead><tbody>
-    ${tools.map((t) => `<tr><td>${esc(t.name)}</td><td class="num">${num(t.count || t.call_count || 0)}</td><td class="num">~${num(t.result_tokens || 0)}</td></tr>`).join("")}
+    <table><thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Result tokens</th><th class="num">Errors</th></tr></thead><tbody>
+    ${tools
+      .map((t) => {
+        const errs = t.error_count || 0;
+        const errHtml =
+          errs > 0
+            ? `<span class="err">${errs} (${((errs / (t.count || t.call_count || 1)) * 100).toFixed(0)}%)</span>`
+            : "—";
+        return `<tr><td>${esc(t.name)}</td><td class="num">${num(t.count || t.call_count || 0)}</td><td class="num">~${num(t.result_tokens || 0)}</td><td class="num">${errHtml}</td></tr>`;
+      })
+      .join("")}
     </tbody></table>`
         : ""
     }
@@ -1720,6 +1750,144 @@ async function searchView(hash) {
   if (!hasFilters) document.getElementById("search-q").focus();
 }
 
+function formatLatency(toMs) {
+  if (toMs === null || toMs === undefined) return "—";
+  if (toMs < 1000) return `${Math.round(toMs)}ms`;
+  return `${(toMs / 1000).toFixed(1)}s`;
+}
+
+function formatLatencyGlobal(latency) {
+  const all = [];
+  for (const [, v] of Object.entries(latency.byModel || {})) {
+    if (v?.p50) all.push(v.p50);
+  }
+  if (all.length === 0) return null;
+  all.sort((a, b) => a - b);
+  const mid = Math.floor(all.length / 2);
+  return formatLatency(all[mid]);
+}
+
+function cacheTrendSparkline(trend) {
+  if (!trend || trend.length < 2) return "—";
+  const rates = trend.map((t) => t.cache_hit_rate);
+  const max = Math.max(...rates, 1);
+  const w = 80;
+  const h = 20;
+  const pad = 2;
+  const stepX = (w - pad * 2) / (rates.length - 1);
+  const points = rates
+    .map((v, i) => {
+      const x = pad + i * stepX;
+      const y = h - pad - (v / max) * (h - pad * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const latest = rates[rates.length - 1];
+  return `<svg class="sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="1.5" /></svg> ${(latest * 100).toFixed(0)}%`;
+}
+
+function projectsSection(projects) {
+  if (!projects || !projects.length) return "";
+  const maxCost = Math.max(...projects.map((p) => p.total_cost), 1);
+  const rows = projects
+    .slice(0, 10)
+    .map((p) => {
+      const name =
+        p.repo || p.cwd
+          ? `${p.repo || ""}${p.repo && p.cwd ? " · " : ""}${shortPath(p.cwd || "", 36)}`
+          : "—";
+      const pct = ((p.total_cost / maxCost) * 100).toFixed(1);
+      return `<div class="bar-row"><span class="bar-label mono">${name}</span><span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span><span class="bar-val num">${cost(p.total_cost)} · ${num(p.session_count)} sessions</span></div>`;
+    })
+    .join("");
+  return `<div class="projects-section"><h2>Cost by project</h2><div class="bars">${rows}</div></div>`;
+}
+
+async function modelsPage() {
+  let models;
+  try {
+    models = await api("/models");
+  } catch {
+    app.innerHTML = `<p class="error">Failed to load model data.</p>`;
+    return;
+  }
+  if (!models || !models.length) {
+    app.innerHTML = `<p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+    return;
+  }
+
+  const totalCost = models.reduce((s, m) => s + (m.cost ?? 0), 0);
+  const rows = models
+    .map((m) => {
+      const cachePct = m.cache_hit_rate
+        ? `${(m.cache_hit_rate * 100).toFixed(0)}%`
+        : "—";
+      const costPct =
+        totalCost > 0 ? `${((m.cost / totalCost) * 100).toFixed(0)}%` : "—";
+      const avgCost =
+        m.request_count > 0
+          ? `$${(m.cost / m.request_count).toFixed(4)}/req`
+          : "—";
+      return `<tr>
+        <td><span class="mono">${esc(m.model)}</span></td>
+        <td><span class="provider-badge provider-${esc(m.provider)}">${esc(m.provider)}</span></td>
+        <td class="num">${num(m.request_count)}</td>
+        <td class="num">${num(m.session_count)}</td>
+        <td class="num">${cost(m.cost)}</td>
+        <td class="num">${avgCost}</td>
+        <td class="num">${costPct}</td>
+        <td class="num">${formatLatency(m.latency_p50)}</td>
+        <td class="num">${formatLatency(m.latency_p95)}</td>
+        <td class="num">${cachePct}</td>
+        <td class="num">${num(m.tool_calls)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const maxCost = Math.max(...models.map((m) => m.cost), 1);
+  app.innerHTML = `<h2>Model comparison</h2>
+    <div class="dashboard-grid">
+      <div>
+        <h2>Cost by model</h2>
+        <div class="bars">${models
+          .map((m) => {
+            const pct = ((m.cost / maxCost) * 100).toFixed(1);
+            return `<div class="bar-row"><span class="bar-label mono">${esc(m.model)}</span><span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span><span class="bar-val num">${cost(m.cost)}</span></div>`;
+          })
+          .join("")}</div>
+        <h2>Latency by model (p50 / p95)</h2>
+        <div class="bars">${models
+          .filter((m) => m.latency_p50)
+          .map((m) => {
+            const maxP95 = Math.max(
+              ...models.map((x) => x.latency_p95 ?? 0),
+              1,
+            );
+            const pct = m.latency_p95
+              ? ((m.latency_p95 / maxP95) * 100).toFixed(1)
+              : "0";
+            return `<div class="bar-row"><span class="bar-label mono">${esc(m.model)}</span><span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span><span class="bar-val num">${formatLatency(m.latency_p50)} / ${formatLatency(m.latency_p95)}</span></div>`;
+          })
+          .join("")}</div>
+      </div>
+      <div>
+        <h2>All models</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Model</th><th>Provider</th><th class="num">Reqs</th>
+              <th class="num">Sessions</th><th class="num">Cost</th>
+              <th class="num">Avg/req</th><th class="num">% cost</th>
+              <th class="num">p50</th><th class="num">p95</th>
+              <th class="num">Cache</th><th class="num">Tools</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
 let currentHash = "/";
 
 async function render() {
@@ -1727,6 +1895,7 @@ async function render() {
   try {
     if (currentHash === "/") return await dashboard();
     if (currentHash === "/sessions") return await sessions();
+    if (currentHash === "/models") return await modelsPage();
     if (currentHash === "/search" || currentHash.startsWith("/search?"))
       return await searchView(currentHash);
     const s = currentHash.match(/^\/sessions\/(.+)$/);
