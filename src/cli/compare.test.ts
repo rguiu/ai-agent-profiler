@@ -40,7 +40,9 @@ function makeDetail(id: string, requests: number): SessionDetail {
       kind: "main",
     })),
     analysis: {
-      toolUsage: [{ name: "read", count: requests, result_tokens: 500 }],
+      toolUsage: [
+        { name: "read", count: requests, result_tokens: 500, error_count: 0 },
+      ],
       repeated: [],
       growth: [],
       context: {

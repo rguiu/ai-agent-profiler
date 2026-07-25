@@ -204,6 +204,7 @@ export interface ToolCall {
   tool_id: string | null;
   result_bytes: number | null;
   result_tokens: number | null;
+  error: ToolError | null;
 }
 
 export interface ToolCallInput {
@@ -269,6 +270,41 @@ export interface ToolUsage {
   name: string;
   count: number;
   result_tokens: number;
+  error_count: number;
+}
+
+export type ToolError = "success" | "error" | "timeout" | "unknown";
+
+export interface ModelSummary {
+  model: string;
+  provider: string;
+  request_count: number;
+  session_count: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_creation_tokens: number;
+  output_tokens: number;
+  cost: number;
+  latency_p50: number | null;
+  latency_p95: number | null;
+  cache_hit_rate: number;
+  tool_calls: number;
+}
+
+export interface LatencyStats {
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  count: number;
+}
+
+export interface TrendPoint {
+  date: string;
+  cached_tokens: number;
+  total_tokens: number;
+  cache_hit_rate: number;
+  cost: number;
+  requests: number;
 }
 
 export interface RepeatedToolCall {
@@ -339,6 +375,10 @@ export class Store {
   private readonly contextGrowthStmt;
   private readonly sessionContextStmt;
   private readonly sessionToolCallsStmt;
+  private readonly modelSummariesStmt;
+  private readonly latencyByModelStmt;
+  private readonly latencyByKindStmt;
+  private readonly trendStmt;
   constructor(private readonly db: Database.Database) {
     this.upsertSessionStmt = db.prepare(`
       INSERT INTO sessions (id, client, cwd, repo, started_at, first_seen_at, last_seen_at, meta)
@@ -424,7 +464,7 @@ export class Store {
       VALUES (@request_id, @ordinal, @name, @arguments, @tool_id)
     `);
     this.recordToolResultStmt = db.prepare(`
-      UPDATE tool_calls SET result_bytes = @bytes, result_tokens = @tokens
+      UPDATE tool_calls SET result_bytes = @bytes, result_tokens = @tokens, error = @error
       WHERE tool_id = @tool_id
     `);
     this.replaceToolCallsTxn = db.transaction(
@@ -481,7 +521,7 @@ export class Store {
       WHERE r.id = ?
     `);
     this.getToolCallsStmt = db.prepare(
-      `SELECT ordinal, name, arguments, tool_id, result_bytes, result_tokens FROM tool_calls WHERE request_id = ? ORDER BY ordinal`,
+      `SELECT ordinal, name, arguments, tool_id, result_bytes, result_tokens, error FROM tool_calls WHERE request_id = ? ORDER BY ordinal`,
     );
     this.statsStmt = db.prepare(`
       SELECT
@@ -505,13 +545,15 @@ export class Store {
     `);
     this.toolUsageGlobalStmt = db.prepare(`
       SELECT name, COUNT(*) AS count,
-             COALESCE(SUM(result_tokens), 0) AS result_tokens
+             COALESCE(SUM(result_tokens), 0) AS result_tokens,
+             COALESCE(SUM(CASE WHEN error = 'error' OR error = 'timeout' THEN 1 ELSE 0 END), 0) AS error_count
       FROM tool_calls
       GROUP BY name ORDER BY count DESC, name
     `);
     this.toolUsageSessionStmt = db.prepare(`
       SELECT tc.name, COUNT(*) AS count,
-             COALESCE(SUM(tc.result_tokens), 0) AS result_tokens
+             COALESCE(SUM(tc.result_tokens), 0) AS result_tokens,
+             COALESCE(SUM(CASE WHEN tc.error = 'error' OR tc.error = 'timeout' THEN 1 ELSE 0 END), 0) AS error_count
       FROM tool_calls tc JOIN requests r ON r.id = tc.request_id
       WHERE r.session_id = ?
       GROUP BY tc.name ORDER BY count DESC, tc.name
@@ -548,6 +590,54 @@ export class Store {
       JOIN requests r ON r.id = tc.request_id
       WHERE r.session_id = ?
       ORDER BY r.started_at, tc.ordinal
+    `);
+    this.modelSummariesStmt = db.prepare(`
+      SELECT COALESCE(m.model, 'unknown') AS model,
+             r.provider,
+             COUNT(*) AS request_count,
+             COUNT(DISTINCT r.session_id) AS session_count,
+             COALESCE(SUM(m.input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(m.cached_input_tokens), 0) AS cached_input_tokens,
+             COALESCE(SUM(m.cache_creation_input_tokens), 0) AS cache_creation_tokens,
+             COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(m.cost), 0) AS cost,
+             COALESCE(SUM(m.tool_call_count), 0) AS tool_calls
+      FROM metrics m
+      JOIN requests r ON r.id = m.request_id
+      GROUP BY m.model, r.provider
+      ORDER BY cost DESC
+    `);
+    this.latencyByModelStmt = db.prepare(`
+      SELECT model, latency_ms
+      FROM (
+        SELECT m.model, r.latency_ms,
+               NTILE(100) OVER (PARTITION BY m.model ORDER BY r.latency_ms) AS percentile
+        FROM requests r
+        JOIN metrics m ON m.request_id = r.id
+        WHERE r.latency_ms IS NOT NULL AND r.latency_ms > 0
+      ) WHERE percentile IN (50, 95, 99)
+    `);
+    this.latencyByKindStmt = db.prepare(`
+      SELECT kind, latency_ms
+      FROM (
+        SELECT COALESCE(m.kind, 'unknown') AS kind, r.latency_ms,
+               NTILE(100) OVER (PARTITION BY COALESCE(m.kind, 'unknown') ORDER BY r.latency_ms) AS percentile
+        FROM requests r
+        JOIN metrics m ON m.request_id = r.id
+        WHERE r.latency_ms IS NOT NULL AND r.latency_ms > 0
+      ) WHERE percentile IN (50, 95, 99)
+    `);
+    this.trendStmt = db.prepare(`
+      SELECT DATE(r.started_at) AS date,
+             COALESCE(SUM(m.cached_input_tokens), 0) AS cached_tokens,
+             COALESCE(SUM(m.input_tokens + m.cached_input_tokens), 0) AS total_tokens,
+             COALESCE(SUM(m.cost), 0) AS cost,
+             COUNT(*) AS requests
+      FROM requests r
+      JOIN metrics m ON m.request_id = r.id
+      WHERE r.started_at >= datetime('now', @days)
+      GROUP BY DATE(r.started_at)
+      ORDER BY date
     `);
   }
 
@@ -626,8 +716,13 @@ export class Store {
     this.replaceToolCallsTxn(requestId, calls);
   }
 
-  recordToolResult(toolId: string, bytes: number, tokens: number): void {
-    this.recordToolResultStmt.run({ tool_id: toolId, bytes, tokens });
+  recordToolResult(
+    toolId: string,
+    bytes: number,
+    tokens: number,
+    error: ToolError = "unknown",
+  ): void {
+    this.recordToolResultStmt.run({ tool_id: toolId, bytes, tokens, error });
   }
 
   listSessions(): SessionSummary[] {
@@ -860,6 +955,140 @@ export class Store {
     }>;
   }
 
+  modelSummaries(): ModelSummary[] {
+    const rows = this.modelSummariesStmt.all() as Omit<
+      ModelSummary,
+      "latency_p50" | "latency_p95" | "cache_hit_rate"
+    >[];
+    const latencyByModel = this.latencyPercentilesByModel();
+    return rows.map((row) => {
+      const modelKey = row.model;
+      const lat = latencyByModel.get(modelKey);
+      const total = row.input_tokens + row.cached_input_tokens;
+      return {
+        ...row,
+        latency_p50: lat?.p50 ?? null,
+        latency_p95: lat?.p95 ?? null,
+        cache_hit_rate: total > 0 ? row.cached_input_tokens / total : 0,
+      };
+    });
+  }
+
+  private latencyPercentilesByModel(): Map<
+    string,
+    { p50: number | null; p95: number | null }
+  > {
+    const rows = this.latencyByModelStmt.all() as Array<{
+      model: string;
+      latency_ms: number;
+    }>;
+    const map = new Map<string, { p50: number | null; p95: number | null }>();
+    for (const row of rows) {
+      const entry = map.get(row.model) ?? { p50: null, p95: null };
+      map.set(row.model, entry);
+    }
+    // NTILE(100) gives each row a percentile 1-100 where 50 = median.
+    // We need to extract the actual value at the bucket boundary.
+    const groups = new Map<string, number[]>();
+    for (const row of rows) {
+      const list = groups.get(row.model) ?? [];
+      list.push(row.latency_ms);
+      groups.set(row.model, list);
+    }
+    for (const [model, lats] of groups) {
+      lats.sort((a, b) => a - b);
+      map.set(model, {
+        p50: percentileValue(lats, 50),
+        p95: percentileValue(lats, 95),
+      });
+    }
+    return map;
+  }
+
+  latencyStats(): {
+    byModel: Map<string, LatencyStats>;
+    byKind: Map<string, LatencyStats>;
+  } {
+    const byModel = this.computeLatencyGroup(
+      this.latencyByModelStmt.all() as Array<{
+        model: string;
+        latency_ms: number;
+      }>,
+      "model",
+    );
+    const byKind = this.computeLatencyGroup(
+      this.latencyByKindStmt.all() as Array<{
+        kind: string;
+        latency_ms: number;
+      }>,
+      "kind",
+    );
+    return { byModel, byKind };
+  }
+
+  private computeLatencyGroup<T extends Record<string, unknown>>(
+    rows: T[],
+    key: string,
+  ): Map<string, LatencyStats> {
+    const groups = new Map<string, number[]>();
+    for (const row of rows) {
+      const name = String(row[key] ?? "unknown");
+      const list = groups.get(name) ?? [];
+      const l = Number(row.latency_ms);
+      if (!Number.isNaN(l)) list.push(l);
+      groups.set(name, list);
+    }
+    const result = new Map<string, LatencyStats>();
+    for (const [name, lats] of groups) {
+      lats.sort((a, b) => a - b);
+      result.set(name, {
+        p50: percentileValue(lats, 50),
+        p95: percentileValue(lats, 95),
+        p99: percentileValue(lats, 99),
+        count: lats.length,
+      });
+    }
+    return result;
+  }
+
+  trend(days = 30): TrendPoint[] {
+    const rows = this.trendStmt.all({ days: `-${days} days` }) as Array<{
+      date: string;
+      cached_tokens: number;
+      total_tokens: number;
+      cost: number;
+      requests: number;
+    }>;
+    return rows.map((row) => ({
+      ...row,
+      cache_hit_rate:
+        row.total_tokens > 0 ? row.cached_tokens / row.total_tokens : 0,
+    }));
+  }
+
+  toolErrorRates(): Array<{
+    name: string;
+    count: number;
+    error_count: number;
+    error_rate: number;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT name, COUNT(*) AS count,
+                COALESCE(SUM(CASE WHEN error = 'error' OR error = 'timeout' THEN 1 ELSE 0 END), 0) AS error_count
+         FROM tool_calls
+         WHERE result_bytes IS NOT NULL
+         GROUP BY name
+         HAVING count >= 5
+         ORDER BY error_count DESC, name`,
+      )
+      .all() as Array<{ name: string; count: number; error_count: number }>;
+    return rows.map((row) => ({
+      ...row,
+      error_rate: row.count > 0 ? row.error_count / row.count : 0,
+    }));
+  }
+
   deleteSession(id: string): void {
     const txn = this.db.transaction((sid: string) => {
       this.db
@@ -951,12 +1180,19 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "sessions", "meta", "TEXT");
   ensureColumn(db, "sessions", "title", "TEXT");
   ensureColumn(db, "sessions", "summary", "TEXT");
+  ensureColumn(db, "tool_calls", "error", "TEXT");
   // Indexes on migrated columns must be created after the columns exist,
   // otherwise pre-existing databases fail before ensureColumn can run.
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_id ON tool_calls (tool_id)",
   );
   return new Store(db);
+}
+
+function percentileValue(sorted: number[], p: number): number | null {
+  if (sorted.length === 0) return null;
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, Math.min(idx, sorted.length - 1))] ?? null;
 }
 
 function parseMeta(value: string | null): Record<string, string> | null {

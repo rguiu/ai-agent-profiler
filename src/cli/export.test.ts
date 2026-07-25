@@ -43,7 +43,9 @@ function makeDetail(): SessionDetail {
       },
     ],
     analysis: {
-      toolUsage: [{ name: "read", count: 5, result_tokens: 4000 }],
+      toolUsage: [
+        { name: "read", count: 5, result_tokens: 4000, error_count: 0 },
+      ],
       repeated: [
         { name: "read", arguments: '{"file_path":"/a.ts"}', count: 5 },
       ],

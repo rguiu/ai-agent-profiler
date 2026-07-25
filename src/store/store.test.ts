@@ -390,7 +390,7 @@ describe("Store", () => {
     store.close();
 
     expect(detail?.analysis.toolUsage).toEqual([
-      { name: "read", count: 2, result_tokens: 0 },
+      { name: "read", count: 2, result_tokens: 0, error_count: 0 },
     ]);
     expect(detail?.analysis.repeated).toEqual([
       { name: "read", arguments: '{"file":"/x"}', count: 2 },
@@ -398,6 +398,8 @@ describe("Store", () => {
     expect(detail?.analysis.growth.map((g) => g.input_tokens)).toEqual([
       100, 250,
     ]);
-    expect(global).toEqual([{ name: "read", count: 2, result_tokens: 0 }]);
+    expect(global).toEqual([
+      { name: "read", count: 2, result_tokens: 0, error_count: 0 },
+    ]);
   });
 });
