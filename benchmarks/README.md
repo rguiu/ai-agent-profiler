@@ -14,6 +14,17 @@ task and per agent:
 - **tool-result token amplification** (how much tool output entered context)
 - **context growth** and **duplicated static context** (system prompt + tool defs re-sent)
 - number of **recommendations** the profiler raised
+- **cache hit rate** (how much input was served from the prompt cache)
+
+## What you can compare
+
+| Scenario                 | Why                                                                           | How                                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Agent A vs Agent B**   | opencode vs Claude Code — which solves tasks faster/cheaper?                  | Tag runs per agent, then `aap compare --run opencode --run claude`                                     |
+| **Optimization on/off**  | Does stripping tools, progressive loading, or cache pre-warming improve cost? | Run baseline + experiment with different `--tag`, `aap check --baseline baseline --current experiment` |
+| **Model comparison**     | Haiku vs Sonnet — is the cheaper model still good enough?                     | Same agent, different model env var per run, tagged separately                                         |
+| **Release over release** | Did v2.0 regress cost or success rate from v1.0?                              | `aap check --baseline v1.0 --current v2.0` exits 0/1 per `regressions.toml` thresholds                 |
+| **CI regression gate**   | Block PRs that degrade agent performance beyond allowed bounds                | Wire `aap check` into GitHub Actions, failing the workflow on violations                               |
 
 ## Where the tasks run (the target project)
 
@@ -93,10 +104,9 @@ To run your own tasks against any target, pass a file (one `id|prompt` per line 
 
 `./benchmarks/run.sh <agent> [target] [--tasks file] [--verify cmd] [--no-verify] [--save-artifacts] [--prune --tag <name>] [--dry-run]`:
 
-1. Maps the agent to its headless, auto-approving invocation: opencode →
-   `opencode run --auto`, claude → `claude -p --dangerously-skip-permissions`. Without
-   auto-approval the agent's edit/bash tools are rejected in non-interactive mode, so the
-   `fix-bug`/`add-feature` tasks can't act.
+1. Resolves the agent's headless, auto-approving invocation from `benchmarks/agents.toml`
+   (binary, launch args, env vars). Add new agents there — no code changes needed.
+   Without `agents.toml`, falls back to a hardcoded list (opencode, claude, stackpilot).
 2. Resolves the target source dir (`--fixture` name, `--dir`, or a shallow `--repo` clone).
 3. Resolves tasks: `--tasks` file, else the target's own `TASKS`, else generic read-only tasks.
 4. For each task: copies the target into its **own** scratch dir (`/tmp/aap-bench/<task>`),
@@ -141,53 +151,51 @@ Use `--dry-run` to print the exact commands (including the verify step) without 
    ```
    Every task is launched tagged with `--meta task=<id> --meta agent=<name> --meta run=<tag>`.
 
-## Example: A/B comparison (baseline vs optimize)
+## Example: A/B comparison (baseline vs hooks)
 
-> **Results:** the consolidated, honest findings from these A/B runs (why in-flight
-> optimization mostly doesn't beat the provider's prompt cache, and the caveats) live in
-> [`../docs/optimization/FINDINGS.md`](../docs/optimization/FINDINGS.md). Earlier
-> per-run reports (with pre-cache-write-fix numbers) are retained locally only.
+> **Results:** the consolidated, honest findings from our optimization experiments (why
+> proxy-level request rewriting doesn't beat the provider's prompt cache) live in
+> [`../docs/optimization/FINDINGS.md`](../docs/optimization/FINDINGS.md).
+> The only optimization that ships is `upgradeCacheTtl` (`--cache-1h`), a pure
+> cache-lifetime extension that never edits request content.
 
 ### One-shot: `iterative-fix-ab.sh`
 
-A self-contained A/B runner. It starts its own `aap serve` on an **isolated port**
-(default `8199`, so it never touches a proxy you already run on `:8080`), executes the
-task once baseline and once with `--optimize`, then prints the cost/token comparison and
-the optimize strategies that **actually fired live** (recorded per session, not
-simulated):
+A self-contained A/B runner comparing tool-output filtering (shell hooks) against bare
+agent output. It starts its own `aap serve` on an **isolated port** (default `8199`, so
+it never touches a proxy you already run on `:8080`), runs the task baseline (no hooks)
+and then with `--hooks`, then prints the cost/token comparison:
 
 ```
 ./benchmarks/iterative-fix-ab.sh opencode --fixture iterative-fix-plus
 ```
 
-Options: `--fixture <name>`, `--port <N>`, `--keep-serve`. For a fully separate DB, set
-`AAP_CONFIG=/path/to/isolated-config.toml` before running. Requires a freshly built +
-linked `aap` (`npm run build && npm link`).
+Options: `--fixture <name>`, `--port <N>`, `--keep-serve`, `--scenario baseline,hooks`.
+For a fully separate DB, set `AAP_CONFIG=/path/to/isolated-config.toml` before running.
+Requires a freshly built + linked `aap` (`npm run build && npm link`).
 
 ### Manual
 
 ```bash
-# Terminal 1 — baseline run
+# Terminal 1 — start the proxy
 AWS_PROFILE=claude aap serve
-# Terminal 2
-./benchmarks/run.sh claude --fixture task-queue --tag baseline
+# Terminal 2 — run with a tag
+./benchmarks/run.sh claude --fixture task-queue --tag run-1
 
-# Terminal 1 — restart with optimize
-AWS_PROFILE=claude aap serve --optimize
-# Terminal 2
-./benchmarks/run.sh claude --fixture task-queue --tag optimize
+# Run again with different settings and a different tag
+./benchmarks/run.sh claude --fixture task-queue --tag run-2
 
-# Compare
-aap compare --run baseline --run optimize
+# Compare side by side
+aap compare --run run-1 --run run-2
 ```
 
 Output:
 
 ```
-  ╭─ baseline vs optimize ─╮
+  ╭─ run-1 vs run-2 ─╮
 
   [explain]
-                   baseline  optimize      Δ
+                   run-1  run-2      Δ
   ──────────────────────────────────────────
   Requests                4         4      =
   Input tokens          558       558      =
@@ -197,7 +205,7 @@ Output:
   ...
 
   TOTAL
-                  baseline  optimize      Δ
+                  run-1  run-2      Δ
   ─────────────────────────────────────────
   Requests              24        25    +4%
   Input tokens       1,792     1,790      =
@@ -209,9 +217,9 @@ Output:
 ## Comparing
 
 ```
-aap compare --run baseline --run optimize    # full A/B across all tasks
-aap compare --task fix-bug                   # all fix-bug sessions
-aap compare --task fix-bug --run baseline    # just fix-bug from baseline
+aap compare --run run-1 --run run-2    # full A/B across all tasks
+aap compare --task fix-bug             # all fix-bug sessions
+aap compare --task fix-bug --run run-1 # just fix-bug from one run
 ```
 
 To roll every task up into a baseline report (mean per metric per agent, counting only
@@ -234,6 +242,66 @@ Or open the dashboard at `http://localhost:8080/ui`, pick a session, and read it
 
 ```
 aap export <session-id>        # Markdown report
+```
+
+## Statistical validation
+
+Compare distributions rather than single points:
+
+```
+node benchmarks/validate.mjs --baseline baseline --optimized optimize
+```
+
+Reports per-config summary table plus, when `--baseline`/`--optimized` are given:
+
+- **Cost savings** with 95% bootstrap confidence interval
+- **Quality non-inferiority** (success rate, edge score) with a configurable margin (default 5pp)
+- **Cohen's d** effect sizes per metric (negligible / small / medium / large)
+- **Benjamini-Hochberg** correction for multiple comparisons (controls false discovery rate)
+- **Regression guard** — raw failure counts per arm
+
+Sessions are filtered by `meta.task` and `meta.agent`; arms are grouped by `meta.run`.
+See [`docs/validation-architecture.md`](../docs/validation-architecture.md) for the full
+statistical methodology.
+
+## Regression guards
+
+`benchmarks/regressions.toml` defines version-controlled thresholds per metric. A violation
+causes `aap check` to exit non-zero, gating CI.
+
+```
+aap check --baseline <tag> --current <tag>       # exit 0 on pass, 1 on violation
+aap check --baseline <tag> --current <tag> --json  # machine-readable output
+```
+
+Thresholds (configurable):
+
+| Metric         | Default threshold  |
+| -------------- | ------------------ |
+| Cost           | +10% max increase  |
+| Success rate   | −5pp max decrease  |
+| Cache hit rate | −10pp max decrease |
+| Requests       | +20% max increase  |
+
+Per-task overrides (e.g. looser bounds for `fix-bug`) are supported. Budget caps
+(`max_total_cost_usd`, `max_per_task_cost_usd`) are also defined there.
+
+## Agent registry
+
+`benchmarks/agents.toml` is a version-controlled registry of agent configurations. Each
+section defines the binary, headless launch arguments, and optional environment variables.
+`run.sh` reads from it at runtime — adding a new agent is a TOML entry, not a code change.
+
+```toml
+[opencode]
+binary = "opencode"
+invoke = "run --auto"
+env = {}
+
+[claude]
+binary = "claude"
+invoke = "-p --dangerously-skip-permissions"
+env = { CLAUDE_CODE_USE_BEDROCK = "1" }
 ```
 
 ## Notes & honesty

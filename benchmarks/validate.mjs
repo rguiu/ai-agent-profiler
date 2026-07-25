@@ -184,6 +184,82 @@ const savingsHi = savingsBoot.hi / baseCost;
 const succDiff = bootDiff(opt, base, meanSucc); // opt - base
 const edgeDiff = bootDiff(opt, base, meanEdge); // opt - base
 
+// Cohen's d — standardized effect size, independent of sample size.
+// d = (mean1 − mean2) / pooled_std
+function std(arr, key) {
+  const xs = vals(arr, key);
+  const m = mean(xs);
+  if (xs.length < 2) return 0;
+  return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1));
+}
+function pooledStd(a1, a2, key) {
+  const s1 = std(a1, key);
+  const s2 = std(a2, key);
+  const n1 = vals(a1, key).length;
+  const n2 = vals(a2, key).length;
+  if (n1 < 2 || n2 < 2) return 0;
+  return Math.sqrt(((n1 - 1) * s1 ** 2 + (n2 - 1) * s2 ** 2) / (n1 + n2 - 2));
+}
+function cohensD(a1, a2, key) {
+  const s = pooledStd(a1, a2, key);
+  if (s === 0) return 0;
+  return (mean(vals(a2, key)) - mean(vals(a1, key))) / s;
+}
+function dLabel(d) {
+  const abs = Math.abs(d);
+  if (abs < 0.2) return "negligible";
+  if (abs < 0.5) return "small";
+  if (abs < 0.8) return "medium";
+  return "large";
+}
+
+const costD = cohensD(base, opt, "cost");
+const succD = cohensD(base, opt, "success");
+const edgeD = cohensD(base, opt, "edge");
+const cacheD = cohensD(base, opt, "cacheHit");
+
+// Benjamini-Hochberg correction for multiple comparisons.
+// Accepts an array of {label, pValue}, returns with adjusted rejection flags.
+function benjaminiHochberg(tests, alpha = 0.05) {
+  const sorted = [...tests].sort((a, b) => a.pValue - b.pValue);
+  const m = sorted.length;
+  for (let i = 0; i < m; i++) {
+    const bh = ((i + 1) / m) * alpha;
+    sorted[i].bhCritical = bh;
+    sorted[i].bhReject = sorted[i].pValue <= bh;
+  }
+  return sorted;
+}
+
+// Bootstrap p-values for each metric (two-sided).
+function bootPValue(aArr, bArr, stat, B = BOOT) {
+  const obs = stat(aArr) - stat(bArr);
+  const pooled = [...aArr, ...bArr];
+  let count = 0;
+  for (let i = 0; i < B; i++) {
+    const idx = Array.from(
+      { length: aArr.length + bArr.length },
+      () => (Math.random() * pooled.length) | 0,
+    );
+    const ra = idx.slice(0, aArr.length).map((j) => pooled[j]);
+    const rb = idx.slice(aArr.length).map((j) => pooled[j]);
+    const d = stat(ra) - stat(rb);
+    if (Math.abs(d) >= Math.abs(obs)) count++;
+  }
+  return (count + 1) / (B + 1);
+}
+
+const bhInput = [
+  { label: "cost", pValue: bootPValue(base, opt, meanCost) },
+  { label: "success rate", pValue: bootPValue(base, opt, meanSucc) },
+  { label: "edge score", pValue: bootPValue(base, opt, meanEdge) },
+  {
+    label: "cache hit rate",
+    pValue: bootPValue(base, opt, (g) => mean(vals(g, "cacheHit"))),
+  },
+];
+const bhResult = benjaminiHochberg(bhInput);
+
 console.log(`\n=== ${OPT} vs ${BASE} ===`);
 console.log(`n: baseline=${base.length}, optimized=${opt.length}`);
 if (base.length < 8 || opt.length < 8)
@@ -217,6 +293,40 @@ const optFails = vals(opt, "success").filter((v) => v === 0).length;
 console.log(
   `\nRegression guard: baseline failures ${baseFails}/${base.length}, optimized failures ${optFails}/${opt.length}`,
 );
+
+// Effect sizes
+console.log(`\nEffect sizes (Cohen's d):`);
+console.log(`  cost          d = ${costD.toFixed(2)} (${dLabel(costD)})`);
+console.log(`  success rate  d = ${succD.toFixed(2)} (${dLabel(succD)})`);
+console.log(`  edge score    d = ${edgeD.toFixed(2)} (${dLabel(edgeD)})`);
+console.log(`  cache hit     d = ${cacheD.toFixed(2)} (${dLabel(cacheD)})`);
+
+// BH correction
+console.log(`\nMultiple-comparison correction (Benjamini-Hochberg, α=0.05):`);
+console.log(
+  "  metric".padEnd(18) +
+    "p-value".padStart(10) +
+    "BH crit.".padStart(10) +
+    "  reject H0",
+);
+for (const r of bhResult) {
+  console.log(
+    `  ${r.label}`.padEnd(18) +
+      r.pValue.toFixed(4).padStart(10) +
+      r.bhCritical.toFixed(4).padStart(10) +
+      (r.bhReject ? "  ✓" : "  —"),
+  );
+}
+const bhRejected = bhResult
+  .filter((r) => r.bhReject)
+  .map((r) => r.label)
+  .join(", ");
+console.log(
+  bhRejected
+    ? `\nBH-rejected (significant after correction): ${bhRejected}`
+    : `\nNo comparisons were significant after BH correction.`,
+);
+
 console.log(
   `\nHeadline: ${(savings * 100).toFixed(0)}% cheaper` +
     (succDiff.lo > -MARGIN && edgeDiff.lo > -MARGIN

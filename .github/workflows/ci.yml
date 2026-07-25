@@ -20,3 +20,9 @@ jobs:
       - run: npm run format:check
       - run: npm test
       - run: npm run build
+      # Smoke-test the CLI: verify `aap check` command loads without crashing.
+      # Regression checks against actual benchmark data require tagged sessions
+      # and must be run locally:
+      #   aap check --baseline <run-tag> --current <run-tag>
+      # See docs/validation-architecture.md for the full workflow.
+      - run: node dist/cli/aap.js help | grep -q "check"

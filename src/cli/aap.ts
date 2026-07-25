@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { ConfigError, loadConfig } from "../config/index.js";
 import { analyzeClaude } from "./analyze-claude.js";
+import { checkRegressions } from "./check.js";
 import { commands } from "./commands.js";
 import { compareSessions } from "./compare.js";
 import { exportSession } from "./export.js";
@@ -34,6 +35,7 @@ Usage:
   aap tag <id> k=v     Tag a session with metadata (e.g. verify=pass)
   aap export <id>      Export a session report (Markdown; --json for JSON)
   aap compare <ids...> Compare sessions side by side (--json for JSON)
+  aap check --baseline <tag> --current <tag>  Check regression thresholds (exit 0/1)
   aap analyze-claude <id>  Inspect a Claude Code transcript (read-only; savings)
   aap hook install     Install tool-output filtering wrappers
   aap idle-gaps [--json] Bucket request idle gaps to assess cache TTL upgrade viability
@@ -76,6 +78,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "export":
       exportSession(argv.slice(1));
+      return;
+    case "check":
+      checkRegressions(argv.slice(1));
       return;
     case "compare":
       compareSessions(argv.slice(1));

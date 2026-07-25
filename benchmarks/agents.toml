@@ -1,0 +1,24 @@
+# Agent adapter registry for the benchmark runner.
+#
+# Each section defines how to invoke an agent in headless, auto-approving
+# mode — required for non-interactive benchmark tasks.
+#
+# Fields:
+#   binary  CLI executable (must be on PATH)
+#   invoke  Arguments for headless mode
+#   env     Environment variables set before launch (optional)
+
+[opencode]
+binary = "opencode"
+invoke = "run --auto"
+env = {}
+
+[claude]
+binary = "claude"
+invoke = "-p --dangerously-skip-permissions"
+env = {}
+
+[stackpilot]
+binary = "stackpilot"
+invoke = "--yolo -p"
+env = {}

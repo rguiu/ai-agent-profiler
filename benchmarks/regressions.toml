@@ -1,0 +1,46 @@
+# Regression thresholds for benchmark validation.
+#
+# Defines acceptable bounds for each metric when comparing a new run against a
+# baseline. Violations cause `aap check` to exit non-zero, gating CI.
+#
+# All percentages are relative to the baseline. "pp" = percentage points
+# (absolute difference in a proportion, e.g. 0.85 → 0.80 is −5 pp).
+
+[metrics]
+# Non-inferiority margin for quality metrics (decimal, not percent).
+# Optimized arm is non-inferior if its lower CI bound > baseline − margin.
+default_margin = 0.05
+
+# Per-metric thresholds. A threshold is violated when:
+#   (current − baseline) / baseline > max_increase_pct  (for cost, requests)
+#   baseline − current > max_decrease_pp               (for rates)
+
+[thresholds.cost]
+max_increase_pct = 10.0
+
+[thresholds.success_rate]
+max_decrease_pp = 5.0
+
+[thresholds.cache_hit_rate]
+max_decrease_pp = 10.0
+
+[thresholds.requests]
+max_increase_pct = 20.0
+
+# Per-task overrides — looser bounds for complex, multi-step tasks where the
+# agent legitimately needs more iterations to solve harder problems.
+
+[thresholds."fix-bug"]
+cost_max_increase_pct = 15.0
+success_max_decrease_pp = 10.0
+
+[thresholds."add-feature"]
+cost_max_increase_pct = 15.0
+success_max_decrease_pp = 10.0
+
+# Budget caps for benchmark suites — hard limits that prevent runaway agent
+# loops from exhausting API credits.
+
+[budget]
+max_total_cost_usd = 20.00
+max_per_task_cost_usd = 5.00
