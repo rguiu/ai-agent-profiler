@@ -430,7 +430,7 @@ function growthChart(points) {
   // Polygon: fresh-token area (red-tinted gap between total and cached)
   const freshArea = [
     ...total.map((v, i) => xy(v, i).join(",")),
-    ...cached.map((v, i) => xy(v, i).join(",")).split(" ").reverse().join(" "),
+    ...cached.map((v, i) => xy(v, i).join(",")).reverse().join(" "),
   ].join(" ");
 
   // Polyline strings
