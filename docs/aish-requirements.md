@@ -1,10 +1,12 @@
 # AISH — Requirements Skeleton (evidence-driven)
 
-AISH is a future execution environment for coding agents — an AI-native shell with
-repository-aware, token-efficient tools. This document is a **skeleton**: it lists candidate
-capabilities, but deliberately leaves the numbers blank. Per the project vision, **no AISH
-capability ships because it "sounds like a good idea"** — each must be justified by a
-profiler measurement and given a target to beat.
+AISH is a future tool layer for coding agents — repository-aware, token-efficient tools
+that reduce context waste by preventing it at the source rather than patching it afterward.
+It is delivered through three progressively-riskier vehicles (proxy `--optimize`, MCP tools,
+shell replacement — see below), not as a monolithic shell. This document is a **skeleton**:
+it lists candidate capabilities, but deliberately leaves the numbers blank. Per the project
+vision, **no AISH capability ships because it "sounds like a good idea"** — each must be
+justified by a profiler measurement and given a target to beat.
 
 > Profiler → evidence. AISH → optimisation. Every optimisation traces back to a metric here.
 
@@ -251,16 +253,28 @@ agent still reaches for bash out of habit."
 
 ### Recommended path
 
+Vehicle A (`--optimize`) was built and tested. Full findings in
+[`docs/optimization/FINDINGS.md`](../docs/optimization/FINDINGS.md) — the short version:
+most in-flight rewrites cannot beat the provider's prompt cache because editing the
+cached prefix costs more than it saves. The remaining safe Vehicle A wins are limited
+to deterministic, prefix-preserving transforms (`upgradeCacheTtl`, `normalizePrefix`).
+
+The honest path forward:
+
 ```
-Vehicle A (--optimize)  →  measure  →  Vehicle B (MCP tools)  →  measure  →  Vehicle C (if needed)
+Vehicle B (MCP tools)  →  measure  →  Vehicle A (limited, prefix-preserving)  →  Vehicle C (if still needed)
 ```
 
-Start with `--optimize` because:
+Vehicle B is now the recommended starting point because:
 
-1. Zero adoption friction — works with any agent today
-2. The proxy already has the data to decide when to optimise (it sees repeated reads, growing context, large results)
-3. Each optimization is independently measurable via `aap compare` (optimized vs baseline)
-4. If the proxy-level optimizations get 60%+ of the theoretical savings, the case for a full shell replacement weakens — which is useful information
+1. MCP tools prevent waste at the source (smarter reads, structured outputs, bounded
+   searches) — the profiler's `aap commands` and `top_tools` breakdown identifies which
+   bash verbs to replace first.
+2. No cache-prefix problem — the agent chooses to call a better tool, so there's no
+   risk of double writes or cache invalidation.
+3. The profiler can measure adoption and token savings via `aap compare` (session with
+   MCP tools vs baseline without).
+4. If Vehicle B captures most of the savings, Vehicle C (full shell) isn't needed.
 
 ---
 
@@ -306,8 +320,17 @@ Each optimization's value is measured by comparing sessions with vs without it:
 
 ## Detecting optimizable patterns — Easy targets with big benefits
 
-Based on the profiler's existing data model, these are the highest-value patterns to detect,
-ordered by expected ROI:
+> **Note:** the proxy-level optimization layer (`aap serve --optimize`) was built and tested
+> after this section was written. See [`docs/optimization/FINDINGS.md`](../docs/optimization/FINDINGS.md)
+> for the honest post-build assessment. The core finding: most in-flight rewrites cannot beat
+> the provider's prompt cache because editing the cached prefix triggers a cache write (costing
+> ~12.5× the read rate). Only deterministic, prefix-preserving transforms (`upgradeCacheTtl`,
+> `normalizePrefix`) net out positive. The patterns below remain valid as detection signals
+> and as justification for Vehicle B (MCP tools that prevent waste at the source), but the
+> estimated savings for proxy-level rewriting are overstated.
+>
+> Based on the profiler's existing data model, these are the highest-value patterns to detect,
+> ordered by expected ROI:
 
 ### 1. Repeated file reads (BIGGEST WIN)
 
@@ -373,13 +396,25 @@ read). At the proxy level, the best we can do is surface the pattern aggressivel
 recommendations so users know to add better tools to their agent.
 **Estimated savings:** 2-3 fewer requests per task × per-request overhead.
 
-### Priority order for implementation
+### Priority order (updated post-build, June 2024)
 
-1. **Repeated reads** — highest confidence, already detected, simple to implement
-2. **Truncate large results** — simple heuristic, big per-occurrence savings
-3. **Stable prefix** — zero risk, pure cost optimization, no semantic changes
-4. **Stale context pruning** — highest total savings but riskiest, needs careful measurement
-5. **Search→read** — better addressed via MCP tools (Vehicle B)
+The proxy-level optimization was built and tested. Findings in
+[`docs/optimization/FINDINGS.md`](../docs/optimization/FINDINGS.md). Revised priority:
+
+1. **Vehicle B (MCP tools) — recommended first step.** Build smarter tools that prevent waste
+   at source: bounded-search MCP tools for the top 3-5 most expensive bash patterns (see
+   `aap commands`), ranged/symbol reads (#1, #2), structured outputs (#7). Use the profiler's
+   `top_tools` and `aap commands` breakdown to choose targets. Measure with `aap compare`.
+2. **Vehicle A — deterministic prefix-preserving transforms.** The two safe wins that don't
+   disturb the cache prefix: `upgradeCacheTtl` (1h Anthropic cache, off by default) and
+   `normalizePrefix` (team cache sharing, designed but not implemented).
+3. **Stale context pruning** — highest total savings in theory, but the riskiest optimization
+   and requires the "observation used vs ignored" open metric. Defer until measured.
+4. **Repeated reads / truncate large results** — these were the original #1 and #2, but proxy-level
+   rewriting disturbs the cache prefix and the net cost is negative. They remain valid as
+   detection signals and as justification for Vehicle B tools that prevent the reads/results
+   from entering context in the first place.
+5. **Search→read** — better addressed via Vehicle B (an MCP tool that combines search + read).
 
 ---
 

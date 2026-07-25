@@ -14,7 +14,7 @@ Just as a CPU profiler identifies hotspots in software, AI Agent Profiler aims t
 
 ## What it does
 
-The profiler sits as a transparent, read-only proxy between a coding agent (Claude Code, Opencode) and an LLM provider (Anthropic, OpenAI-compatible). It observes, records, and analyses every interaction. It never changes requests.
+The profiler sits as a transparent proxy between a coding agent (Claude Code, Opencode) and an LLM provider (Anthropic, OpenAI-compatible). It observes, records, and analyses every interaction. In its default mode it never changes requests — an optional, off-by-default `--optimize` mode can rewrite the wire for experiments (separate from the profiler's core mission).
 
 - **Observe** — capture every request, response, streaming event, error, and timing.
 - **Understand** — extract higher-level structure: tool calls, context growth, repeated files, repeated prompts.
