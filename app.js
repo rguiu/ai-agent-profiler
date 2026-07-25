@@ -1,6 +1,5 @@
 const app = document.getElementById("app");
 
-// Map live-API paths to static JSON files on GitHub Pages.
 function fileKey(path) {
   let p = path.replace(/^\//, "");
   p = p.replace(/\?/g, "__q__").replace(/=/g, "-").replace(/&/g, "__");

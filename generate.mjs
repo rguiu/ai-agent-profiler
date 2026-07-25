@@ -195,7 +195,11 @@ async function main() {
   await write("/stats/trend?days=7", trend);
   await write("/stats/idle-gaps", idleGaps);
   await write("/projects", projects);
-  await write("/models", models);
+  // Filter out unknown/garbage model entries
+  const cleanModels = (models || []).filter(
+    (m) => m.model && m.model !== "unknown" && m.request_count > 0,
+  );
+  await write("/models", cleanModels);
 
   // Curate sessions
   const featured = curate(allSessions);
