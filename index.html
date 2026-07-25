@@ -9,17 +9,19 @@
   <body>
     <header>
       <h1><a href="#/">AI Agent Profiler</a></h1>
-      <nav>
-        <a href="#/">Dashboard</a>
-        <a href="#/sessions">Sessions</a>
+      <nav class="nav-bar">
+        <a href="#/" class="nav-link">Dashboard</a>
+        <a href="#/sessions" class="nav-link">Sessions</a>
+        <a href="#/models" class="nav-link">Models</a>
+        <a href="#/search" class="nav-link">Search</a>
+        <a href="#/introspections" class="nav-link">Introspections</a>
       </nav>
       <button id="refresh" title="Reload current view">Refresh</button>
     </header>
     <div class="demo-note">
-      Static, read-only demo — sample data from four DeepSeek / opencode
-      sessions (two benchmark runs + two development sessions). Local paths
-      and credentials have been redacted. Run
-      <code>aap serve</code> locally for the live tool.
+      Static, read-only demo — synthetic data from 6 sessions across 5
+      providers (Anthropic, OpenAI, DeepSeek, OpenRouter, Ollama).
+      Run <code>aap serve</code> locally for the live tool.
     </div>
     <main id="app"></main>
     <footer>

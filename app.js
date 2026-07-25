@@ -1,25 +1,34 @@
 const app = document.getElementById("app");
 
-// --- static-demo shim -------------------------------------------------------
-// The live app fetches a small JSON API (/sessions, /requests/:id, ...). For
-// the static GitHub Pages build we pre-render each of those responses to a file
-// under data/ and map the request path to it with an identical key function.
+// Map live-API paths to static JSON files on GitHub Pages.
 function fileKey(path) {
   let p = path.replace(/^\//, "");
   p = p.replace(/\?/g, "__q__").replace(/=/g, "-").replace(/&/g, "__");
   p = p.replace(/\//g, "__");
   return "data/" + p + ".json";
 }
+
+// Endpoints that don't exist in the static demo snapshot.
+const LIVE_ONLY = new Set([
+  "/stats/idle-gaps",
+  "/stats/latency",
+  "/stats/trend",
+  "/projects",
+  "/search",
+  "/search/status",
+  "/search/facets",
+  "/introspections",
+]);
+
 async function api(path) {
-  const url = fileKey(path);
-  const res = await fetch(url);
-  if (!res.ok)
-    throw new Error(
-      `${res.status} ${res.statusText} for ${path} (static demo has no data for this view)`,
-    );
+  const base = path.split("?")[0];
+  if (LIVE_ONLY.has(base)) {
+    throw new Error("This feature requires a live aap serve instance. Run locally for full data.");
+  }
+  const res = await fetch(fileKey(path));
+  if (!res.ok) throw new Error("static demo has no data for this view");
   return res.json();
 }
-// ---------------------------------------------------------------------------
 
 function esc(s) {
   return String(s ?? "").replace(
@@ -36,6 +45,13 @@ function esc(s) {
 }
 
 const num = (n) => (n ?? 0).toLocaleString();
+const numCompact = (n) => {
+  const v = n ?? 0;
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + "B";
+  if (v >= 1e6) return (v / 1e6).toFixed(0) + "M";
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + "K";
+  return String(Math.round(v));
+};
 const cost = (c) => (c ? `$${Number(c).toFixed(4)}` : "$0");
 const shortId = (id) => {
   if (!id) return "—";
@@ -62,6 +78,8 @@ const KIND_LABELS = {
   compact: "compact",
   recap: "recap",
   quota: "quota",
+  notification: "notification",
+  tool_result: "tool msg",
   unknown: "?",
 };
 const kindBadge = (kind) => {
@@ -83,6 +101,19 @@ function statusCell(s) {
   return `<span class="${cls}">${s}</span>`;
 }
 
+function formatDuration(start, end) {
+  const ms = new Date(end) - new Date(start);
+  if (ms < 0) return "—";
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "<1m";
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  if (hrs === 0) return `${rem}m`;
+  return rem > 0 ? `${hrs}h ${rem}m` : `${hrs}h`;
+}
+
+function deleteBtn() { return ""; }
+
 function b64ToText(b64) {
   try {
     const bin = atob(b64);
@@ -93,28 +124,133 @@ function b64ToText(b64) {
   }
 }
 
+async function decompressResponse(events) {
+  const bodyEvent = events.find((e) => e.type === "response_body" && e.data);
+  if (!bodyEvent) return "";
+  try {
+    const bin = atob(bodyEvent.data);
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  } catch {
+    return "";
+  }
+}
+
+// Parse raw response body (SSE or JSON) into human-readable text.
+function extractDisplayText(raw) {
+  if (!raw) return "";
+  // Anthropic SSE: data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}
+  if (raw.startsWith("event:") || raw.startsWith("data:")) {
+    let out = "";
+    for (const line of raw.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      try {
+        const obj = JSON.parse(line.slice(5).trim());
+        if (obj?.delta?.type === "text_delta" && obj.delta.text) {
+          out += obj.delta.text;
+        }
+      } catch {
+        /* skip malformed lines */
+      }
+    }
+    if (out) return out;
+  }
+  // OpenAI / DeepSeek JSON: {"choices":[{"message":{"content":"..."}}]}
+  try {
+    const obj = JSON.parse(raw);
+    const content =
+      obj?.choices?.[0]?.message?.content ||
+      obj?.choices?.[0]?.text ||
+      obj?.content;
+    if (typeof content === "string" && content.trim()) return content;
+  } catch {
+    /* not JSON */
+  }
+  return raw;
+}
+
 async function dashboard() {
-  const [stats, sessions, tools, commands, kinds] = await Promise.all([
+  const [
+    stats,
+    sessions,
+    tools,
+    commands,
+    kinds,
+    idleGaps,
+    latency,
+    trend,
+    projects,
+  ] = await Promise.all([
     api("/stats"),
     api("/sessions"),
     api("/tools"),
     api("/commands"),
     api("/kinds"),
+    api("/stats/idle-gaps").catch(() => null),
+    api("/stats/latency").catch(() => null),
+    api("/stats/trend?days=7").catch(() => null),
+    api("/projects").catch(() => null),
   ]);
   const cacheRate =
     stats.input_tokens > 0
       ? Math.round((stats.cached_input_tokens / stats.input_tokens) * 100)
       : 0;
+  const coldRefreshTokens = idleGaps?.coldRefreshTokens || 0;
+  const avgIn =
+    stats.requests > 0 ? Math.round(stats.input_tokens / stats.requests) : 0;
+  const avgCost = stats.sessions > 0 ? stats.cost / stats.sessions : 0;
+  const latP50 = latency?.byModel ? formatLatencyGlobal(latency) : null;
+  const trendHtml = trend ? cacheTrendSparkline(trend) : "";
+
   const cards = [
     ["Sessions", num(stats.sessions)],
     ["Requests", num(stats.requests)],
+    ["Cache hit", `${cacheRate}%`],
     [
       "Input tokens",
-      `${num(stats.input_tokens)}${cacheRate > 0 ? ` <span class="muted">(${cacheRate}% cached)</span>` : ""}`,
+      `${numCompact(stats.input_tokens)} · ~${numCompact(avgIn)}/req`,
     ],
-    ["Output tokens", num(stats.output_tokens)],
-    ["Est. cost", cost(stats.cost)],
+    ["Output tokens", numCompact(stats.output_tokens)],
+    ["Est. cost", `$${stats.cost.toFixed(2)} · $${avgCost.toFixed(2)}/session`],
+    ...(latP50 ? [["Latency (p50)", latP50]] : []),
+    ...(trendHtml ? [["Cache trend (7d)", trendHtml]] : []),
   ];
+
+  const topSessions = [...sessions]
+    .filter((s) => s.cost > 0 || s.request_count > 0)
+    .sort((a, b) => b.cost - a.cost);
+  const mostCostly = topSessions[0];
+  const mostReqs = [...sessions].sort(
+    (a, b) => b.request_count - a.request_count,
+  )[0];
+  const bestCache = [...sessions]
+    .filter((s) => s.input_tokens > 0)
+    .sort(
+      (a, b) =>
+        b.cached_input_tokens / b.input_tokens -
+        a.cached_input_tokens / a.input_tokens,
+    )[0];
+
+  function topSessionCard(s, label, detail) {
+    if (!s) return "";
+    const title = s.title || shortId(s.id);
+    return `<a class="top-session-card" href="#/sessions/${encodeURIComponent(s.id)}">
+      <div class="top-session-label">${label}</div>
+      <div class="top-session-title">${esc(title)}</div>
+      <div class="top-session-detail muted">${detail}</div>
+    </a>`;
+  }
+
+  const toolMax = Math.max(...tools.map((t) => t.count), 1);
+
+  const providerCosts = new Map();
+  for (const s of sessions) {
+    const p = s.client || "unknown";
+    providerCosts.set(p, (providerCosts.get(p) || 0) + (s.cost ?? 0));
+  }
+  const providersArr = [...providerCosts.entries()].sort((a, b) => b[1] - a[1]);
+  const maxProviderCost = Math.max(...providersArr.map(([, c]) => c), 1);
+
   app.innerHTML = `
     <h2>Dashboard</h2>
     <div class="cards">
@@ -125,15 +261,71 @@ async function dashboard() {
         )
         .join("")}
     </div>
-    <h2>Cost by kind</h2>
-    ${kindBreakdownTable(kinds)}
-    <h2>Tool usage</h2>
-    ${toolBars(tools)}
-    <h2>Shell commands</h2>
-    ${commandsTable(commands)}
-    <h2>Recent sessions</h2>
-    ${sessionsTable(sessions.slice(0, 15))}
-  `;
+    <div class="dashboard-grid">
+      <div>
+        <h2>Top sessions</h2>
+        <div class="top-sessions">
+          ${topSessionCard(
+            mostCostly,
+            "Most expensive",
+            `${cost(mostCostly?.cost)} · ${num(mostCostly?.request_count || 0)} reqs`,
+          )}
+          ${topSessionCard(
+            mostReqs,
+            "Most requests",
+            `${cost(mostReqs?.cost)} · ${num(mostReqs?.request_count || 0)} reqs`,
+          )}
+          ${topSessionCard(
+            bestCache,
+            "Best cache rate",
+            bestCache && bestCache.input_tokens > 0
+              ? `${Math.round((bestCache.cached_input_tokens / bestCache.input_tokens) * 100)}% · ${num(bestCache.request_count)} reqs`
+              : "",
+          )}
+        </div>
+        <h2>Cache idle gaps</h2>
+        ${idleGapsHtml(idleGaps)}
+        ${coldRefreshTokens > 0 ? `<p class="muted">~${numCompact(coldRefreshTokens)} tokens written from cold refreshes after gaps &gt;5 min. Reducing gaps (${idleGaps?.globalBuckets?.find((b) => b.bucket === "5m-1h")?.percent || 0}% in 5m-1h + ${idleGaps?.globalBuckets?.find((b) => b.bucket === ">1h")?.percent || 0}% &gt;1h) would lower this.</p>` : ""}
+      </div>
+      <div>
+        <h2>Cost by kind</h2>
+        ${kindBreakdownTable(kinds)}
+        <h2>Cost by provider</h2>
+        ${providerBars(providersArr, maxProviderCost)}
+      </div>
+    </div>
+    <div class="dashboard-subgrid">
+      ${
+        tools.length > 8
+          ? `<div class="collapsible"><h2>Tool usage</h2>${toolBars(tools, toolMax)}</div>`
+          : `<div><h2>Tool usage</h2>${toolBars(tools, toolMax)}</div>`
+      }
+      ${
+        commands.length > 8
+          ? `<div class="collapsible"><h2>Shell commands</h2>${commandsTable(commands)}</div>`
+          : `<div><h2>Shell commands</h2>${commandsTable(commands)}</div>`
+      }
+    </div>
+    ${projects && projects.length > 0 ? projectsSection(projects) : ""}`;
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".collapsible").forEach((c) => {
+      const rows = c.querySelectorAll(".bar-row, table tbody tr");
+      if (rows.length <= 8) return;
+      const label = c.querySelector(".bars") ? "tool" : "command";
+      for (let i = 8; i < rows.length; i++)
+        rows[i].classList.add("collapsed-row");
+      const btn = document.createElement("button");
+      btn.className = "show-toggle";
+      btn.textContent = `Show all (${rows.length} ${label}s)`;
+      btn.onclick = () => {
+        const expanded = c.classList.toggle("expanded");
+        btn.textContent = expanded
+          ? "Show less"
+          : `Show all (${rows.length} ${label}s)`;
+      };
+      c.appendChild(btn);
+    });
+  });
 }
 
 // Global cost/token breakdown by request kind, from the /kinds endpoint.
@@ -179,16 +371,30 @@ function commandsTable(rows) {
       .join("")}</tbody></table>`;
 }
 
-function toolBars(items) {
+function toolBars(items, scale) {
   if (!items || !items.length)
     return `<p class="empty">No tool calls recorded. Run <code>aap parse</code>.</p>`;
-  const max = Math.max(...items.map((t) => t.count), 1);
+  const max = scale ?? Math.max(...items.map((t) => t.count), 1);
   return `<div class="bars">${items
     .map((t) => {
       const amp = t.result_tokens
         ? ` · ~${num(t.result_tokens)} result tok`
         : "";
-      return `<div class="bar-row"><span class="bar-label mono">${esc(t.name)}</span><span class="bar-track"><span class="bar-fill" style="width:${((t.count / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${num(t.count)}${amp}</span></div>`;
+      const errRate =
+        t.error_count > 0
+          ? ` · <span class="err">${t.error_count} err (${((t.error_count / t.count) * 100).toFixed(0)}%)</span>`
+          : "";
+      return `<div class="bar-row"><span class="bar-label mono">${esc(t.name)}</span><span class="bar-track"><span class="bar-fill" style="width:${((t.count / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${num(t.count)}${amp}${errRate}</span></div>`;
+    })
+    .join("")}</div>`;
+}
+
+function providerBars(items, maxCost) {
+  if (!items || !items.length) return "";
+  return `<div class="bars">${items
+    .map(([name, c]) => {
+      const pct = ((c / maxCost) * 100).toFixed(1);
+      return `<div class="bar-row"><span class="bar-label"><span class="provider-badge provider-${esc(name)}">${esc(name)}</span></span><span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span><span class="bar-val num">${cost(c)}</span></div>`;
     })
     .join("")}</div>`;
 }
@@ -259,51 +465,218 @@ function growthChart(points) {
   </div>`;
 }
 
-function sessionsTable(sessions) {
+function cacheBadge(s) {
+  if (!s.input_tokens) return "";
+  const rate = Math.round((s.cached_input_tokens / s.input_tokens) * 100);
+  if (rate === 0) return "";
+  const cls =
+    rate >= 80 ? "cache-high" : rate >= 40 ? "cache-mid" : "cache-low";
+  return `<span class="cache-badge ${cls}">${rate}% cached</span>`;
+}
+
+function sessionsRows(sessions) {
   if (!sessions.length) return `<p class="empty">No sessions captured yet.</p>`;
-  return `<table>
-    <thead><tr>
-      <th>Session</th><th>Node</th><th>cwd</th>
-      <th class="num">Reqs</th><th class="num">In (total)</th><th class="num">Out</th>
-      <th class="num">Tools</th><th class="num">Cost</th><th>Last seen</th>
-    </tr></thead>
-    <tbody>
-    ${sessions
-      .map((s) => {
-        const cacheHint =
-          s.cached_input_tokens > 0 && s.input_tokens > 0
-            ? ` <span class="muted">(${Math.round((s.cached_input_tokens / s.input_tokens) * 100)}% cached)</span>`
-            : "";
-        return `<tr>
-      <td><a class="mono" href="#/sessions/${encodeURIComponent(s.id)}">${shortId(s.id)}</a></td>
-      <td>${esc((s.meta && s.meta.armada_node) || s.client) || "<span class='muted'>—</span>"}</td>
-      <td class="mono muted">${esc(s.cwd) || "—"}</td>
-      <td class="num">${num(s.request_count)}</td>
-      <td class="num">${num(s.input_tokens)}${cacheHint}</td>
-      <td class="num">${num(s.output_tokens)}</td>
-      <td class="num">${num(s.tool_calls)}</td>
-      <td class="num">${cost(s.cost)}</td>
-      <td class="mono muted">${esc((s.last_seen_at || "").replace("T", " ").slice(0, 19))}</td>
-    </tr>`;
-      })
-      .join("")}
-    </tbody></table>`;
+  return sessions
+    .map((s) => {
+      const title = s.title
+        ? `<a class="session-title" href="#/sessions/${encodeURIComponent(s.id)}">${esc(s.title)}</a>`
+        : `<a class="session-title mono" href="#/sessions/${encodeURIComponent(s.id)}">${shortId(s.id)}</a>`;
+      const summary = s.summary
+        ? `<div class="session-summary muted">${esc(s.summary.slice(0, 140))}${s.summary.length > 140 ? "…" : ""}</div>`
+        : "";
+      const meta = [
+        s.client
+          ? `<span class="provider-badge provider-${esc(s.client)}">${esc(s.client)}</span>`
+          : "",
+        s.cwd ? `<span class="mono muted">${esc(s.cwd)}</span>` : "",
+        s.last_seen_at
+          ? `<span class="muted">${esc(s.last_seen_at.replace("T", " ").slice(0, 16))}</span>`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const duration = formatDuration(s.first_seen_at, s.last_seen_at);
+      const badge = cacheBadge(s);
+      return `<div class="session-row" onclick="location.href='#/sessions/${encodeURIComponent(s.id)}'">
+        <div class="session-info">
+          ${title}
+          ${summary}
+          <div class="session-meta">${meta || '<span class="muted">—</span>'}</div>
+        </div>
+        <div class="session-stats">
+          <span class="stat">${num(s.request_count)} reqs</span>
+          ${badge}
+          <span class="stat num">${cost(s.cost)}</span>
+          <span class="stat muted">${duration}</span>
+        </div>
+        <div class="session-delete">${deleteBtn(`/sessions/${encodeURIComponent(s.id)}`, `session ${shortId(s.id)}`, true)}</div>
+      </div>`;
+    })
+    .join("");
 }
 
 async function sessions() {
   const list = await api("/sessions");
+  const filters = {
+    provider: "",
+    cwd: "",
+    minReqs: 0,
+    minCached: 0,
+    sort: "newest",
+  };
   let currentPage = 0;
   const PAGE = 25;
-  const totalPages = Math.ceil(list.length / PAGE);
+
+  function applyExcept(except) {
+    let filtered = [...list];
+    if (except !== "provider" && filters.provider)
+      filtered = filtered.filter((s) => s.client === filters.provider);
+    if (except !== "cwd" && filters.cwd)
+      filtered = filtered.filter((s) => (s.cwd || "(none)") === filters.cwd);
+    if (except !== "minReqs" && filters.minReqs > 0)
+      filtered = filtered.filter((s) => s.request_count >= filters.minReqs);
+    if (except !== "minCached" && filters.minCached > 0)
+      filtered = filtered.filter((s) => {
+        if (!s.input_tokens) return false;
+        return (
+          (s.cached_input_tokens / s.input_tokens) * 100 >= filters.minCached
+        );
+      });
+    return filtered;
+  }
+
+  function sortedProviders(base) {
+    const counts = new Map();
+    for (const s of base) {
+      if (s.client) counts.set(s.client, (counts.get(s.client) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }
+
+  function sortedCwds(base) {
+    const counts = new Map();
+    for (const s of base) {
+      const cwd = s.cwd || "(none)";
+      counts.set(cwd, (counts.get(cwd) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }
+
+  function apply() {
+    const filtered = applyExcept(null);
+    switch (filters.sort) {
+      case "oldest":
+        filtered.sort(
+          (a, b) =>
+            new Date(a.last_seen_at || 0) - new Date(b.last_seen_at || 0),
+        );
+        break;
+      case "most-reqs":
+        filtered.sort((a, b) => b.request_count - a.request_count);
+        break;
+      case "highest-cost":
+        filtered.sort((a, b) => b.cost - a.cost);
+        break;
+      case "highest-cache":
+        filtered.sort((a, b) => {
+          const ar =
+            a.input_tokens > 0 ? a.cached_input_tokens / a.input_tokens : 0;
+          const br =
+            b.input_tokens > 0 ? b.cached_input_tokens / b.input_tokens : 0;
+          return br - ar;
+        });
+        break;
+      default:
+        filtered.sort(
+          (a, b) =>
+            new Date(b.last_seen_at || 0) - new Date(a.last_seen_at || 0),
+        );
+    }
+    return filtered;
+  }
 
   function renderPage() {
+    const filtered = apply();
+    const providers = sortedProviders(applyExcept("provider"));
+    const cwds = sortedCwds(applyExcept("cwd"));
+    const totalPages = Math.ceil(filtered.length / PAGE);
+    currentPage = Math.min(currentPage, Math.max(0, totalPages - 1));
     const start = currentPage * PAGE;
-    const pageItems = list.slice(start, start + PAGE);
+    const pageItems = filtered.slice(start, start + PAGE);
     const pagination =
       totalPages > 1
         ? `<div class="pagination" data-target="sessions-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === currentPage ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
         : "";
-    app.innerHTML = `<h2>Sessions (${list.length})</h2>${pagination}${sessionsTable(pageItems)}${pagination}`;
+
+    const changed =
+      filtered.length !== list.length
+        ? ` <span class="muted">(${filtered.length} shown / ${list.length} total)</span>`
+        : "";
+
+    app.innerHTML = `
+    <h2>Sessions (${num(list.length)})${changed}</h2>
+    <div class="filter-bar">
+      <select id="filter-provider">
+        <option value="">All providers</option>
+        ${providers.map(([p, count]) => `<option value="${esc(p)}"${filters.provider === p ? " selected" : ""}>${esc(p)} (${count})</option>`).join("")}
+      </select>
+      <select id="filter-cwd">
+        <option value="">All directories</option>
+        ${cwds.map(([cwd, count]) => `<option value="${esc(cwd)}"${filters.cwd === cwd ? " selected" : ""}>${esc(cwd)} (${count})</option>`).join("")}
+      </select>
+      <input type="number" id="filter-minreqs" placeholder="Min reqs" value="${filters.minReqs || ""}" min="0" style="width:90px">
+      <input type="number" id="filter-mincache" placeholder="Min cache %" value="${filters.minCached || ""}" min="0" max="100" style="width:100px">
+      <select id="filter-sort">
+        <option value="newest" ${filters.sort === "newest" ? "selected" : ""}>Newest</option>
+        <option value="oldest" ${filters.sort === "oldest" ? "selected" : ""}>Oldest</option>
+        <option value="most-reqs" ${filters.sort === "most-reqs" ? "selected" : ""}>Most reqs</option>
+        <option value="highest-cost" ${filters.sort === "highest-cost" ? "selected" : ""}>Highest cost</option>
+        <option value="highest-cache" ${filters.sort === "highest-cache" ? "selected" : ""}>Best cache</option>
+      </select>
+      <button id="filter-reset" class="btn">Reset</button>
+    </div>
+    ${pagination}
+    ${sessionsRows(pageItems)}
+    ${pagination}`;
+
+    document
+      .getElementById("filter-provider")
+      .addEventListener("change", (e) => {
+        filters.provider = e.target.value;
+        currentPage = 0;
+        renderPage();
+      });
+    document.getElementById("filter-cwd").addEventListener("change", (e) => {
+      filters.cwd = e.target.value;
+      currentPage = 0;
+      renderPage();
+    });
+    document.getElementById("filter-minreqs").addEventListener("input", (e) => {
+      filters.minReqs = Number(e.target.value) || 0;
+      currentPage = 0;
+      renderPage();
+    });
+    document
+      .getElementById("filter-mincache")
+      .addEventListener("input", (e) => {
+        filters.minCached = Number(e.target.value) || 0;
+        currentPage = 0;
+        renderPage();
+      });
+    document.getElementById("filter-sort").addEventListener("change", (e) => {
+      filters.sort = e.target.value;
+      currentPage = 0;
+      renderPage();
+    });
+    document.getElementById("filter-reset").addEventListener("click", () => {
+      filters.provider = "";
+      filters.cwd = "";
+      filters.minReqs = 0;
+      filters.minCached = 0;
+      filters.sort = "newest";
+      currentPage = 0;
+      renderPage();
+    });
     document
       .querySelectorAll(".pagination[data-target='sessions-page'] .page-btn")
       .forEach((btn) => {
@@ -316,62 +689,316 @@ async function sessions() {
   renderPage();
 }
 
-const PAGE_SIZE = 50;
+function conversationHtml(requests, tcByRequest, chains, regen, selectedId) {
+  if (!requests || !requests.length)
+    return `<p class="empty">No requests in this session.</p>`;
+  const regenMap = regen || {};
+  const chainReadIds = new Set((chains || []).map((c) => c.readRequestId));
+  const chainSearchIds = new Set((chains || []).map((c) => c.searchRequestId));
 
-function paginatedRequestsTable(requests, page, regenerations) {
-  if (!requests.length) return `<p class="empty">No requests.</p>`;
-  const regen = regenerations || {};
-  const totalPages = Math.ceil(requests.length / PAGE_SIZE);
-  const start = page * PAGE_SIZE;
-  const pageItems = requests.slice(start, start + PAGE_SIZE);
-  const rows = pageItems
-    .map((r, idx) => {
-      const totalIn = (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
-      const inDisplay =
-        totalIn > 0
-          ? `${num(totalIn)}${r.cached_input_tokens ? ` <span class="muted">(${num(r.cached_input_tokens)} cached)</span>` : ""}`
-          : "—";
-      const rg = regen[r.id];
-      const ka = r.keep_alive;
-      const rowCls = ka
-        ? ' class="keepalive"'
-        : rg
-          ? ` class="regen regen-${esc(rg.severity)}"`
-          : "";
-      const regenCell = rg
-        ? `<span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
-        : "";
-      const kaCell = ka ? '<span class="ka-badge">♻ keep-alive</span>' : "";
-      const seq = start + idx + 1;
-      return `<tr${rowCls}>
-      <td class="num muted">${seq}</td>
-      <td><a class="mono" href="#/requests/${encodeURIComponent(r.id)}">${shortId(r.id)}</a>${kaCell ? ` ${kaCell}` : ""}</td>
-      <td>${kindBadge(r.kind)}</td>
-      <td class="mono muted">${dt(r.started_at)}</td>
-      <td>${esc(r.provider)}</td>
-      <td>${esc(r.method)}</td>
-      <td class="mono">${shortPath(r.path)}</td>
-      <td>${statusCell(r.status)}</td>
-      <td class="num">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</td>
-      <td class="mono">${esc(r.model) || "—"}</td>
-      <td class="num">${inDisplay}</td>
-      <td class="num">${r.output_tokens == null ? "—" : num(r.output_tokens)}</td>
-      <td>${esc(r.stop_reason) || "—"}${regenCell ? ` ${regenCell}` : ""}</td>
-      <td class="num">${num(r.tool_call_count)}</td>
-      <td class="num">${cost(r.cost)}</td>
-    </tr>`;
-    })
-    .join("");
-  const pagination =
-    totalPages > 1
-      ? `<div class="pagination" data-target="requests-page">${Array.from({ length: totalPages }, (_, i) => `<button class="page-btn${i === page ? " active" : ""}" data-page="${i}">${i + 1}</button>`).join("")}</div>`
+  function renderRow(r, i, hidden) {
+    const tcs = tcByRequest[r.id] || [];
+    const newIn = r.input_tokens ?? 0;
+    const cachedIn = r.cached_input_tokens ?? 0;
+    const totalIn = newIn + cachedIn;
+    const tokensLabel =
+      totalIn > 0
+        ? `${num(totalIn)} in${cachedIn > 0 ? ` (${num(newIn)} new + ${num(cachedIn)} cached)` : ""} → ${r.output_tokens != null ? num(r.output_tokens) + " out" : "—"}`
+        : "—";
+    const kind = r.kind || "unknown";
+    const rg = regenMap[r.id];
+    const ka = r.keep_alive;
+    const isSearch = chainSearchIds.has(r.id);
+    const isRead = chainReadIds.has(r.id);
+
+    const regenBadge = rg
+      ? ` <span class="regen-badge regen-${esc(rg.severity)}" title="${esc(rg.reason)}">cold ▲ ${num(rg.excessTokens)}</span>`
       : "";
-  return `<table><thead><tr>
-      <th class="num">#</th>
-      <th>Request</th><th>Kind</th><th>Started</th><th>Provider</th><th>Method</th><th>Path</th><th>Status</th>
-      <th class="num">Latency</th><th>Model</th><th class="num">In</th><th class="num">Out</th>
-      <th>Stop</th><th class="num">Tools</th><th class="num">Cost</th>
-    </tr></thead><tbody>${rows}</tbody></table>${pagination}`;
+    const chainBadge = isSearch
+      ? ' <span class="chain-badge chain-search" title="search→read chain: locate step">locate</span>'
+      : isRead
+        ? ' <span class="chain-badge chain-read" title="search→read chain: read step">read</span>'
+        : "";
+    const kaBadge = ka ? ' <span class="ka-badge">♻ keep-alive</span>' : "";
+    const rowCls = [
+      "conv-row",
+      selectedId === r.id ? "selected" : "",
+      ka ? "keepalive" : "",
+      rg ? `regen-${esc(rg.severity)}` : "",
+      hidden ? "hidden-child" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    const toolPreviews =
+      tcs.length > 0
+        ? `<div class="conv-tools-inline">${tcs
+            .map((tc, j) => {
+              const result =
+                tc.result_tokens != null
+                  ? ` <span class="muted">~${num(tc.result_tokens)} tok</span>`
+                  : "";
+              return `<span class="conv-tool"><span class="muted">${j + 1}.</span> ${esc(tc.name)}${result}</span>`;
+            })
+            .join("")}</div>`
+        : "";
+
+    const rowMeta = [
+      `<span class="conv-seq">#${requests.indexOf(r) + 1}</span>`,
+      kindBadge(kind),
+      statusCell(r.status),
+      `<span class="conv-model mono">${esc(r.model) || "?"}</span>`,
+      `<span class="conv-tokens">${tokensLabel}</span>`,
+      `<span class="conv-cost num">${cost(r.cost)}</span>`,
+      r.latency_ms != null
+        ? `<span class="muted">${num(r.latency_ms)}ms</span>`
+        : "",
+      regenBadge,
+      chainBadge,
+      kaBadge,
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    return `<div class="${rowCls}" id="req-${esc(r.id)}" onclick="window._selectRequest('${esc(r.id)}')">
+    <div class="conv-row-head">${rowMeta}</div>
+    ${toolPreviews}
+  </div>`;
+  }
+
+  // Group consecutive tool_result and search requests so they render as a
+  // single collapsed summary row unless expanded.
+  const groupKinds = new Set(["tool_result", "search"]);
+  const groups = [];
+  for (let i = 0; i < requests.length; i++) {
+    const r = requests[i];
+    const kind = r.kind || "unknown";
+    if (!groupKinds.has(kind)) {
+      groups.push({ kind: "single", items: [r] });
+      continue;
+    }
+    const group = [];
+    while (i < requests.length && (requests[i].kind || "unknown") === kind) {
+      group.push(requests[i]);
+      i++;
+    }
+    i--;
+    groups.push({ kind: "group", groupKind: kind, items: group });
+  }
+
+  const hasGroups = groups.some((g) => g.kind === "group");
+
+  return `<div class="conv-tree">${hasGroups ? `<div class="conv-tree-actions"><button class="btn btn-sm" onclick="document.querySelectorAll('.conv-group').forEach(g => g.open = true)">Expand all</button> <button class="btn btn-sm" onclick="document.querySelectorAll('.conv-group').forEach(g => g.open = false)">Collapse all</button></div>` : ""}${groups
+    .map((g) => {
+      if (g.kind === "single") {
+        return renderRow(g.items[0]);
+      }
+      const items = g.items;
+      const kind = g.groupKind;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const aggCost = items.reduce((s, r) => s + (r.cost ?? 0), 0);
+      const aggLatency = items.reduce((s, r) => s + (r.latency_ms ?? 0), 0);
+      const aggInput = items.reduce(
+        (s, r) => s + (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0),
+        0,
+      );
+      const aggOutput = items.reduce((s, r) => s + (r.output_tokens ?? 0), 0);
+      const allToolNames = new Set();
+      for (const r of items) {
+        for (const tc of tcByRequest[r.id] || []) allToolNames.add(tc.name);
+      }
+      const toolList = [...allToolNames].slice(0, 6).join(", ");
+      const overflow =
+        allToolNames.size > 6 ? ` +${allToolNames.size - 6} more` : "";
+
+      return `<details class="conv-group"${
+        items.some((r) => r.id === selectedId) ? " open" : ""
+      }>
+    <summary class="conv-group-summary">
+      <span class="conv-seq">#${requests.indexOf(first) + 1}-${requests.indexOf(last) + 1}</span>
+      ${kindBadge(kind)}
+      <span class="muted">${items.length} requests</span>
+      <span class="conv-model mono">${esc(first.model) || "?"}</span>
+      <span class="conv-tokens">${num(aggInput)} in → ${num(aggOutput)} out</span>
+      <span class="conv-cost num">${cost(aggCost)}</span>
+      <span class="muted">${num(aggLatency)}ms</span>
+      <span class="conv-tool" style="font-size:11px">${esc(toolList)}${overflow}</span>
+    </summary>
+    ${items.map((r) => renderRow(r, requests.indexOf(r), true)).join("")}
+  </details>`;
+    })
+    .join("")}</div>`;
+}
+
+function detailPanelHtml(r, stack) {
+  const events = r.events || [];
+  const responseText = r._responseText ?? "";
+
+  const userMsgs =
+    stack && stack.messages
+      ? stack.messages.filter((m) => m.role === "user" && !m.toolResultFor)
+      : [];
+  const lastUserMsg =
+    userMsgs.length > 0 ? userMsgs[userMsgs.length - 1] : null;
+  const showPrompt = r.kind === "main";
+  const searchTaskHtml =
+    r.kind === "search" && userMsgs.length > 0
+      ? `<h3>Search task</h3><blockquote class="user-prompt"><pre>${esc(userMsgs[0].preview)}</pre></blockquote>`
+      : "";
+  const userPromptHtml =
+    showPrompt && lastUserMsg && lastUserMsg.preview
+      ? `<h3>Prompt${userMsgs.length > 1 ? ` (user msg #${lastUserMsg.index + 1} of ${stack.messageCount} total)` : ""}</h3><blockquote class="user-prompt"><pre>${esc(lastUserMsg.preview)}</pre></blockquote>`
+      : "";
+
+  const eventLabels = {
+    request: "Request sent to provider",
+    request_body: "Request body chunk",
+    response: "Response headers received",
+    response_body: "Response body chunk",
+    stream_chunk: "Stream delta",
+    error: "Error",
+    end: "Request completed",
+  };
+  const eventTypes = Array.from(new Set(events.map((e) => e.type)));
+  const eventFlow =
+    eventTypes.length > 0 ? eventTypes.join(" → ") : "no events";
+
+  const eventsHtml =
+    events.length > 0
+      ? `<details class="events-detail">
+      <summary>Events (${events.length}) — flow: ${eventFlow}</summary>
+      <div class="mono">${events
+        .map((e) => {
+          const label = eventLabels[e.type] || e.type;
+          const size = e.data ? ` (${e.data.length} b64)` : "";
+          const ts = e.ts ? new Date(e.ts).toISOString().slice(11, 23) : "";
+          return `<div class="event"><span class="type">${esc(label)}</span> <span class="muted">${ts}</span>${size}</div>`;
+        })
+        .join("")}</div>
+      </details>`
+      : "";
+
+  const toolCalls = r.toolCalls || [];
+  const totalIn =
+    (r.input_tokens ?? 0) +
+    (r.cached_input_tokens ?? 0) +
+    (r.cache_creation_input_tokens ?? 0);
+
+  const kind = r.kind || "unknown";
+
+  const toolResultMsgs =
+    stack && stack.messages
+      ? stack.messages.filter((m) => m.toolResultFor || m.role === "tool")
+      : [];
+  const toolResultDeliveries =
+    toolResultMsgs.length > 0
+      ? `<details class="delivered-results">
+      <summary>Delivered results (${toolResultMsgs.length} tool output${toolResultMsgs.length !== 1 ? "s" : ""})</summary>
+      <div class="msg-list">${toolResultMsgs
+        .map((m) => {
+          const toolName = m.toolCallNames?.[0] || m.toolResultFor || "";
+          return `<details class="msg"><summary><span class="pill role-tool">${esc(toolName || "tool")}</span> <span class="num mono">~${num(m.tokens)} tok</span></summary><div class="mono msg-body">${esc(m.preview) || '<span class="muted">(empty)</span>'}</div></details>`;
+        })
+        .join("")}</div>
+      </details>`
+      : "";
+
+  const showContextSection = stack && stack.messageCount;
+  const contextHtml =
+    showContextSection && kind === "main"
+      ? `<h3>Context sent (${stack.messageCount} messages)</h3>${messageStackHtml(stack)}`
+      : showContextSection
+        ? `<details>
+    <summary>Context sent (${stack.messageCount} messages)</summary>
+    ${messageStackHtml(stack)}
+  </details>`
+        : "";
+
+  const toolsHtml =
+    toolCalls.length > 0
+      ? `<h3>Tools (${toolCalls.length})</h3>${toolCallsHtml(toolCalls)}`
+      : "";
+
+  const responseLabel =
+    kind === "recap"
+      ? "Recap"
+      : kind === "compact"
+        ? "Compacted summary"
+        : kind === "title"
+          ? "Session title"
+          : kind === "search"
+            ? "Search results"
+            : "Response";
+  const responsePreview =
+    responseText.length > 0
+      ? responseText.length > 10000
+        ? `<details><summary>${esc(responseLabel)} (${fmtBytes(responseText.length)})</summary><pre>${esc(responseText)}</pre></details>`
+        : `<h3>${esc(responseLabel)}</h3><pre>${esc(responseText)}</pre>`
+      : "";
+
+  const isSummaryKind =
+    kind === "recap" || kind === "compact" || kind === "title";
+
+  // Search kind: extract grep/glob/read patterns from tool calls
+  let searchSummaryHtml = "";
+  if (kind === "search" && toolCalls.length > 0) {
+    const grepPatterns = [];
+    const globPatterns = [];
+    const readFiles = [];
+    for (const tc of toolCalls) {
+      const name = tc.name || "";
+      let args = {};
+      try {
+        if (tc.arguments) args = JSON.parse(tc.arguments);
+      } catch {
+        /* ignore */
+      }
+      if (/grep|Grep|rg|search/i.test(name) && args.pattern)
+        grepPatterns.push(args.pattern);
+      else if (/glob|Glob/i.test(name) && args.pattern)
+        globPatterns.push(args.pattern);
+      else if (/read|Read|view/i.test(name) && args.file_path)
+        readFiles.push(args.file_path);
+    }
+    const parts = [];
+    if (grepPatterns.length)
+      parts.push(
+        `<span class="muted">grep:</span> ${grepPatterns.map((p) => `<code>${esc(p)}</code>`).join(", ")}`,
+      );
+    if (globPatterns.length)
+      parts.push(
+        `<span class="muted">glob:</span> ${globPatterns.map((p) => `<code>${esc(p)}</code>`).join(", ")}`,
+      );
+    if (readFiles.length)
+      parts.push(
+        `<span class="muted">files:</span> ${readFiles.map((f) => `<code>${esc(f.slice(-40))}</code>`).join(", ")}`,
+      );
+    if (parts.length)
+      searchSummaryHtml = `<div class="search-summary">${parts.join(" · ")}</div>`;
+  }
+
+  return `
+    ${userPromptHtml}
+    ${searchTaskHtml}
+    ${toolResultDeliveries}
+    ${isSummaryKind ? responsePreview : ""}
+    <div class="kv">
+      <div class="k">${kindBadge(r.kind)}</div><div class="v">${esc(r.model) || "—"}</div>
+      <div class="k">provider</div><div class="v">${esc(r.provider)}</div>
+      <div class="k">path</div><div class="v">${shortPath(r.path)}</div>
+      <div class="k">started</div><div class="v">${dt(r.started_at)}</div>
+      <div class="k">status</div><div class="v">${statusCell(r.status)}</div>
+      <div class="k">latency</div><div class="v">${r.latency_ms == null ? "—" : num(r.latency_ms) + " ms"}</div>
+      <div class="k">tokens (in)</div><div class="v">${num(totalIn)}${totalIn > 0 ? ` (${num(r.input_tokens ?? 0)} new + ${num(r.cached_input_tokens ?? 0)} cached${r.cache_creation_input_tokens ? ` + ${num(r.cache_creation_input_tokens)} write` : ""})` : ""}</div>
+      <div class="k">tokens (out)</div><div class="v">${r.output_tokens != null ? num(r.output_tokens) : "—"}</div>
+      <div class="k">cost</div><div class="v">${cost(r.cost)}</div>
+    </div>
+    ${searchSummaryHtml}
+    ${toolsHtml}
+    ${contextHtml}
+    ${isSummaryKind ? "" : responsePreview}
+    ${eventsHtml}`;
 }
 
 async function sessionDetail(id) {
@@ -392,57 +1019,101 @@ async function sessionDetail(id) {
     api(`/sessions/${encodeURIComponent(id)}/tool-calls`),
   ]);
 
-  let currentPage = 0;
-
-  function renderPage() {
-    const el = document.getElementById("requests-container");
-    if (el)
-      el.innerHTML = paginatedRequestsTable(
-        requests,
-        currentPage,
-        regenerations,
-      );
-    bindPagination();
+  const tcByRequest = {};
+  for (const tc of toolCalls || []) {
+    (tcByRequest[tc.request_id] = tcByRequest[tc.request_id] || []).push(tc);
   }
 
-  function bindPagination() {
-    const btns = document.querySelectorAll(
-      ".pagination[data-target='requests-page'] .page-btn",
-    );
-    btns.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        currentPage = Number(btn.dataset.page);
-        renderPage();
-      });
-    });
+  let selectedId = requests[0]?.id || null;
+  let selectedDetail = null;
+  let selectedStack = null;
+  if (selectedId) {
+    try {
+      [selectedDetail, selectedStack] = await Promise.all([
+        api(`/requests/${encodeURIComponent(selectedId)}?events=1`),
+        api(`/requests/${encodeURIComponent(selectedId)}/messages`),
+      ]);
+      if (selectedDetail) {
+        selectedDetail._responseText = await decompressResponse(
+          selectedDetail.events || [],
+        );
+      }
+    } catch {
+      selectedDetail = null;
+    }
   }
+
+  function renderDetail() {
+    const el = document.getElementById("detail-panel");
+    if (!el) return;
+    el.innerHTML = selectedDetail
+      ? detailPanelHtml(selectedDetail, selectedStack)
+      : `<div class="detail-empty"><p class="muted">Select a request to see details</p>
+         <div class="cards" style="margin-top:12px">
+           <div class="card"><div class="label">Requests</div><div class="value">${num(requests.length)}</div></div>
+           <div class="card"><div class="label">Cost</div><div class="value">${cost(requests.reduce((s, r) => s + (r.cost ?? 0), 0))}</div></div>
+         </div></div>`;
+  }
+
+  window._selectRequest = async function (requestId) {
+    selectedId = requestId;
+    document
+      .querySelectorAll(".conv-row")
+      .forEach((r) => r.classList.remove("selected"));
+    const row = document.getElementById(`req-${requestId}`);
+    if (row) row.classList.add("selected");
+    try {
+      [selectedDetail, selectedStack] = await Promise.all([
+        api(`/requests/${encodeURIComponent(requestId)}?events=1`),
+        api(`/requests/${encodeURIComponent(requestId)}/messages`),
+      ]);
+      if (selectedDetail) {
+        selectedDetail._responseText = await decompressResponse(
+          selectedDetail.events || [],
+        );
+      }
+    } catch {
+      selectedDetail = null;
+      selectedStack = null;
+    }
+    renderDetail();
+  };
+
+  const totalCost = requests.reduce((s, r) => s + (r.cost ?? 0), 0);
+  const totalInput =
+    analysis.context.input_tokens_total +
+    analysis.context.cached_input_tokens_total;
+  const cacheRate =
+    totalInput > 0
+      ? Math.round(
+          (analysis.context.cached_input_tokens_total / totalInput) * 100,
+        )
+      : 0;
+  const duration = formatDuration(session.first_seen_at, session.last_seen_at);
 
   app.innerHTML = `
     <div class="crumb"><a href="#/sessions">Sessions</a> / ${shortId(session.id)}</div>
-    <h2>Session ${shortId(session.id)}</h2>
-    <div class="kv">
-      <div class="k">id</div><div class="v">${esc(session.id)}</div>
-      <div class="k">client</div><div class="v">${esc(session.client) || "—"}</div>
-      <div class="k">cwd</div><div class="v">${esc(session.cwd) || "—"}</div>
-      <div class="k">repo</div><div class="v">${esc(session.repo) || "—"}</div>
-      <div class="k">started</div><div class="v">${esc(session.started_at) || "—"}</div>
-      ${
-        session.meta
-          ? Object.entries(session.meta)
-              .map(
-                ([k, v]) =>
-                  `<div class="k">meta.${esc(k)}</div><div class="v">${esc(v)}</div>`,
-              )
-              .join("")
-          : ""
-      }
+    <h2>${session.title ? esc(session.title) : `Session ${shortId(session.id)}`} ${deleteBtn(`/sessions/${encodeURIComponent(session.id)}`, `session ${shortId(session.id)}`, false)}</h2>
+    ${session.summary ? `<blockquote class="session-summary"><pre>${esc(session.summary)}</pre></blockquote>` : ""}
+    <div class="cards">
+      <div class="card"><div class="label">Cost</div><div class="value">${cost(totalCost)}</div></div>
+      <div class="card"><div class="label">Requests</div><div class="value">${num(requests.length)}</div></div>
+      <div class="card"><div class="label">Cache</div><div class="value">${cacheRate}%</div></div>
+      <div class="card"><div class="label">Duration</div><div class="value">${duration}</div></div>
+      ${session.client ? `<div class="card"><div class="label">Client</div><div class="value mono">${esc(session.client)}</div></div>` : ""}
+    </div>
+    <div class="split-layout">
+      <div class="conversation-panel">
+        ${conversationHtml(requests, tcByRequest, searchReadChains || [], regenerations, selectedId)}
+      </div>
+      <div class="detail-panel" id="detail-panel">
+        ${selectedDetail ? detailPanelHtml(selectedDetail, selectedStack) : `<div class="detail-empty"><p class="muted">Select a request to see details</p></div>`}
+      </div>
     </div>
     <h2>Recommendations</h2>
     ${recommendationsHtml(recommendations)}
     <h2>Cost by kind</h2>
     ${costByKind(requests)}
-    <h2>Requests (${requests.length})</h2>
-    <div id="requests-container">${paginatedRequestsTable(requests, currentPage, regenerations)}</div>
     <h2>Context growth</h2>
     ${growthChart(analysis.growth)}
     <h2>Context cost</h2>
@@ -452,10 +1123,7 @@ async function sessionDetail(id) {
     <h2>Shell commands</h2>
     ${commandsTable(commands)}
     <h2>Repeated tool calls</h2>
-    ${repeatedTable(analysis.repeated)}
-    <h2>Conversation tree</h2>
-    ${conversationTreeHtml(requests, toolCalls, searchReadChains || [])}`;
-  bindPagination();
+    ${repeatedTable(analysis.repeated)}`;
 }
 
 function recommendationsHtml(recs) {
@@ -475,6 +1143,7 @@ function costByKind(requests) {
   if (!requests || !requests.length) return `<p class="empty">No requests.</p>`;
   const order = [
     "main",
+    "tool_result",
     "search",
     "subagent",
     "guide",
@@ -483,6 +1152,7 @@ function costByKind(requests) {
     "compact",
     "title",
     "quota",
+    "notification",
     "unknown",
   ];
   const agg = {};
@@ -553,17 +1223,7 @@ async function requestDetail(id) {
     api(`/requests/${encodeURIComponent(id)}/messages`),
   ]);
   const events = r.events || [];
-  const responseEvent = events.find((e) => e.type === "response");
-  const encoding =
-    responseEvent &&
-    responseEvent.headers &&
-    responseEvent.headers["content-encoding"];
-  const responseText = encoding
-    ? `[${encoding}-encoded — run \`aap parse\` for metrics]`
-    : events
-        .filter((e) => e.type === "response_body")
-        .map((e) => b64ToText(e.data))
-        .join("");
+  const responseText = await decompressResponse(events);
   const toolCalls = r.toolCalls || [];
 
   app.innerHTML = `
@@ -660,81 +1320,295 @@ function toolCallsHtml(calls) {
     .join("")}</tbody></table>`;
 }
 
-function conversationTreeHtml(requests, toolCalls, chains) {
-  if (!requests || !requests.length)
-    return `<p class="empty">No requests in this session.</p>`;
-  const tcByRequest = {};
-  for (const tc of toolCalls || []) {
-    (tcByRequest[tc.request_id] = tcByRequest[tc.request_id] || []).push(tc);
-  }
-  const chainReadIds = new Set((chains || []).map((c) => c.readRequestId));
-  const chainSearchIds = new Set((chains || []).map((c) => c.searchRequestId));
+function idleGapsHtml(result) {
+  if (!result || !result.totalGaps)
+    return `<p class="empty">No idle gaps to show — need sessions with 2+ requests.</p>`;
+  const rows = result.globalBuckets
+    .map((b) => {
+      const label =
+        b.bucket === "<5m"
+          ? "&lt;5 min (cache alive)"
+          : b.bucket === "5m-1h"
+            ? "5 min–1h (1h TTL would help)"
+            : "&gt;1h (keep-alive needed)";
+      return `<tr><td>${label}</td><td class="num">${b.count}</td><td class="num">${b.percent.toFixed(1)}%</td></tr>`;
+    })
+    .join("");
+  return `<table><thead><tr><th>Bucket</th><th class="num">Gaps</th><th class="num">%</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">${result.totalGaps} total gaps across ${result.sessionsAnalyzed} session(s). ${result.globalBuckets.find((b) => b.bucket === "5m-1h")?.count || 0} gaps in the 5m–1h window would benefit from a 1h cache TTL upgrade.</p>`;
+}
+async function introspections() {
+  app.innerHTML = `<h2>Introspections</h2>
+    <p class="empty">Introspections require a live server. Run <code>aap intro opencode</code> locally.</p>`;
+}
 
-  return `<div class="tree">${requests
-    .map((r, i) => {
-      const tcs = tcByRequest[r.id] || [];
-      const hasTools = tcs.length > 0;
-      const totalIn = (r.input_tokens ?? 0) + (r.cached_input_tokens ?? 0);
-      const kind = r.kind || "unknown";
-      const isSearch = chainSearchIds.has(r.id);
-      const isRead = chainReadIds.has(r.id);
-      const chainBadge = isSearch
-        ? ' <span class="chain-badge chain-search" title="search→read chain: locate step">🔍 locate</span>'
-        : isRead
-          ? ' <span class="chain-badge chain-read" title="search→read chain: read step">📄 read</span>'
+async function introspectionDetail() {
+  app.innerHTML = `<h2>Introspection</h2>
+    <p class="empty">Introspections require a live server. Run <code>aap serve</code> locally.</p>`;
+}
+
+function timelineChart(entries) {
+  if (!entries || !entries.length)
+    return `<p class="empty">No timeline data.</p>`;
+  const max = Math.max(...entries.map((e) => e.cost || 0), 1);
+  const w = 640;
+  const h = 120;
+  const pad = 28;
+  const stepX = (w - pad * 2) / (entries.length - 1 || 1);
+  const xy = (v, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - (v / max) * (h - pad * 2);
+    return [x, y];
+  };
+  const line = entries.map((e, i) => xy(e.cost || 0, i).join(",")).join(" ");
+  const dots = entries
+    .map((e, i) => {
+      if (!e.cost) return "";
+      const [x, y] = xy(e.cost, i);
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" class="dot-write" />`;
+    })
+    .join("");
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">
+    <text x="${pad}" y="14" class="axis-label">cost per day (max ${cost(max)})</text>
+    <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" class="axis" />
+    <polyline points="${line}" class="line line-total" fill="none" />
+    ${dots}
+  </svg>
+  <div class="chart-legend">
+    <span class="lg lg-total">cost per day</span>
+  </div>`;
+}
+function projectBars(items) {
+  if (!items || !items.length) return `<p class="empty">No project data.</p>`;
+  const max = Math.max(...items.map((p) => p.cost || p.total_cost || 0), 0.01);
+  return `<div class="bars">${items
+    .map((p) => {
+      const label = p.project || p.repo || p.cwd || "?";
+      const costVal = p.cost || p.total_cost || 0;
+      const sessions =
+        p.sessions || p.session_count
+          ? ` · ${p.sessions || p.session_count} sessions`
           : "";
-      const ka = r.keep_alive
-        ? ' <span class="ka-badge">♻ keep-alive</span>'
-        : "";
-      return `<details class="tree-node${hasTools ? " has-tools" : ""}"${hasTools ? "" : ""}>
-        <summary class="tree-summary">
-          <span class="tree-seq">#${i + 1}</span>
-          ${kindBadge(kind)}
-          <span class="tree-provider mono">${esc(r.provider)}</span>
-          <span class="tree-model mono muted">${esc(r.model) || "?"}</span>
-          <span class="tree-tokens num">in ${num(totalIn)} / out ${num(r.output_tokens ?? 0)}</span>
-          <span class="tree-cost num">${cost(r.cost)}</span>
-          <span class="tree-tools num muted">${tcs.length} tool${tcs.length !== 1 ? "s" : ""}</span>
-          ${chainBadge}
-          ${ka}
-        </summary>
-        ${
-          hasTools
-            ? `<div class="tree-children">${tcs
-                .map((tc, j) => {
-                  let args = tc.arguments || "";
-                  try {
-                    if (args) args = JSON.stringify(JSON.parse(args));
-                  } catch {
-                    /* keep raw */
-                  }
-                  const maxArgs = 120;
-                  const argsDisplay =
-                    args.length > maxArgs ? args.slice(0, maxArgs) + "…" : args;
-                  return `<div class="tree-tool">
-            <span class="tree-tool-num muted">${j + 1}.</span>
-            <span class="tree-tool-name mono">${esc(tc.name)}</span>
-            <span class="tree-tool-args mono muted">${esc(argsDisplay) || "—"}</span>
-            ${tc.result_tokens != null ? `<span class="tree-tool-result num muted">~${num(tc.result_tokens)} tok result</span>` : ""}
-          </div>`;
-                })
-                .join("")}</div>`
-            : ""
-        }
-      </details>`;
+      return `<div class="bar-row"><span class="bar-label mono">${esc((label || "").slice(0, 40))}</span><span class="bar-track"><span class="bar-fill" style="width:${((costVal / max) * 100).toFixed(1)}%"></span></span><span class="bar-val num">${cost(costVal)}${sessions}</span></div>`;
     })
     .join("")}</div>`;
 }
 
-async function render() {
-  const hash = location.hash.slice(1) || "/";
+const SEARCH_KINDS = [
+  "prompt",
+  "response",
+  "tool_call",
+  "tool_result",
+  "title",
+  "error",
+];
+const SEARCH_PAGE_SIZE = 20;
+
+function searchHitHtml(hit, markers) {
+  const snippet = esc(hit.snippet)
+    .replaceAll(markers.start, "<mark>")
+    .replaceAll(markers.end, "</mark>");
+  const toolTag = hit.tool_name
+    ? ` <span class="pill">${esc(hit.tool_name)}</span>`
+    : "";
+  const errTag = hit.is_error ? ` <span class="err">error</span>` : "";
+  const fileTag = hit.file_path
+    ? `<div class="mono muted search-file">${shortPath(hit.file_path, 70)}</div>`
+    : "";
+  const project = hit.repo || hit.cwd;
+  return `<div class="search-hit">
+    <div class="search-hit-head">
+      <span class="pill">${esc(hit.kind)}</span>${toolTag}${errTag}
+      ${hit.provider ? `<span class="muted">${esc(hit.provider)}</span>` : ""}
+      <span class="muted">${dt(hit.ts)}</span>
+      <span class="mono"><a href="#/sessions/${encodeURIComponent(hit.session_id)}">${shortId(hit.session_id)}</a></span>
+      <span class="mono"><a href="#/requests/${encodeURIComponent(hit.request_id)}">req ${shortId(hit.request_id)}</a></span>
+      ${project ? `<span class="muted" title="${esc(project)}">${esc(String(project).split("/").pop())}</span>` : ""}
+    </div>
+    <div class="search-snippet">${snippet}</div>
+    ${fileTag}
+  </div>`;
+}
+
+function facetSelect(id, label, values, selected) {
+  const options = ["", ...values]
+    .map(
+      (v) =>
+        `<option value="${esc(v)}"${v === selected ? " selected" : ""}>${esc(v) || label}</option>`,
+    )
+    .join("");
+  return `<select id="${id}" title="${label}">${options}</select>`;
+}
+
+function searchPagination(page, totalPages) {
+  if (totalPages <= 1) return "";
+  return `<div class="pagination search-pages">
+    <button class="page-btn" data-page="${page - 1}" ${page === 0 ? "disabled" : ""}>‹ prev</button>
+    <span class="muted">page ${page + 1} of ${totalPages}</span>
+    <button class="page-btn" data-page="${page + 1}" ${page + 1 >= totalPages ? "disabled" : ""}>next ›</button>
+  </div>`;
+}
+
+async function searchView() {
+  app.innerHTML = `<h2>Search</h2>
+    <p class="empty">Full-text search requires a live server. Run <code>aap serve</code> locally.</p>`;
+}
+
+function formatLatency(toMs) {
+  if (toMs === null || toMs === undefined) return "—";
+  if (toMs < 1000) return `${Math.round(toMs)}ms`;
+  return `${(toMs / 1000).toFixed(1)}s`;
+}
+
+function formatLatencyGlobal(latency) {
+  const all = [];
+  for (const [, v] of Object.entries(latency.byModel || {})) {
+    if (v?.p50) all.push(v.p50);
+  }
+  if (all.length === 0) return null;
+  all.sort((a, b) => a - b);
+  const mid = Math.floor(all.length / 2);
+  return formatLatency(all[mid]);
+}
+
+function cacheTrendSparkline(trend) {
+  if (!trend || trend.length < 2) return "—";
+  const rates = trend.map((t) => t.cache_hit_rate);
+  const max = Math.max(...rates, 1);
+  const w = 80;
+  const h = 20;
+  const pad = 2;
+  const stepX = (w - pad * 2) / (rates.length - 1);
+  const points = rates
+    .map((v, i) => {
+      const x = pad + i * stepX;
+      const y = h - pad - (v / max) * (h - pad * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const latest = rates[rates.length - 1];
+  return `<svg class="sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="1.5" /></svg> ${(latest * 100).toFixed(0)}%`;
+}
+
+function projectsSection(projects) {
+  if (!projects || !projects.length) return "";
+  const maxCost = Math.max(...projects.map((p) => p.total_cost), 1);
+  const rows = projects
+    .slice(0, 10)
+    .map((p) => {
+      const name =
+        p.repo || p.cwd
+          ? `${p.repo || ""}${p.repo && p.cwd ? " · " : ""}${shortPath(p.cwd || "", 36)}`
+          : "—";
+      const pct = ((p.total_cost / maxCost) * 100).toFixed(1);
+      return `<div class="bar-row"><span class="bar-label mono">${name}</span><span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span><span class="bar-val num">${cost(p.total_cost)} · ${num(p.session_count)} sessions</span></div>`;
+    })
+    .join("");
+  return `<div class="projects-section"><h2>Cost by project</h2><div class="bars">${rows}</div></div>`;
+}
+
+async function modelsPage() {
+  let models;
   try {
-    if (hash === "/") return await dashboard();
-    if (hash === "/sessions") return await sessions();
-    const s = hash.match(/^\/sessions\/(.+)$/);
+    models = await api("/models");
+  } catch {
+    app.innerHTML = `<h2>Models</h2><p class="empty">Model comparison requires a live server. Run <code>aap serve</code> locally.</p>`;
+    return;
+  }
+  if (!models || !models.length) {
+    app.innerHTML = `<h2>Models</h2><p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+    return;
+  }
+
+  const totalCost = models.reduce((s, m) => s + (m.cost ?? 0), 0);
+  const rows = models
+    .map((m) => {
+      const cachePct = m.cache_hit_rate
+        ? `${(m.cache_hit_rate * 100).toFixed(0)}%`
+        : "—";
+      const costPct =
+        totalCost > 0 ? `${((m.cost / totalCost) * 100).toFixed(0)}%` : "—";
+      const avgCost =
+        m.request_count > 0
+          ? `$${(m.cost / m.request_count).toFixed(4)}/req`
+          : "—";
+      return `<tr>
+        <td><span class="mono">${esc(m.model)}</span></td>
+        <td><span class="provider-badge provider-${esc(m.provider)}">${esc(m.provider)}</span></td>
+        <td class="num">${num(m.request_count)}</td>
+        <td class="num">${num(m.session_count)}</td>
+        <td class="num">${cost(m.cost)}</td>
+        <td class="num">${avgCost}</td>
+        <td class="num">${costPct}</td>
+        <td class="num">${formatLatency(m.latency_p50)}</td>
+        <td class="num">${formatLatency(m.latency_p95)}</td>
+        <td class="num">${cachePct}</td>
+        <td class="num">${num(m.tool_calls)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const maxCost = Math.max(...models.map((m) => m.cost), 1);
+  app.innerHTML = `<h2>Model comparison</h2>
+    <div class="dashboard-grid">
+      <div>
+        <h2>Cost by model</h2>
+        <div class="bars">${models
+          .map((m) => {
+            const pct = ((m.cost / maxCost) * 100).toFixed(1);
+            return `<div class="bar-row"><span class="bar-label mono">${esc(m.model)}</span><span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span><span class="bar-val num">${cost(m.cost)}</span></div>`;
+          })
+          .join("")}</div>
+        <h2>Latency by model (p50 / p95)</h2>
+        <div class="bars">${models
+          .filter((m) => m.latency_p50)
+          .map((m) => {
+            const maxP95 = Math.max(
+              ...models.map((x) => x.latency_p95 ?? 0),
+              1,
+            );
+            const pct = m.latency_p95
+              ? ((m.latency_p95 / maxP95) * 100).toFixed(1)
+              : "0";
+            return `<div class="bar-row"><span class="bar-label mono">${esc(m.model)}</span><span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span><span class="bar-val num">${formatLatency(m.latency_p50)} / ${formatLatency(m.latency_p95)}</span></div>`;
+          })
+          .join("")}</div>
+      </div>
+      <div>
+        <h2>All models</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Model</th><th>Provider</th><th class="num">Reqs</th>
+              <th class="num">Sessions</th><th class="num">Cost</th>
+              <th class="num">Avg/req</th><th class="num">% cost</th>
+              <th class="num">p50</th><th class="num">p95</th>
+              <th class="num">Cache</th><th class="num">Tools</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+let currentHash = "/";
+
+async function render() {
+  currentHash = location.hash.slice(1) || "/";
+  try {
+    if (currentHash === "/") return await dashboard();
+    if (currentHash === "/sessions") return await sessions();
+    if (currentHash === "/models") return await modelsPage();
+    if (currentHash === "/search" || currentHash.startsWith("/search?"))
+      return await searchView(currentHash);
+    const s = currentHash.match(/^\/sessions\/(.+)$/);
     if (s) return await sessionDetail(decodeURIComponent(s[1]));
-    const q = hash.match(/^\/requests\/(.+)$/);
+    const q = currentHash.match(/^\/requests\/(.+)$/);
     if (q) return await requestDetail(decodeURIComponent(q[1]));
+    if (currentHash === "/introspections") return await introspections();
+    const i = currentHash.match(/^\/introspections\/(.+)$/);
+    if (i) return await introspectionDetail(decodeURIComponent(i[1]));
     app.innerHTML = `<p class="empty">Not found.</p>`;
   } catch (err) {
     app.innerHTML = `<p class="error">Error: ${esc(err.message)}</p>`;

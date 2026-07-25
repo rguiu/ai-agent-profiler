@@ -1,0 +1,1 @@
+[{"command":"pytest -xvs","category":"build","count":7,"resultTokens":4561},{"command":"npm test","category":"build","count":9,"resultTokens":4863},{"command":"mkdir -p tests/unit","category":"fs","count":6,"resultTokens":6442},{"command":"ruff check","category":"build","count":5,"resultTokens":9011}]
