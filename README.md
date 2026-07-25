@@ -65,7 +65,9 @@ the LLM.
   agent-native transcripts (Claude Code `~/.claude/projects`, opencode's local DB)
   into the same index, covering sessions that never went through the proxy.
 - **MCP server** (`aap mcp`) — tools exposing the profiler's data for agent self-introspection.
-- **Optimize layer** — 9 request-rewriting strategies, **off by default**; on cached providers it deliberately does very little (see below).
+- **Benchmark framework** — reproducible fixtures with verifiable outcomes, statistical
+  validation (bootstrap confidence intervals, Cohen's d, Benjamini-Hochberg correction),
+  and version-controlled regression thresholds that gate CI.
 
 See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
@@ -129,6 +131,7 @@ aap commands         # break shell commands down by token cost
 aap tag <id> k=v     # tag a session with metadata (e.g. verify=pass)
 aap export <id>      # export a session report (Markdown; add --json for JSON)
 aap compare <ids>    # compare sessions side by side (add --json for JSON)
+aap check --baseline <tag> --current <tag>  # check regression thresholds (exit 0/1)
 aap hook install     # install shell hooks for tool output filtering
 aap mcp              # start an MCP server (stdio) for agent self-introspection
 aap config           # print the resolved configuration
@@ -306,14 +309,57 @@ is in:
 verifiable bug) and a runner that executes the same tasks through an agent, tagged for
 profiling.
 
+### What you can compare
+
+| Scenario                 | Why                                                                         | How                                                                                                                                                                                    |
+| ------------------------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Agent A vs Agent B**   | opencode vs Claude Code — which solves tasks faster/cheaper?                | `./benchmarks/run.sh opencode --fixture task-queue --tag opencode` then `./benchmarks/run.sh claude --fixture task-queue --tag claude`, then `aap compare --run opencode --run claude` |
+| **Optimization on/off**  | Does stripping tools or enabling progressive loading improve cost?          | Run baseline + experiment with different `--tag` names, compare with `aap check --baseline baseline --current experiment`                                                              |
+| **Model comparison**     | Haiku vs Sonnet — is the cheaper model good enough?                         | Same agent, different `ANTHROPIC_MODEL` env var per run, tagged separately                                                                                                             |
+| **Release over release** | Did v2.0 regress from v1.0 on the same tasks?                               | Tag baseline sessions with `--tag v1.0`, re-run on new version with `--tag v2.0`, then `aap check --baseline v1.0 --current v2.0`                                                      |
+| **CI regression gate**   | Block PRs that degrade agent cost or success rate beyond allowed thresholds | `aap check --baseline <tag> --current <tag>` exits 0/1 based on `benchmarks/regressions.toml` thresholds                                                                               |
+
 ```
 aap serve
-./benchmarks/run.sh opencode --fixture task-queue
+./benchmarks/run.sh opencode --fixture task-queue --tag baseline
 aap sessions           # find the runs
-aap commands           # which shell commands cost the most
+aap compare --run baseline     # side-by-side comparison
 ```
 
-See [`benchmarks/README.md`](benchmarks/README.md).
+### Statistical validation
+
+Compare distributions (not single points) with bootstrap confidence intervals and
+non-inferiority tests:
+
+```
+node benchmarks/validate.mjs --baseline baseline --optimized optimize
+```
+
+Reports cost savings with 95% CI, quality non-inferiority, Cohen's d effect sizes,
+and Benjamini-Hochberg correction for multiple comparisons.
+
+### Regression guards
+
+Version-controlled thresholds in `benchmarks/regressions.toml` define acceptable bounds
+per metric (cost +10%, success rate −5pp, etc.). Gate CI against regressions:
+
+```
+aap check --baseline <tag> --current <tag>       # exit 0/1
+```
+
+### Agent registry
+
+Add agents to `benchmarks/agents.toml` — no code changes needed:
+
+```toml
+[my-agent]
+binary = "my-agent"
+invoke = "-p --auto"
+env = { API_KEY = "sk-..." }
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md) and
+[`docs/validation-architecture.md`](docs/validation-architecture.md).
 
 ## Development
 
@@ -341,6 +387,7 @@ api, ui, cli); the web dashboard is plain HTML/CSS/JS in `web/`.
 - [`docs/REQUEST-KINDS.md`](docs/REQUEST-KINDS.md) — how requests are classified (user turn vs subagent/recap/compaction/title) and the detection signals.
 - [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md) — what we tried to optimize, why it doesn't beat the cache, and where gains might still exist.
 - [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md) — per-strategy catalogue and cache-safety table.
+- [`docs/validation-architecture.md`](docs/validation-architecture.md) — full validation & benchmark architecture: fixtures, statistical tests, regression guards, agent adapters, anomaly tracing, budgets, HITL scoring.
 - [`docs/CACHE-BENCHMARK-METHODOLOGY.md`](docs/CACHE-BENCHMARK-METHODOLOGY.md) — how the byte-prefix cache works, TTL, cross-session warming, fair benchmark methodology.
 - [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md) — per-provider caching and optimizer notes.
 - [`docs/optimization/TODO.md`](docs/optimization/TODO.md) — future optimization roadmap (normalizePrefix, keep-alive, IASH; and why optimizeOnCold was abandoned).

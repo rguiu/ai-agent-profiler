@@ -112,12 +112,52 @@ fi
 
 [ -n "$AGENT" ] || { usage; exit 1; }
 
-case "$AGENT" in
-  opencode) INVOKE="run --auto" ;;
-  claude)   INVOKE="-p --dangerously-skip-permissions" ;;
-  stackpilot) INVOKE="--yolo -p" ;;
-  *) echo "unknown agent: $AGENT (use opencode, claude, or stackpilot)" >&2; exit 1 ;;
-esac
+# Resolve agent config from agents.toml (preferred), fall back to hardcoded list.
+AGENTS_TOML="$HERE/agents.toml"
+if [ -f "$AGENTS_TOML" ]; then
+  agent_config() {
+    node -e '
+      const fs = require("fs");
+      const { parse } = require("smol-toml");
+      const raw = fs.readFileSync(process.argv[1], "utf8");
+      const cfg = parse(raw);
+      const agent = cfg[process.argv[2]];
+      if (!agent) process.exit(1);
+      const invoke = agent.invoke || "";
+      const binary = agent.binary || process.argv[2];
+      const envKeys = Object.keys(agent.env || {});
+      const envVars = envKeys.map(k => k + "=" + agent.env[k]).join(" ");
+      console.log(binary + "\t" + invoke + "\t" + envVars);
+    ' "$AGENTS_TOML" "$AGENT" 2>/dev/null || true
+  }
+  AGENT_INFO=$(agent_config)
+  if [ -n "$AGENT_INFO" ]; then
+    AGENT_BIN=$(echo "$AGENT_INFO" | cut -f1)
+    INVOKE=$(echo "$AGENT_INFO" | cut -f2)
+    AGENT_ENV=$(echo "$AGENT_INFO" | cut -f3)
+    [ -n "$AGENT_ENV" ] && export $(echo "$AGENT_ENV")
+    echo "agent=$AGENT  binary=$AGENT_BIN  invoke=$INVOKE"
+  else
+    echo "unknown agent: $AGENT (not found in $AGENTS_TOML)" >&2
+    echo "available agents:" >&2
+    node -e '
+      const fs = require("fs");
+      const { parse } = require("smol-toml");
+      const raw = fs.readFileSync(process.argv[1], "utf8");
+      const cfg = parse(raw);
+      Object.keys(cfg).forEach(a => console.error("  " + a));
+    ' "$AGENTS_TOML" 2>/dev/null || true
+    exit 1
+  fi
+else
+  # Fallback when agents.toml is missing (legacy support)
+  case "$AGENT" in
+    opencode) AGENT_BIN="opencode"; INVOKE="run --auto" ;;
+    claude)   AGENT_BIN="claude"; INVOKE="-p --dangerously-skip-permissions" ;;
+    stackpilot) AGENT_BIN="stackpilot"; INVOKE="--yolo -p" ;;
+    *) echo "unknown agent: $AGENT (use opencode, claude, or stackpilot)" >&2; exit 1 ;;
+  esac
+fi
 
 SCRATCH="${AAP_BENCH_SCRATCH:-/tmp/aap-bench}"
 

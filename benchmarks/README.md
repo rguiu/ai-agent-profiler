@@ -14,6 +14,17 @@ task and per agent:
 - **tool-result token amplification** (how much tool output entered context)
 - **context growth** and **duplicated static context** (system prompt + tool defs re-sent)
 - number of **recommendations** the profiler raised
+- **cache hit rate** (how much input was served from the prompt cache)
+
+## What you can compare
+
+| Scenario                 | Why                                                                           | How                                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Agent A vs Agent B**   | opencode vs Claude Code — which solves tasks faster/cheaper?                  | Tag runs per agent, then `aap compare --run opencode --run claude`                                     |
+| **Optimization on/off**  | Does stripping tools, progressive loading, or cache pre-warming improve cost? | Run baseline + experiment with different `--tag`, `aap check --baseline baseline --current experiment` |
+| **Model comparison**     | Haiku vs Sonnet — is the cheaper model still good enough?                     | Same agent, different model env var per run, tagged separately                                         |
+| **Release over release** | Did v2.0 regress cost or success rate from v1.0?                              | `aap check --baseline v1.0 --current v2.0` exits 0/1 per `regressions.toml` thresholds                 |
+| **CI regression gate**   | Block PRs that degrade agent performance beyond allowed bounds                | Wire `aap check` into GitHub Actions, failing the workflow on violations                               |
 
 ## Where the tasks run (the target project)
 
@@ -93,10 +104,9 @@ To run your own tasks against any target, pass a file (one `id|prompt` per line 
 
 `./benchmarks/run.sh <agent> [target] [--tasks file] [--verify cmd] [--no-verify] [--save-artifacts] [--prune --tag <name>] [--dry-run]`:
 
-1. Maps the agent to its headless, auto-approving invocation: opencode →
-   `opencode run --auto`, claude → `claude -p --dangerously-skip-permissions`. Without
-   auto-approval the agent's edit/bash tools are rejected in non-interactive mode, so the
-   `fix-bug`/`add-feature` tasks can't act.
+1. Resolves the agent's headless, auto-approving invocation from `benchmarks/agents.toml`
+   (binary, launch args, env vars). Add new agents there — no code changes needed.
+   Without `agents.toml`, falls back to a hardcoded list (opencode, claude, stackpilot).
 2. Resolves the target source dir (`--fixture` name, `--dir`, or a shallow `--repo` clone).
 3. Resolves tasks: `--tasks` file, else the target's own `TASKS`, else generic read-only tasks.
 4. For each task: copies the target into its **own** scratch dir (`/tmp/aap-bench/<task>`),
@@ -234,6 +244,66 @@ Or open the dashboard at `http://localhost:8080/ui`, pick a session, and read it
 
 ```
 aap export <session-id>        # Markdown report
+```
+
+## Statistical validation
+
+Compare distributions rather than single points:
+
+```
+node benchmarks/validate.mjs --baseline baseline --optimized optimize
+```
+
+Reports per-config summary table plus, when `--baseline`/`--optimized` are given:
+
+- **Cost savings** with 95% bootstrap confidence interval
+- **Quality non-inferiority** (success rate, edge score) with a configurable margin (default 5pp)
+- **Cohen's d** effect sizes per metric (negligible / small / medium / large)
+- **Benjamini-Hochberg** correction for multiple comparisons (controls false discovery rate)
+- **Regression guard** — raw failure counts per arm
+
+Sessions are filtered by `meta.task` and `meta.agent`; arms are grouped by `meta.run`.
+See [`docs/validation-architecture.md`](../docs/validation-architecture.md) for the full
+statistical methodology.
+
+## Regression guards
+
+`benchmarks/regressions.toml` defines version-controlled thresholds per metric. A violation
+causes `aap check` to exit non-zero, gating CI.
+
+```
+aap check --baseline <tag> --current <tag>       # exit 0 on pass, 1 on violation
+aap check --baseline <tag> --current <tag> --json  # machine-readable output
+```
+
+Thresholds (configurable):
+
+| Metric         | Default threshold  |
+| -------------- | ------------------ |
+| Cost           | +10% max increase  |
+| Success rate   | −5pp max decrease  |
+| Cache hit rate | −10pp max decrease |
+| Requests       | +20% max increase  |
+
+Per-task overrides (e.g. looser bounds for `fix-bug`) are supported. Budget caps
+(`max_total_cost_usd`, `max_per_task_cost_usd`) are also defined there.
+
+## Agent registry
+
+`benchmarks/agents.toml` is a version-controlled registry of agent configurations. Each
+section defines the binary, headless launch arguments, and optional environment variables.
+`run.sh` reads from it at runtime — adding a new agent is a TOML entry, not a code change.
+
+```toml
+[opencode]
+binary = "opencode"
+invoke = "run --auto"
+env = {}
+
+[claude]
+binary = "claude"
+invoke = "-p --dangerously-skip-permissions"
+env = { CLAUDE_CODE_USE_BEDROCK = "1" }
 ```
 
 ## Notes & honesty
