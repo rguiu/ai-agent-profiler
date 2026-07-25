@@ -151,53 +151,51 @@ Use `--dry-run` to print the exact commands (including the verify step) without 
    ```
    Every task is launched tagged with `--meta task=<id> --meta agent=<name> --meta run=<tag>`.
 
-## Example: A/B comparison (baseline vs optimize)
+## Example: A/B comparison (baseline vs hooks)
 
-> **Results:** the consolidated, honest findings from these A/B runs (why in-flight
-> optimization mostly doesn't beat the provider's prompt cache, and the caveats) live in
-> [`../docs/optimization/FINDINGS.md`](../docs/optimization/FINDINGS.md). Earlier
-> per-run reports (with pre-cache-write-fix numbers) are retained locally only.
+> **Results:** the consolidated, honest findings from our optimization experiments (why
+> proxy-level request rewriting doesn't beat the provider's prompt cache) live in
+> [`../docs/optimization/FINDINGS.md`](../docs/optimization/FINDINGS.md).
+> The only optimization that ships is `upgradeCacheTtl` (`--cache-1h`), a pure
+> cache-lifetime extension that never edits request content.
 
 ### One-shot: `iterative-fix-ab.sh`
 
-A self-contained A/B runner. It starts its own `aap serve` on an **isolated port**
-(default `8199`, so it never touches a proxy you already run on `:8080`), executes the
-task once baseline and once with `--optimize`, then prints the cost/token comparison and
-the optimize strategies that **actually fired live** (recorded per session, not
-simulated):
+A self-contained A/B runner comparing tool-output filtering (shell hooks) against bare
+agent output. It starts its own `aap serve` on an **isolated port** (default `8199`, so
+it never touches a proxy you already run on `:8080`), runs the task baseline (no hooks)
+and then with `--hooks`, then prints the cost/token comparison:
 
 ```
 ./benchmarks/iterative-fix-ab.sh opencode --fixture iterative-fix-plus
 ```
 
-Options: `--fixture <name>`, `--port <N>`, `--keep-serve`. For a fully separate DB, set
-`AAP_CONFIG=/path/to/isolated-config.toml` before running. Requires a freshly built +
-linked `aap` (`npm run build && npm link`).
+Options: `--fixture <name>`, `--port <N>`, `--keep-serve`, `--scenario baseline,hooks`.
+For a fully separate DB, set `AAP_CONFIG=/path/to/isolated-config.toml` before running.
+Requires a freshly built + linked `aap` (`npm run build && npm link`).
 
 ### Manual
 
 ```bash
-# Terminal 1 — baseline run
+# Terminal 1 — start the proxy
 AWS_PROFILE=claude aap serve
-# Terminal 2
-./benchmarks/run.sh claude --fixture task-queue --tag baseline
+# Terminal 2 — run with a tag
+./benchmarks/run.sh claude --fixture task-queue --tag run-1
 
-# Terminal 1 — restart with optimize
-AWS_PROFILE=claude aap serve --optimize
-# Terminal 2
-./benchmarks/run.sh claude --fixture task-queue --tag optimize
+# Run again with different settings and a different tag
+./benchmarks/run.sh claude --fixture task-queue --tag run-2
 
-# Compare
-aap compare --run baseline --run optimize
+# Compare side by side
+aap compare --run run-1 --run run-2
 ```
 
 Output:
 
 ```
-  ╭─ baseline vs optimize ─╮
+  ╭─ run-1 vs run-2 ─╮
 
   [explain]
-                   baseline  optimize      Δ
+                   run-1  run-2      Δ
   ──────────────────────────────────────────
   Requests                4         4      =
   Input tokens          558       558      =
@@ -207,7 +205,7 @@ Output:
   ...
 
   TOTAL
-                  baseline  optimize      Δ
+                  run-1  run-2      Δ
   ─────────────────────────────────────────
   Requests              24        25    +4%
   Input tokens       1,792     1,790      =
@@ -219,9 +217,9 @@ Output:
 ## Comparing
 
 ```
-aap compare --run baseline --run optimize    # full A/B across all tasks
-aap compare --task fix-bug                   # all fix-bug sessions
-aap compare --task fix-bug --run baseline    # just fix-bug from baseline
+aap compare --run run-1 --run run-2    # full A/B across all tasks
+aap compare --task fix-bug             # all fix-bug sessions
+aap compare --task fix-bug --run run-1 # just fix-bug from one run
 ```
 
 To roll every task up into a baseline report (mean per metric per agent, counting only

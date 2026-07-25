@@ -186,8 +186,8 @@ set `apiPath` on its `[providers.<name>]` entry.
 streaming responses unless the request opts in, which otherwise leaves token counts —
 and therefore cost — unrecoverable. The proxy automatically injects
 `stream_options.include_usage` on streaming chat-completions for OpenAI-format
-providers (`openai`, `deepseek`), so usage is recorded on **every** request,
-independent of `--optimize`. Pricing lookup is tolerant of a `provider/` prefix and
+providers (`openai`, `deepseek`), so usage is always recorded on **every** request.
+Pricing lookup is tolerant of a `provider/` prefix and
 case, so a reported model like `deepseek/deepseek-chat` still resolves to the
 `deepseek-chat` table above. If usage is genuinely absent, tokens and cost stay `null`
 (never faked as `$0`) so a broken capture is visible.
@@ -295,13 +295,14 @@ wins when idle gaps fall between 5 min and 1 hour.
 `max_tokens: 1` to prevent cache expiry during idle. Best with `--cache-1h` (pings
 every 48 min vs every 4 min).
 
-The full story — what we tried, why proxy rewriting failed, and what works now —
-is in:
+These are the only proxy-level optimizations. An earlier effort to rewrite request
+bodies (stripping tools, summarising history, collapsing system prompts) was found
+to be counterproductive on cached providers — any edit to the byte prefix forces an
+expensive cache rebuild. The design is documented for reference:
 
 - [`docs/optimization/FINDINGS.md`](docs/optimization/FINDINGS.md)
 - [`docs/optimization/STRATEGIES.md`](docs/optimization/STRATEGIES.md)
 - [`docs/agents/anthropic.md`](docs/agents/anthropic.md), [`docs/agents/deepseek.md`](docs/agents/deepseek.md)
-- [`docs/agents/claude-code.md`](docs/agents/claude-code.md)
 
 ## Benchmarks
 
