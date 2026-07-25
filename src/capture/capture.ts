@@ -42,12 +42,19 @@ class FileRequestTrace implements RequestTrace {
   private status: number | null = null;
   private errorMessage: string | null = null;
   private finished = false;
+  private writeError: Error | null = null;
 
   constructor(
     private readonly store: Store,
     private readonly stream: WriteStream,
     private readonly ctx: RequestContext,
   ) {
+    this.stream.on("error", (err: Error) => {
+      this.writeError = err;
+      process.stderr.write(
+        `[capture] write error for ${ctx.requestId}: ${err.message}\n`,
+      );
+    });
     this.writeEvent({
       type: "request",
       ts: ctx.startedAt,
@@ -62,6 +69,7 @@ class FileRequestTrace implements RequestTrace {
   }
 
   private writeEvent(event: Record<string, unknown>): void {
+    if (this.stream.destroyed) return;
     this.stream.write(`${JSON.stringify(event)}\n`);
   }
 
