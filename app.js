@@ -1,6 +1,5 @@
 const app = document.getElementById("app");
 
-// Map live-API paths to static JSON files on GitHub Pages.
 function fileKey(path) {
   let p = path.replace(/^\//, "");
   p = p.replace(/\?/g, "__q__").replace(/=/g, "-").replace(/&/g, "__");
@@ -8,23 +7,7 @@ function fileKey(path) {
   return "data/" + p + ".json";
 }
 
-// Endpoints that don't exist in the static demo snapshot.
-const LIVE_ONLY = new Set([
-  "/stats/idle-gaps",
-  "/stats/latency",
-  "/stats/trend",
-  "/projects",
-  "/search",
-  "/search/status",
-  "/search/facets",
-  "/introspections",
-]);
-
 async function api(path) {
-  const base = path.split("?")[0];
-  if (LIVE_ONLY.has(base)) {
-    throw new Error("This feature requires a live aap serve instance. Run locally for full data.");
-  }
   const res = await fetch(fileKey(path));
   if (!res.ok) throw new Error("static demo has no data for this view");
   return res.json();
@@ -186,7 +169,7 @@ async function dashboard() {
     api("/tools"),
     api("/commands"),
     api("/kinds"),
-    api("/stats/idle-gaps").catch(() => null),
+    api("/stats/idle-gaps"),
     api("/stats/latency").catch(() => null),
     api("/stats/trend?days=7").catch(() => null),
     api("/projects").catch(() => null),
@@ -417,21 +400,18 @@ function repeatedTable(items) {
 
 function growthChart(points) {
   const pts = points || [];
-  // Three series: total input = new + cache-read + cache-write; cache read;
-  // cache write (spikes on a cold-cache refresh).
   const total = pts.map(
     (p) =>
       (p.input_tokens ?? 0) +
       (p.cached_input_tokens ?? 0) +
       (p.cache_creation_input_tokens ?? 0),
   );
-  const read = pts.map((p) => p.cached_input_tokens ?? 0);
-  const write = pts.map((p) => p.cache_creation_input_tokens ?? 0);
+  const cached = pts.map((p) => p.cached_input_tokens ?? 0);
   if (total.length < 2 || total.every((v) => v === 0))
     return `<p class="empty">Not enough parsed data yet — run <code>aap parse</code>.</p>`;
   const w = 640;
-  const h = 160;
-  const pad = 28;
+  const h = 200;
+  const pad = 32;
   const max = Math.max(...total, 1);
   const stepX = (w - pad * 2) / (total.length - 1);
   const xy = (v, i) => {
@@ -439,29 +419,71 @@ function growthChart(points) {
     const y = h - pad - (v / max) * (h - pad * 2);
     return [x, y];
   };
-  const poly = (vals, cls) =>
-    `<polyline points="${vals.map((v, i) => xy(v, i).join(",")).join(" ")}" class="${cls}" fill="none" />`;
-  // Emphasise cache-write points (cold refreshes) with a marker.
-  const writeDots = write
-    .map((v, i) => {
-      if (!v) return "";
-      const [x, y] = xy(v, i);
-      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" class="dot-write" />`;
+
+  // Polygon: cache area (green fill below cached line)
+  const cacheArea = [
+    ...cached.map((v, i) => xy(v, i).join(",")),
+    `${w - pad},${h - pad}`,
+    `${pad},${h - pad}`,
+  ].join(" ");
+
+  // Polygon: fresh-token area (red-tinted gap between total and cached)
+  const freshArea = [
+    ...total.map((v, i) => xy(v, i).join(",")),
+    ...cached.map((v, i) => xy(v, i).join(",")).reverse().join(" "),
+  ].join(" ");
+
+  // Polyline strings
+  const totalLine = total.map((v, i) => xy(v, i).join(",")).join(" ");
+  const cachedLine = cached.map((v, i) => xy(v, i).join(",")).join(" ");
+
+  // Cold refresh markers: where fresh > 30% of max or cache_creation > 0
+  const spikeThreshold = Math.max(max * 0.15, 10000);
+  const spikeDots = pts
+    .map((p, i) => {
+      const f = p.input_tokens ?? 0;
+      const w = p.cache_creation_input_tokens ?? 0;
+      if (f < spikeThreshold && w === 0) return "";
+      const [x, y] = xy(total[i], i);
+      const label = w > 0 ? `${numCompact(w)} write` : `${numCompact(f)} fresh`;
+      return `<g class="spike-marker">
+        <line x1="${x.toFixed(0)}" y1="${y.toFixed(0) - 4}" x2="${x.toFixed(0)}" y2="${h - pad}" class="spike-line" />
+        <circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="4" class="dot-write" />
+        <text x="${Math.min(x + 6, w - pad - 2).toFixed(0)}" y="${y.toFixed(0) - 8}" class="spike-label">${label}</text>
+      </g>`;
     })
+    .filter(Boolean)
     .join("");
-  const maxWrite = Math.max(...write, 0);
-  return `<svg class="chart" viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">
-    <text x="${pad}" y="16" class="axis-label">input tokens per request (max ${num(max)})</text>
+
+  // Y-axis guides
+  const yGuides = [0, 0.25, 0.5, 0.75, 1].map((frac) => {
+    const y = h - pad - frac * (h - pad * 2);
+    return `<line x1="${pad}" y1="${y.toFixed(0)}" x2="${w - pad}" y2="${y.toFixed(0)}" class="grid-line" />`;
+  }).join("");
+
+  // X-axis labels (show every 5th request label)
+  const xLabels = [];
+  for (let i = 0; i < pts.length; i += Math.max(1, Math.floor(pts.length / 8))) {
+    const [x] = xy(0, i);
+    xLabels.push(`<text x="${x.toFixed(0)}" y="${h - 10}" class="x-label">${i + 1}</text>`);
+  }
+
+  return `<svg class="chart growth-chart" viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">
+    <text x="${pad}" y="16" class="axis-label">input tokens per request (max ${numCompact(max)})</text>
     <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" class="axis" />
-    ${poly(total, "line line-total")}
-    ${poly(read, "line line-read")}
-    ${maxWrite > 0 ? poly(write, "line line-write") : ""}
-    ${writeDots}
+    ${yGuides}
+    <polygon points="${cacheArea}" class="area-cache" />
+    <polygon points="${freshArea}" class="area-fresh" />
+    <polyline points="${totalLine}" class="line line-total" fill="none" />
+    <polyline points="${cachedLine}" class="line line-read" fill="none" stroke-dasharray="6,4" />
+    ${spikeDots}
+    ${xLabels.join("")}
   </svg>
   <div class="chart-legend">
     <span class="lg lg-total">total input</span>
-    <span class="lg lg-read">cache read</span>
-    ${maxWrite > 0 ? `<span class="lg lg-write">cache write (cold refresh — max ${num(maxWrite)})</span>` : ""}
+    <span class="lg lg-read">cached tokens</span>
+    <span class="lg lg-fresh">fresh tokens (paid)</span>
+    <span class="muted" style="font-size:10px">— gap = what you pay</span>
   </div>`;
 }
 
@@ -1323,28 +1345,225 @@ function toolCallsHtml(calls) {
 function idleGapsHtml(result) {
   if (!result || !result.totalGaps)
     return `<p class="empty">No idle gaps to show — need sessions with 2+ requests.</p>`;
-  const rows = result.globalBuckets
-    .map((b) => {
-      const label =
-        b.bucket === "<5m"
-          ? "&lt;5 min (cache alive)"
-          : b.bucket === "5m-1h"
-            ? "5 min–1h (1h TTL would help)"
-            : "&gt;1h (keep-alive needed)";
-      return `<tr><td>${label}</td><td class="num">${b.count}</td><td class="num">${b.percent.toFixed(1)}%</td></tr>`;
-    })
-    .join("");
-  return `<table><thead><tr><th>Bucket</th><th class="num">Gaps</th><th class="num">%</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="muted">${result.totalGaps} total gaps across ${result.sessionsAnalyzed} session(s). ${result.globalBuckets.find((b) => b.bucket === "5m-1h")?.count || 0} gaps in the 5m–1h window would benefit from a 1h cache TTL upgrade.</p>`;
+  const buckets = result.globalBuckets || [];
+  const under5 = buckets.find((b) => b.bucket === "<5m");
+  const mid = buckets.find((b) => b.bucket === "5m-1h");
+  const over1h = buckets.find((b) => b.bucket === ">1h");
+  const safePct = under5?.percent?.toFixed(1) || "0";
+  const midPct = mid?.percent?.toFixed(1) || "0";
+  const lostPct = over1h?.percent?.toFixed(1) || "0";
+  const coldTokens = result.coldRefreshTokens || 0;
+
+  return `<div class="gaps-cards">
+    <div class="gap-card gap-safe">
+      <div class="gap-value">&lt;5 min</div>
+      <div class="gap-count">${num(under5?.count ?? 0)} gaps</div>
+      <div class="gap-desc">cache alive</div>
+    </div>
+    <div class="gap-card gap-warn">
+      <div class="gap-value">5 min–1 h</div>
+      <div class="gap-count">${num(mid?.count ?? 0)} gaps</div>
+      <div class="gap-desc">cache dead — 1h TTL would save</div>
+    </div>
+    <div class="gap-card gap-lost">
+      <div class="gap-value">&gt;1 hour</div>
+      <div class="gap-count">${num(over1h?.count ?? 0)} gaps</div>
+      <div class="gap-desc">completely lost</div>
+    </div>
+  </div>
+  <div class="gaps-bar">
+    <div class="gaps-bar-seg gaps-bar-safe" style="width:${safePct}%"></div>
+    <div class="gaps-bar-seg gaps-bar-warn" style="width:${midPct}%"></div>
+    <div class="gaps-bar-seg gaps-bar-lost" style="width:${lostPct}%"></div>
+  </div>
+  <div class="gaps-bar-labels">
+    <span class="gaps-bar-label gaps-bar-label-safe">${safePct}% safe</span>
+    <span class="gaps-bar-label gaps-bar-label-warn">${midPct}% salvageable</span>
+    <span class="gaps-bar-label gaps-bar-label-lost">${lostPct}% lost</span>
+  </div>
+  <p class="muted">${result.totalGaps} total gaps across ${result.sessionsAnalyzed} session(s). ${
+    (mid?.count ?? 0) > 0
+      ? `<strong>${mid.count} gaps</strong> in the 5m–1h window would benefit from a 1h cache TTL. `
+      : ""
+  }${
+    coldTokens > 0
+      ? `~${numCompact(coldTokens)} tokens written from cold refreshes after gaps &gt;5 min.`
+      : ""
+  }</p>`;
 }
 async function introspections() {
-  app.innerHTML = `<h2>Introspections</h2>
-    <p class="empty">Introspections require a live server. Run <code>aap intro opencode</code> locally.</p>`;
+  let list;
+  try {
+    list = await api("/introspections");
+  } catch {
+    app.innerHTML = `<p class="empty">No introspections yet — run <code>aap intro opencode</code> to start one.</p>`;
+    return;
+  }
+  if (!list || !list.length) {
+    app.innerHTML = `<p class="empty">No introspections yet — run <code>aap intro opencode</code> to start one.</p>`;
+    return;
+  }
+  app.innerHTML = `<h2>Introspections (${list.length})</h2>
+    <div class="intro-list">${list
+      .map((r) => {
+        const scope = r.report?.scope || "—";
+        const summary = r.report?.summary || "";
+        const totalCost = r.report?.cost_profile?.total_cost;
+        const badge = r.hasReport
+          ? '<span class="pill ok">report</span>'
+          : '<span class="pill muted">pending</span>';
+        return `<div class="intro-card-wrap">
+          <a class="intro-card" href="#/introspections/${encodeURIComponent(r.id)}">
+            <div class="intro-card-header">
+              <span class="intro-card-date mono">${esc(r.created)}</span>
+              ${badge}
+            </div>
+            <div class="intro-card-scope">${esc(scope)}</div>
+            ${summary ? `<div class="intro-card-summary muted">${esc(summary.slice(0, 200))}${summary.length > 200 ? "…" : ""}</div>` : ""}
+            ${totalCost != null ? `<div class="intro-card-cost">${cost(totalCost)} total</div>` : ""}
+          </a>
+          ${deleteBtn(`/introspections/${encodeURIComponent(r.id)}`, `introspection ${esc(r.created)}`, true)}
+        </div>`;
+      })
+      .join("")}</div>`;
 }
 
-async function introspectionDetail() {
-  app.innerHTML = `<h2>Introspection</h2>
-    <p class="empty">Introspections require a live server. Run <code>aap serve</code> locally.</p>`;
+async function introspectionDetail(id) {
+  let report;
+  try {
+    report = await api(`/introspections/${encodeURIComponent(id)}`);
+  } catch (err) {
+    app.innerHTML = `<p class="error">Error: ${esc(err.message)}</p>`;
+    return;
+  }
+  const graphs = report?.graphs || {};
+  const recs = report?.recommendations || [];
+  const tools = report?.tool_insights?.top_tools || report?.tool_insights || [];
+  const cp = report?.cost_profile || {};
+  const up = report?.usage_profile || {};
+  const sh = report?.session_highlights || [];
+  const amp = report?.tool_insights?.amplification_concerns || [];
+
+  function sevClass(s) {
+    if (s === "high") return "high";
+    if (s === "medium") return "warn";
+    return "info";
+  }
+
+  app.innerHTML = `<div class="crumb"><a href="#/introspections">Introspections</a> / ${esc(id.slice(0, 20))}…</div>
+    <h2>Introspection ${esc(report?.scope || id)} ${deleteBtn(`/introspections/${encodeURIComponent(id)}`, `introspection ${esc(id.slice(0, 20))}`, false)}</h2>
+    <div class="kv">
+      <div class="k">scope</div><div class="v">${esc(report?.scope || "—")}</div>
+      <div class="k">summary</div><div class="v">${esc(report?.summary || "—")}</div>
+    </div>
+    ${
+      cp.total_cost != null
+        ? `
+    <h2>Cost profile</h2>
+    <div class="cards">
+      <div class="card"><div class="label">Total cost</div><div class="value">${cost(cp.total_cost)}</div></div>
+      <div class="card"><div class="label">Avg per session</div><div class="value">${cost(cp.avg_cost_per_session || 0)}</div></div>
+      ${cp.median_session_cost != null ? `<div class="card"><div class="label">Median cost</div><div class="value">${cost(cp.median_session_cost)}</div></div>` : ""}
+      ${cp.most_expensive_session_cost != null ? `<div class="card"><div class="label">Most expensive</div><div class="value">${cost(cp.most_expensive_session_cost)}</div></div>` : ""}
+    </div>`
+        : ""
+    }
+    ${
+      up.total_requests != null
+        ? `
+    <h2>Usage</h2>
+    <div class="cards">
+      <div class="card"><div class="label">Requests</div><div class="value">${num(up.total_requests)}</div></div>
+      <div class="card"><div class="label">Input tokens</div><div class="value">${num(up.total_input_tokens)}</div></div>
+      <div class="card"><div class="label">Output tokens</div><div class="value">${num(up.total_output_tokens)}</div></div>
+      <div class="card"><div class="label">Tool calls</div><div class="value">${num(up.total_tool_calls)}</div></div>
+    </div>`
+        : ""
+    }
+    ${
+      graphs.daily_trend
+        ? `
+    <h2>Daily trend</h2>
+    ${timelineChart(graphs.daily_trend)}
+    `
+        : ""
+    }
+    ${
+      tools.length
+        ? `
+    <h2>Tool insights</h2>
+    <table><thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Result tokens</th><th class="num">Errors</th></tr></thead><tbody>
+    ${tools
+      .map((t) => {
+        const errs = t.error_count || 0;
+        const errHtml =
+          errs > 0
+            ? `<span class="err">${errs} (${((errs / (t.count || t.call_count || 1)) * 100).toFixed(0)}%)</span>`
+            : "—";
+        return `<tr><td>${esc(t.name)}</td><td class="num">${num(t.count || t.call_count || 0)}</td><td class="num">~${num(t.result_tokens || 0)}</td><td class="num">${errHtml}</td></tr>`;
+      })
+      .join("")}
+    </tbody></table>`
+        : ""
+    }
+    ${
+      amp.length
+        ? `
+    <div class="recs" style="margin-top:10px">${amp
+      .map(
+        (a) =>
+          `<div class="rec rec-warn"><span class="rec-sev">amp</span><div class="rec-body"><div class="rec-title">${esc(a.issue || "")}</div><div class="rec-detail muted">${esc(a.suggestion || "")}</div></div></div>`,
+      )
+      .join("")}</div>`
+        : ""
+    }
+    ${
+      sh.length
+        ? `
+    <h2>Session highlights</h2>
+    <table><thead><tr><th>Session</th><th class="num">Reqs</th><th class="num">Cost</th><th class="num">Duration</th><th>Top tool</th><th>Note</th></tr></thead><tbody>
+    ${sh
+      .map(
+        (s) =>
+          `<tr><td><a class="mono" href="#/requests/${esc(s.id)}">${shortId(s.id)}</a></td><td class="num">${num(s.requests)}</td><td class="num">${cost(s.cost)}</td><td class="num">${s.duration_minutes != null ? num(s.duration_minutes) + "m" : "—"}</td><td>${esc(s.top_tool || "—")}</td><td class="muted">${esc(s.note || "—")}</td></tr>`,
+      )
+      .join("")}</tbody></table>`
+        : ""
+    }
+    ${
+      graphs.cost_by_project
+        ? `
+    <h2>Cost by project</h2>
+    ${projectBars(graphs.cost_by_project)}
+    `
+        : ""
+    }
+    ${
+      recs.length
+        ? `
+    <h2>Recommendations</h2>
+    <div class="recs">${recs
+      .map((r) => {
+        if (typeof r === "string") {
+          return `<div class="rec rec-info"><span class="rec-sev">info</span><div class="rec-body"><div class="rec-title">${esc(r)}</div></div></div>`;
+        }
+        const title = r.title || r.finding || r.summary || "";
+        const detail = r.detail || r.suggestion || r.description || "";
+        const sev = sevClass(r.severity || r.level || "info");
+        return `<div class="rec rec-${sev}"><span class="rec-sev">${esc(r.severity || r.level || "info")}</span><div class="rec-body"><div class="rec-title">${esc(title)}</div>${detail ? `<div class="rec-detail muted">${esc(detail)}</div>` : ""}</div></div>`;
+      })
+      .join("")}</div>
+    `
+        : ""
+    }
+    ${
+      graphs.tool_usage
+        ? `
+    <h2>Tool usage</h2>
+    ${toolBars(graphs.tool_usage.map((t) => ({ name: t.tool || t.name, count: t.calls || t.count || 0, result_tokens: t.result_tokens || 0 })))}
+    `
+        : ""
+    }`;
 }
 
 function timelineChart(entries) {
@@ -1449,9 +1668,119 @@ function searchPagination(page, totalPages) {
   </div>`;
 }
 
-async function searchView() {
-  app.innerHTML = `<h2>Search</h2>
-    <p class="empty">Full-text search requires a live server. Run <code>aap serve</code> locally.</p>`;
+async function searchView(hash) {
+  const qIdx = hash.indexOf("?");
+  const params = new URLSearchParams(qIdx === -1 ? "" : hash.slice(qIdx + 1));
+  const q = params.get("q") ?? "";
+  const kind = params.get("kind") ?? "";
+  const errors = params.get("errors") === "1";
+  const file = params.get("file") ?? "";
+  const provider = params.get("provider") ?? "";
+  const project = params.get("project") ?? "";
+  const tool = params.get("tool") ?? "";
+  const page = Math.max(parseInt(params.get("page") ?? "0", 10) || 0, 0);
+
+  let status, facets;
+  try {
+    [status, facets] = await Promise.all([
+      api("/search/status"),
+      api("/search/facets"),
+    ]);
+  } catch {
+    app.innerHTML = `<h2>Search</h2><p class="empty">Search index is disabled. Enable <code>[search]</code> in config.toml and restart <code>aap serve</code>.</p>`;
+    return;
+  }
+
+  const kindOptions = ["", ...SEARCH_KINDS]
+    .map(
+      (k) =>
+        `<option value="${k}"${k === kind ? " selected" : ""}>${k || "all kinds"}</option>`,
+    )
+    .join("");
+
+  const hasFilters = q || errors || file || provider || project || tool || kind;
+  let resultsHtml = `<p class="empty">Search everything the proxy has captured: prompts, responses, tool calls, file edits, shell commands, errors.</p>`;
+  if (hasFilters) {
+    const query = new URLSearchParams();
+    if (q) query.set("q", q);
+    if (kind) query.set("kind", kind);
+    if (errors) query.set("errors", "1");
+    if (file) query.set("file", file);
+    if (provider) query.set("provider", provider);
+    if (project) query.set("project", project);
+    if (tool) query.set("tool", tool);
+    query.set("limit", String(SEARCH_PAGE_SIZE));
+    query.set("offset", String(page * SEARCH_PAGE_SIZE));
+    const data = await api(`/search?${query.toString()}`);
+    const totalPages = Math.ceil(data.total / SEARCH_PAGE_SIZE);
+    const pagination = searchPagination(page, totalPages);
+    resultsHtml = data.hits.length
+      ? `<p class="muted">${num(data.total)} hit(s)</p>${pagination}` +
+        data.hits.map((h) => searchHitHtml(h, data.markers)).join("") +
+        pagination
+      : `<p class="empty">No matches.</p>`;
+  }
+
+  app.innerHTML = `
+    <h2>Search</h2>
+    <form id="search-form" class="search-form">
+      <input type="search" id="search-q" placeholder="e.g. ZMQ port race, NullPointerException, advisory lock…" value="${esc(q)}" />
+      <select id="search-kind">${kindOptions}</select>
+      ${facetSelect("search-provider", "all providers", facets.providers, provider)}
+      ${facetSelect("search-project", "all projects", facets.projects, project)}
+      ${facetSelect("search-tool", "all tools", facets.tools, tool)}
+      <input type="text" id="search-file" class="search-file-input" placeholder="file filter (e.g. src/store.py)" value="${esc(file)}" />
+      <label class="search-errors"><input type="checkbox" id="search-errors"${errors ? " checked" : ""} /> errors only</label>
+      <button type="submit">Search</button>
+    </form>
+    <div id="search-results">${resultsHtml}</div>
+    <p class="muted search-status">${num(status.indexedRequests)} requests indexed · ${num(status.chunks)} chunks${status.failedRequests ? ` · ${num(status.failedRequests)} failed` : ""}${status.lastIndexedAt ? ` · last indexed ${dt(status.lastIndexedAt)}` : ""}</p>
+  `;
+
+  const navigate = (targetPage) => {
+    const next = new URLSearchParams();
+    const nq = document.getElementById("search-q").value.trim();
+    const nk = document.getElementById("search-kind").value;
+    const nf = document.getElementById("search-file").value.trim();
+    const ne = document.getElementById("search-errors").checked;
+    const np = document.getElementById("search-provider").value;
+    const npr = document.getElementById("search-project").value;
+    const nt = document.getElementById("search-tool").value;
+    if (nq) next.set("q", nq);
+    if (nk) next.set("kind", nk);
+    if (nf) next.set("file", nf);
+    if (ne) next.set("errors", "1");
+    if (np) next.set("provider", np);
+    if (npr) next.set("project", npr);
+    if (nt) next.set("tool", nt);
+    if (targetPage > 0) next.set("page", String(targetPage));
+    const target = `#/search${next.toString() ? `?${next.toString()}` : ""}`;
+    if (location.hash === target) {
+      render();
+    } else {
+      location.hash = target;
+    }
+  };
+
+  document.getElementById("search-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    navigate(0);
+  });
+  for (const sel of [
+    "search-kind",
+    "search-provider",
+    "search-project",
+    "search-tool",
+  ]) {
+    document.getElementById(sel).addEventListener("change", () => navigate(0));
+  }
+  document.querySelectorAll(".search-pages .page-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigate(Number(btn.dataset.page));
+    });
+  });
+  if (!hasFilters) document.getElementById("search-q").focus();
 }
 
 function formatLatency(toMs) {
@@ -1512,11 +1841,11 @@ async function modelsPage() {
   try {
     models = await api("/models");
   } catch {
-    app.innerHTML = `<h2>Models</h2><p class="empty">Model comparison requires a live server. Run <code>aap serve</code> locally.</p>`;
+    app.innerHTML = `<p class="error">Failed to load model data.</p>`;
     return;
   }
   if (!models || !models.length) {
-    app.innerHTML = `<h2>Models</h2><p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
+    app.innerHTML = `<p class="empty">No parsed requests yet — run <code>aap parse</code>.</p>`;
     return;
   }
 
