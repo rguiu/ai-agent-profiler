@@ -52,6 +52,21 @@ export function buildProviderEnv(
   return out;
 }
 
+// Claude Code caches its tool definitions per ANTHROPIC_BASE_URL; routing it
+// through the proxy changes that URL and invalidates the cache, so every
+// request resends the full tool list. ENABLE_TOOL_SEARCH defers tool schemas
+// instead, keeping the cache valid. Default it on for Claude Code unless the
+// caller already set it explicitly.
+export function buildToolSearchEnv(
+  agent: string,
+  env: NodeJS.ProcessEnv,
+): Record<string, string> {
+  if (agent === "claude" && env.ENABLE_TOOL_SEARCH === undefined) {
+    return { ENABLE_TOOL_SEARCH: "true" };
+  }
+  return {};
+}
+
 // A caller may pin the session id (e.g. a benchmark harness that needs to tag
 // the session with a verify result afterwards). Otherwise a fresh id is used.
 export function resolveSessionId(env: NodeJS.ProcessEnv): string {
@@ -153,6 +168,8 @@ export async function run(args: string[]): Promise<void> {
     meta.hooks = "1";
   }
 
+  const toolSearchOverrides = buildToolSearchEnv(agent, process.env);
+
   const session: SessionInfo = {
     id: sessionId,
     client: agent,
@@ -162,9 +179,18 @@ export async function run(args: string[]): Promise<void> {
     meta: Object.keys(meta).length > 0 ? meta : null,
   };
   await registerSession(origin, session);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...overrides,
+    ...toolSearchOverrides,
+  };
 
   console.error(`aap: session ${sessionId} (cwd ${cwd})`);
+  if (toolSearchOverrides.ENABLE_TOOL_SEARCH) {
+    console.error(
+      `aap: ENABLE_TOOL_SEARCH=true (default for claude, keeps tool-definition cache valid when routed through the proxy)`,
+    );
+  }
   if (overrides.OPENCODE_CONFIG_CONTENT) {
     console.error(
       `aap: routing opencode via OPENCODE_CONFIG_CONTENT (providers: ${Object.keys(config.providers).join(", ")})`,

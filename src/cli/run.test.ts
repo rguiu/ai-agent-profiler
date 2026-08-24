@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../config/index.js";
-import { buildProviderEnv, parseRunArgs, resolveSessionId } from "./run.js";
+import {
+  buildProviderEnv,
+  buildToolSearchEnv,
+  parseRunArgs,
+  resolveSessionId,
+} from "./run.js";
 
 const providers: Pick<Config, "providers"> = {
   providers: {
@@ -159,5 +164,23 @@ describe("resolveSessionId", () => {
     expect(resolveSessionId({}).length).toBeGreaterThan(0);
     const bad = resolveSessionId({ AAP_SESSION_ID: "has spaces/and!" });
     expect(bad).not.toBe("has spaces/and!");
+  });
+});
+
+describe("buildToolSearchEnv", () => {
+  it("defaults ENABLE_TOOL_SEARCH=true for claude when unset", () => {
+    expect(buildToolSearchEnv("claude", {})).toEqual({
+      ENABLE_TOOL_SEARCH: "true",
+    });
+  });
+
+  it("does not override an explicit ENABLE_TOOL_SEARCH", () => {
+    expect(
+      buildToolSearchEnv("claude", { ENABLE_TOOL_SEARCH: "false" }),
+    ).toEqual({});
+  });
+
+  it("does not set ENABLE_TOOL_SEARCH for other agents", () => {
+    expect(buildToolSearchEnv("opencode", {})).toEqual({});
   });
 });
