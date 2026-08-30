@@ -3,6 +3,7 @@ import type { Config } from "../config/index.js";
 import {
   buildProviderEnv,
   buildToolSearchEnv,
+  isFirstPartyAnthropic,
   parseRunArgs,
   resolveSessionId,
 } from "./run.js";
@@ -168,19 +169,92 @@ describe("resolveSessionId", () => {
 });
 
 describe("buildToolSearchEnv", () => {
-  it("defaults ENABLE_TOOL_SEARCH=true for claude when unset", () => {
-    expect(buildToolSearchEnv("claude", {})).toEqual({
+  it("defaults ENABLE_TOOL_SEARCH=true for claude on a first-party Anthropic endpoint", () => {
+    expect(buildToolSearchEnv("claude", {}, providers)).toEqual({
       ENABLE_TOOL_SEARCH: "true",
     });
   });
 
+  it("treats an *.anthropic.com enterprise endpoint as first-party", () => {
+    const enterprise: Pick<Config, "providers"> = {
+      providers: {
+        anthropic: { upstream: "https://enterprise.anthropic.com" },
+      },
+    };
+    expect(buildToolSearchEnv("claude", {}, enterprise)).toEqual({
+      ENABLE_TOOL_SEARCH: "true",
+    });
+  });
+
+  it("leaves ENABLE_TOOL_SEARCH unset for a non-Anthropic gateway", () => {
+    const gateway: Pick<Config, "providers"> = {
+      providers: {
+        anthropic: { upstream: "https://openrouter.ai/api/v1" },
+      },
+    };
+    expect(buildToolSearchEnv("claude", {}, gateway)).toEqual({});
+  });
+
+  it("leaves ENABLE_TOOL_SEARCH unset when no anthropic provider exists", () => {
+    const deepseekOnly: Pick<Config, "providers"> = {
+      providers: {
+        deepseek: { upstream: "https://api.deepseek.com" },
+      },
+    };
+    expect(buildToolSearchEnv("claude", {}, deepseekOnly)).toEqual({});
+  });
+
+  it("leaves ENABLE_TOOL_SEARCH unset for claude on Bedrock", () => {
+    expect(
+      buildToolSearchEnv("claude", { CLAUDE_CODE_USE_BEDROCK: "1" }, providers),
+    ).toEqual({});
+  });
+
   it("does not override an explicit ENABLE_TOOL_SEARCH", () => {
     expect(
-      buildToolSearchEnv("claude", { ENABLE_TOOL_SEARCH: "false" }),
+      buildToolSearchEnv("claude", { ENABLE_TOOL_SEARCH: "false" }, providers),
+    ).toEqual({});
+    expect(
+      buildToolSearchEnv("claude", { ENABLE_TOOL_SEARCH: "true" }, providers),
     ).toEqual({});
   });
 
   it("does not set ENABLE_TOOL_SEARCH for other agents", () => {
-    expect(buildToolSearchEnv("opencode", {})).toEqual({});
+    expect(buildToolSearchEnv("opencode", {}, providers)).toEqual({});
+  });
+});
+
+describe("isFirstPartyAnthropic", () => {
+  it("is true for api.anthropic.com", () => {
+    expect(isFirstPartyAnthropic(providers, {})).toBe(true);
+  });
+
+  it("is true for an *.anthropic.com enterprise host", () => {
+    const enterprise: Pick<Config, "providers"> = {
+      providers: {
+        anthropic: { upstream: "https://enterprise.anthropic.com" },
+      },
+    };
+    expect(isFirstPartyAnthropic(enterprise, {})).toBe(true);
+  });
+
+  it("is false for a non-anthropic upstream host", () => {
+    const gateway: Pick<Config, "providers"> = {
+      providers: { anthropic: { upstream: "https://openrouter.ai" } },
+    };
+    expect(isFirstPartyAnthropic(gateway, {})).toBe(false);
+  });
+
+  it("is false when the anthropic provider is missing", () => {
+    const deepseekOnly: Pick<Config, "providers"> = {
+      providers: { deepseek: { upstream: "https://api.deepseek.com" } },
+    };
+    expect(isFirstPartyAnthropic(deepseekOnly, {})).toBe(false);
+  });
+
+  it("is false when Bedrock is in use", () => {
+    expect(
+      isFirstPartyAnthropic(providers, { CLAUDE_CODE_USE_BEDROCK: "1" }),
+    ).toBe(false);
   });
 });
