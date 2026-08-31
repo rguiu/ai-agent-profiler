@@ -56,15 +56,46 @@ export function buildProviderEnv(
 // through the proxy changes that URL and invalidates the cache, so every
 // request resends the full tool list. ENABLE_TOOL_SEARCH defers tool schemas
 // instead, keeping the cache valid. Default it on for Claude Code unless the
-// caller already set it explicitly.
+// caller already set it explicitly — but only when the endpoint actually serves
+// a first-party Anthropic model. Deferred custom tools are only supported on
+// Anthropic models (upstream #89211); forcing ENABLE_TOOL_SEARCH=true for a
+// non-Anthropic endpoint (DeepSeek/Bedrock/Ollama/gateway) yields a 400.
 export function buildToolSearchEnv(
   agent: string,
   env: NodeJS.ProcessEnv,
+  config: Pick<Config, "providers">,
 ): Record<string, string> {
-  if (agent === "claude" && env.ENABLE_TOOL_SEARCH === undefined) {
-    return { ENABLE_TOOL_SEARCH: "true" };
+  if (agent !== "claude" || env.ENABLE_TOOL_SEARCH !== undefined) {
+    return {};
   }
-  return {};
+  return isFirstPartyAnthropic(config, env)
+    ? { ENABLE_TOOL_SEARCH: "true" }
+    : {};
+}
+
+// True when Claude Code will be talking to a first-party Anthropic endpoint.
+// Bedrock is a distinct API (AWS), not the Anthropic messages endpoint, so it
+// is not first-party here. Otherwise we trust the `anthropic` provider's
+// upstream host: only api.anthropic.com (or an *.anthropic.com enterprise
+// endpoint) counts. A third-party gateway serving a real Anthropic model is
+// deliberately left "not first-party" — the safe default is to not force true.
+export function isFirstPartyAnthropic(
+  config: Pick<Config, "providers">,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const useBedrock =
+    env.CLAUDE_CODE_USE_BEDROCK && env.CLAUDE_CODE_USE_BEDROCK !== "0";
+  if (useBedrock) return false;
+
+  const upstream = config.providers.anthropic?.upstream;
+  if (!upstream) return false;
+
+  try {
+    const host = new URL(upstream).hostname.toLowerCase();
+    return host === "api.anthropic.com" || host.endsWith(".anthropic.com");
+  } catch {
+    return false;
+  }
 }
 
 // A caller may pin the session id (e.g. a benchmark harness that needs to tag
@@ -168,7 +199,7 @@ export async function run(args: string[]): Promise<void> {
     meta.hooks = "1";
   }
 
-  const toolSearchOverrides = buildToolSearchEnv(agent, process.env);
+  const toolSearchOverrides = buildToolSearchEnv(agent, process.env, config);
 
   const session: SessionInfo = {
     id: sessionId,
@@ -186,10 +217,16 @@ export async function run(args: string[]): Promise<void> {
   };
 
   console.error(`aap: session ${sessionId} (cwd ${cwd})`);
-  if (toolSearchOverrides.ENABLE_TOOL_SEARCH) {
-    console.error(
-      `aap: ENABLE_TOOL_SEARCH=true (default for claude, keeps tool-definition cache valid when routed through the proxy)`,
-    );
+  if (agent === "claude" && process.env.ENABLE_TOOL_SEARCH === undefined) {
+    if (toolSearchOverrides.ENABLE_TOOL_SEARCH) {
+      console.error(
+        `aap: ENABLE_TOOL_SEARCH=true (claude + first-party Anthropic endpoint)`,
+      );
+    } else {
+      console.error(
+        `aap: ENABLE_TOOL_SEARCH left unset (claude + non-Anthropic endpoint)`,
+      );
+    }
   }
   if (overrides.OPENCODE_CONFIG_CONTENT) {
     console.error(
