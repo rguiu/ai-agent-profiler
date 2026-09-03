@@ -427,6 +427,14 @@ function forward(
           responseBytes += chunk.length;
           trace?.responseChunk(chunk);
         });
+        // Anthropic (and any upstream) can reset mid-stream on a long-running
+        // response. With no listener here, Node treats it as an unhandled
+        // 'error' event and throws, crashing the whole aap serve process.
+        upstreamRes.on("error", (err) => {
+          errorMessage = err.message;
+          trace?.error("upstream-read", err.message);
+          res.destroy();
+        });
         res.writeHead(status, upstreamRes.statusMessage, outHeaders);
         upstreamRes.pipe(res);
       },

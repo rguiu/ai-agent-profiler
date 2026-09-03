@@ -69,7 +69,7 @@ class FileRequestTrace implements RequestTrace {
   }
 
   private writeEvent(event: Record<string, unknown>): void {
-    if (this.stream.destroyed) return;
+    if (this.stream.destroyed || this.stream.writableEnded) return;
     this.stream.write(`${JSON.stringify(event)}\n`);
   }
 
