@@ -52,6 +52,20 @@ export function buildProviderEnv(
   return out;
 }
 
+// A caller passing `--tools ""` (or `--tools=`) to claude wants a genuinely
+// tool-less, non-agentic call (e.g. risk-review's single schema-validated
+// review pass). ENABLE_TOOL_SEARCH defers tool *schemas*, which is meaningless
+// — and was observed to still push the full tool-definition block into the
+// request — when the caller has already asked for zero tools.
+function explicitlyNoTools(agentArgs: string[]): boolean {
+  for (let i = 0; i < agentArgs.length; i++) {
+    const arg = agentArgs[i];
+    if (arg === "--tools" && agentArgs[i + 1] === "") return true;
+    if (arg === "--tools=") return true;
+  }
+  return false;
+}
+
 // Claude Code caches its tool definitions per ANTHROPIC_BASE_URL; routing it
 // through the proxy changes that URL and invalidates the cache, so every
 // request resends the full tool list. ENABLE_TOOL_SEARCH defers tool schemas
@@ -64,8 +78,13 @@ export function buildToolSearchEnv(
   agent: string,
   env: NodeJS.ProcessEnv,
   config: Pick<Config, "providers">,
+  agentArgs: string[] = [],
 ): Record<string, string> {
-  if (agent !== "claude" || env.ENABLE_TOOL_SEARCH !== undefined) {
+  if (
+    agent !== "claude" ||
+    env.ENABLE_TOOL_SEARCH !== undefined ||
+    explicitlyNoTools(agentArgs)
+  ) {
     return {};
   }
   return isFirstPartyAnthropic(config, env)
@@ -199,7 +218,12 @@ export async function run(args: string[]): Promise<void> {
     meta.hooks = "1";
   }
 
-  const toolSearchOverrides = buildToolSearchEnv(agent, process.env, config);
+  const toolSearchOverrides = buildToolSearchEnv(
+    agent,
+    process.env,
+    config,
+    agentArgs,
+  );
 
   const session: SessionInfo = {
     id: sessionId,
@@ -221,6 +245,10 @@ export async function run(args: string[]): Promise<void> {
     if (toolSearchOverrides.ENABLE_TOOL_SEARCH) {
       console.error(
         `aap: ENABLE_TOOL_SEARCH=true (claude + first-party Anthropic endpoint)`,
+      );
+    } else if (explicitlyNoTools(agentArgs)) {
+      console.error(
+        `aap: ENABLE_TOOL_SEARCH left unset (--tools "" passed — a tool-less call)`,
       );
     } else {
       console.error(

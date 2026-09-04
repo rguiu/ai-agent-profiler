@@ -222,6 +222,30 @@ describe("buildToolSearchEnv", () => {
   it("does not set ENABLE_TOOL_SEARCH for other agents", () => {
     expect(buildToolSearchEnv("opencode", {}, providers)).toEqual({});
   });
+
+  it('leaves ENABLE_TOOL_SEARCH unset when the caller passes --tools "" (a tool-less call)', () => {
+    expect(
+      buildToolSearchEnv("claude", {}, providers, [
+        "--print",
+        "--tools",
+        "",
+        "--model",
+        "sonnet",
+      ]),
+    ).toEqual({});
+  });
+
+  it("leaves ENABLE_TOOL_SEARCH unset for the --tools= form", () => {
+    expect(
+      buildToolSearchEnv("claude", {}, providers, ["--print", "--tools="]),
+    ).toEqual({});
+  });
+
+  it("still defaults ENABLE_TOOL_SEARCH=true when --tools has a non-empty value", () => {
+    expect(
+      buildToolSearchEnv("claude", {}, providers, ["--tools", "Bash,Read"]),
+    ).toEqual({ ENABLE_TOOL_SEARCH: "true" });
+  });
 });
 
 describe("isFirstPartyAnthropic", () => {
