@@ -205,7 +205,6 @@ function handle(
       logger,
       extraHeaders,
       throttle,
-      timeoutMs: route.provider === "ollama" ? 120_000 : undefined,
       sessionId: route.sessionId,
       prevBodies,
       cacheTtlUpgrade,
@@ -416,7 +415,12 @@ function forward(
         method: req.method,
         path: fullPath,
         headers,
-        timeout: timeoutMs ?? 30_000,
+        // Anthropic can go quiet for 30s+ with no bytes (not even a ping)
+        // during extended thinking; a short socket-inactivity timeout tears
+        // down the healthy stream and surfaces as "Connection lost
+        // mid-response" on the client. See bedrock.ts's STREAM_IDLE_TIMEOUT_MS
+        // for the same issue observed on that path.
+        timeout: timeoutMs ?? 120_000,
       },
       (upstreamRes) => {
         status = upstreamRes.statusCode ?? 502;
