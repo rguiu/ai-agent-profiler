@@ -93,6 +93,23 @@ export function buildToolSearchEnv(
     : {};
 }
 
+// Auto mode's classifier checks run server-side on Anthropic's API. Any other
+// backend (Ollama, DeepSeek, Bedrock, a gateway) can't perform them, so Claude
+// Code nags about ineligibility on every session. Opt out up front there.
+export function buildAutoModeEnv(
+  agent: string,
+  env: NodeJS.ProcessEnv,
+  config: Pick<Config, "providers">,
+  forceNonAnthropic = false,
+): Record<string, string> {
+  if (agent !== "claude" || env.CLAUDE_CODE_AUTO_MODE_SERVER !== undefined) {
+    return {};
+  }
+  return !forceNonAnthropic && isFirstPartyAnthropic(config, env)
+    ? {}
+    : { CLAUDE_CODE_AUTO_MODE_SERVER: "0" };
+}
+
 // True when Claude Code will be talking to a first-party Anthropic endpoint.
 // Bedrock is a distinct API (AWS), not the Anthropic messages endpoint, so it
 // is not first-party here. Otherwise we trust the `anthropic` provider's
@@ -239,6 +256,13 @@ export async function run(args: string[]): Promise<void> {
     ? {}
     : buildToolSearchEnv(agent, process.env, config, agentArgs);
 
+  const autoModeOverrides = buildAutoModeEnv(
+    agent,
+    process.env,
+    config,
+    ollamaPlan !== null,
+  );
+
   const session: SessionInfo = {
     id: sessionId,
     client: agent,
@@ -252,6 +276,7 @@ export async function run(args: string[]): Promise<void> {
     ...process.env,
     ...overrides,
     ...toolSearchOverrides,
+    ...autoModeOverrides,
   };
 
   console.error(`aap: session ${sessionId} (cwd ${cwd})`);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../config/index.js";
 import {
+  buildAutoModeEnv,
   buildProviderEnv,
   buildToolSearchEnv,
   isFirstPartyAnthropic,
@@ -245,6 +246,45 @@ describe("buildToolSearchEnv", () => {
     expect(
       buildToolSearchEnv("claude", {}, providers, ["--tools", "Bash,Read"]),
     ).toEqual({ ENABLE_TOOL_SEARCH: "true" });
+  });
+});
+
+describe("buildAutoModeEnv", () => {
+  const deepseekOnly: Pick<Config, "providers"> = {
+    providers: { deepseek: { upstream: "https://api.deepseek.com" } },
+  };
+
+  it("leaves auto mode server checks on for first-party Anthropic", () => {
+    expect(buildAutoModeEnv("claude", {}, providers)).toEqual({});
+  });
+
+  it("disables server checks for a non-Anthropic endpoint", () => {
+    expect(buildAutoModeEnv("claude", {}, deepseekOnly)).toEqual({
+      CLAUDE_CODE_AUTO_MODE_SERVER: "0",
+    });
+  });
+
+  it("disables server checks on Bedrock", () => {
+    expect(
+      buildAutoModeEnv("claude", { CLAUDE_CODE_USE_BEDROCK: "1" }, providers),
+    ).toEqual({ CLAUDE_CODE_AUTO_MODE_SERVER: "0" });
+  });
+
+  it("disables server checks when forced (ollama launcher)", () => {
+    expect(buildAutoModeEnv("claude", {}, providers, true)).toEqual({
+      CLAUDE_CODE_AUTO_MODE_SERVER: "0",
+    });
+  });
+
+  it("does not override an explicit value or touch other agents", () => {
+    expect(
+      buildAutoModeEnv(
+        "claude",
+        { CLAUDE_CODE_AUTO_MODE_SERVER: "1" },
+        deepseekOnly,
+      ),
+    ).toEqual({});
+    expect(buildAutoModeEnv("opencode", {}, deepseekOnly)).toEqual({});
   });
 });
 
