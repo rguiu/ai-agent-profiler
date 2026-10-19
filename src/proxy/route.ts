@@ -31,7 +31,7 @@ export function parseRoute(
   }
 
   // Ollama native paths: no prefix possible via OLLAMA_HOST. Attribute to the
-  // active ollama session (set by `aap run ollama`).
+  // active ollama session (set by `aap run ollama-cli`).
   if (providers.has("ollama") && OLLAMA_PATH_RE.test(pathname)) {
     return {
       sessionId: ollamaSessionId ?? null,

@@ -5,6 +5,7 @@ import { join, dirname } from "node:path";
 import { loadConfig, type Config } from "../config/index.js";
 import { ensureHooksInstalled, hooksPath } from "../hook/install.js";
 import type { SessionInfo } from "../session/index.js";
+import { planOllamaLaunch } from "./run-ollama.js";
 
 const PROVIDER_ENV: Readonly<Record<string, string>> = {
   anthropic: "ANTHROPIC_BASE_URL",
@@ -38,7 +39,7 @@ export function buildProviderEnv(
   // Ollama CLI talks to its native API and only honours OLLAMA_HOST (scheme+
   // host+port, no path). Point it at the proxy; requests are attributed to this
   // session via meta.ollama (see run()), matched by path in parseRoute.
-  if (agent === "ollama" && config.providers.ollama) {
+  if (agent === "ollama-cli" && config.providers.ollama) {
     out.OLLAMA_HOST = origin;
   }
 
@@ -179,13 +180,12 @@ export function parseRunArgs(
 }
 
 export async function run(args: string[]): Promise<void> {
-  const { meta, agent, agentArgs, cacheTtl, hooks } = parseRunArgs(
-    args,
-    process.env,
-  );
+  const parsedArgs = parseRunArgs(args, process.env);
+  const { meta, cacheTtl, hooks } = parsedArgs;
+  let { agent, agentArgs } = parsedArgs;
   if (!agent) {
     console.error(
-      "Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]",
+      "Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]\n       aap run ollama [--model <name>] [claude] [args...]",
     );
     process.exitCode = 1;
     return;
@@ -197,13 +197,29 @@ export async function run(args: string[]): Promise<void> {
   const origin = `http://${host}:${config.server.port}`;
   const cwd = process.cwd();
 
-  const overrides = buildProviderEnv(
-    agent,
-    config,
-    origin,
-    sessionId,
-    process.env,
-  );
+  // `aap run ollama`: pick model interactively and route Claude Code to the
+  // built-in ollama-cloud provider.
+  let ollamaPlan: Awaited<ReturnType<typeof planOllamaLaunch>> = null;
+  if (agent === "ollama") {
+    ollamaPlan = await planOllamaLaunch(
+      agentArgs,
+      process.env,
+      config,
+      origin,
+      sessionId,
+    );
+    if (!ollamaPlan) {
+      process.exitCode = 1;
+      return;
+    }
+    agent = ollamaPlan.agent;
+    agentArgs = ollamaPlan.agentArgs;
+    Object.assign(meta, ollamaPlan.meta);
+  }
+
+  const overrides =
+    ollamaPlan?.env ??
+    buildProviderEnv(agent, config, origin, sessionId, process.env);
   if (overrides.ANTHROPIC_BEDROCK_BASE_URL) {
     meta.bedrock = "1";
   }
@@ -218,12 +234,10 @@ export async function run(args: string[]): Promise<void> {
     meta.hooks = "1";
   }
 
-  const toolSearchOverrides = buildToolSearchEnv(
-    agent,
-    process.env,
-    config,
-    agentArgs,
-  );
+  // Deferred tool schemas are Anthropic-only; never force them for Ollama.
+  const toolSearchOverrides = ollamaPlan
+    ? {}
+    : buildToolSearchEnv(agent, process.env, config, agentArgs);
 
   const session: SessionInfo = {
     id: sessionId,
@@ -256,7 +270,11 @@ export async function run(args: string[]): Promise<void> {
       );
     }
   }
-  if (overrides.OPENCODE_CONFIG_CONTENT) {
+  if (ollamaPlan) {
+    console.error(
+      `aap: routing claude via ollama-cloud (model ${ollamaPlan.model ?? "from args"})`,
+    );
+  } else if (overrides.OPENCODE_CONFIG_CONTENT) {
     console.error(
       `aap: routing opencode via OPENCODE_CONFIG_CONTENT (providers: ${Object.keys(config.providers).join(", ")})`,
     );
@@ -290,9 +308,12 @@ export async function run(args: string[]): Promise<void> {
     );
   }
 
-  const child = spawn(agent, agentArgs, { stdio: "inherit", env });
+  const binary = agent === "ollama-cli" ? "ollama" : agent;
+  const child = spawn(binary, agentArgs, { stdio: "inherit", env });
 
-  const keepAlive = env.AAP_KEEP_ALIVE === "1";
+  // The keep-alive ping is Anthropic-shaped and targets prompt caching, which
+  // Ollama doesn't have.
+  const keepAlive = env.AAP_KEEP_ALIVE === "1" && !ollamaPlan;
   let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   if (keepAlive) {

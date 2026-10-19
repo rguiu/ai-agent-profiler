@@ -203,21 +203,45 @@ daemon handles model routing and (for cloud models) authentication:
 upstream = "http://127.0.0.1:11434"
 ```
 
-Then start the daemon and launch through the wrapper:
+Then start the daemon and launch through the wrapper (`aap run ollama-cli` wraps the native `ollama` CLI; `aap run ollama` is the Claude Code launcher below):
 
 ```
 ollama serve                    # local daemon on 127.0.0.1:11434
 aap serve                       # terminal 1
-aap run ollama                  # terminal 2 — pins the active ollama session
+aap run ollama-cli              # terminal 2 — pins the active ollama session
 ```
 
-`aap run ollama` sets `OLLAMA_HOST` to the proxy and marks the session as the active
+`aap run ollama-cli` sets `OLLAMA_HOST` to the proxy and marks the session as the active
 Ollama session, so `/api/...` traffic is attributed to it. This works for both local
 models and cloud models (`*:cloud`) — the daemon relays cloud requests to `ollama.com`
 and authenticates via `~/.ollama/id_ed25519`. Pointing the upstream directly at
 `https://ollama.com` returns **401** (the CLI sends no cloud credentials to what it
 treats as a local daemon). See [Ollama specifics](#ollama-specifics) below for
 attribution and parsing caveats.
+
+### Claude Code + Ollama cloud
+
+`aap run ollama` launches Claude Code against Ollama cloud through the profiler, asking
+for the model the way `ollama launch claude` does:
+
+```
+export OLLAMA_API_KEY=...       # e.g. in ~/.zshrc; never written to config or disk
+aap serve                       # terminal 1
+aap run ollama                  # terminal 2 — lists your models, then starts Claude Code
+```
+
+- No config edit is needed: `ollama-cloud` (`https://ollama.com`) is a built-in provider.
+  Define `[providers.ollama-cloud]` yourself to override the upstream. Restart
+  `aap serve` after upgrading so it picks the built-in provider up.
+- Skip the prompt with `aap run ollama --model gpt-oss:120b`. Without a TTY (CI,
+  benchmarks) `--model` is required. Extra args go to Claude Code:
+  `aap run ollama --model gpt-oss:120b claude -p "hello"`.
+- If `OLLAMA_API_KEY` is unset, you're asked for it (hidden input, this run only).
+- All Claude model tiers (opus/sonnet/haiku) are pinned to the chosen model, and
+  `ENABLE_TOOL_SEARCH` is not forced on (Anthropic-only).
+- Sessions are tagged `provider=ollama-cloud` and `model=<name>`. Add a `[pricing.*]`
+  table for the model if you want cost estimates; otherwise cost stays empty.
+- Only the `claude` agent is supported for now.
 
 ### Providers & known issues
 
@@ -236,7 +260,7 @@ works — and its caveats — differ per provider:
 
 - `OLLAMA_HOST` accepts only scheme+host+port (no path), so requests can't carry a
   `/<session>/` prefix. They're matched by the `/api/` path and attributed to the
-  session started by `aap run ollama` — concurrent Ollama sessions can mis-attribute.
+  session started by `aap run ollama-cli` — concurrent Ollama sessions can mis-attribute.
 - The daemon streams newline-delimited JSON labelled `application/json` (not
   `x-ndjson`); `aap` detects and parses it. Token usage comes from
   `prompt_eval_count`/`eval_count`; Ollama reports no cache tokens.

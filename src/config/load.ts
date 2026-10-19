@@ -91,3 +91,20 @@ function formatIssues(error: z.ZodError): string {
     .map((issue) => `  - ${issue.path.join(".") || "(root)"}: ${issue.message}`)
     .join("\n");
 }
+
+export const OLLAMA_CLOUD_PROVIDER = "ollama-cloud";
+export const OLLAMA_CLOUD_UPSTREAM = "https://ollama.com";
+
+// Providers the proxy always serves so `aap run ollama` works with no config
+// edits. A user-defined entry of the same name wins. Applied by `aap serve`
+// only: other consumers (e.g. opencode routing) see just the configured set.
+export function withBuiltinProviders(config: Config): Config {
+  if (config.providers[OLLAMA_CLOUD_PROVIDER]) return config;
+  return {
+    ...config,
+    providers: {
+      ...config.providers,
+      [OLLAMA_CLOUD_PROVIDER]: { upstream: OLLAMA_CLOUD_UPSTREAM },
+    },
+  };
+}

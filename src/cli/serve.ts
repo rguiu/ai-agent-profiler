@@ -1,5 +1,5 @@
 import { FileCapture } from "../capture/index.js";
-import { loadConfig } from "../config/index.js";
+import { loadConfig, withBuiltinProviders } from "../config/index.js";
 import { runParse } from "../parse/index.js";
 import { consoleRequestLogger, createProxyServer } from "../proxy/index.js";
 import {
@@ -20,7 +20,7 @@ export function serve(args?: string[]): void {
   const portIdx = args?.indexOf("--port") ?? -1;
   const portArg = portIdx >= 0 ? args?.[portIdx + 1] : undefined;
   const cliPort = portArg ? parseInt(portArg, 10) : undefined;
-  const config = loadConfig();
+  const config = withBuiltinProviders(loadConfig());
   const store = openStore(config.storage.dir);
   const searchStore: SearchStore | null = config.search.enabled
     ? openSearchStore(config.storage.dir)

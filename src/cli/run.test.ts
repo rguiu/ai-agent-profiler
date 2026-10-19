@@ -85,12 +85,12 @@ describe("buildProviderEnv", () => {
     );
   });
 
-  it("sets OLLAMA_HOST for the ollama agent when configured", () => {
+  it("sets OLLAMA_HOST for the ollama-cli agent when configured", () => {
     const withOllama: Pick<Config, "providers"> = {
       providers: { ollama: { upstream: "https://ollama.com" } },
     };
     const env = buildProviderEnv(
-      "ollama",
+      "ollama-cli",
       withOllama,
       "http://localhost:8080",
       "sid1",
@@ -100,7 +100,7 @@ describe("buildProviderEnv", () => {
 
   it("does not set OLLAMA_HOST when ollama provider is absent", () => {
     const env = buildProviderEnv(
-      "ollama",
+      "ollama-cli",
       providers,
       "http://localhost:8080",
       "sid1",
