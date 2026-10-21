@@ -354,9 +354,23 @@ function parseAnthropic(objects: unknown[]): Extract {
         const delta = asRecord(record.delta);
         const stop = delta ? asString(delta.stop_reason) : null;
         if (stop) acc.stopReason = stop;
+        // Anthropic-compatible endpoints (ollama-cloud) report the full usage
+        // breakdown — fresh input, cache reads, output — only in the final
+        // message_delta, while their message_start input_tokens is the *total*
+        // (fresh + cached). Read them here so cache reads aren't billed at the
+        // full input rate. Standard Anthropic message_delta carries only
+        // output_tokens, so these stay null and leave message_start's values.
         const usage = asRecord(record.usage);
-        const output = usage ? asNumber(usage.output_tokens) : null;
-        if (output !== null) acc.outputTokens = output;
+        if (usage) {
+          const input = asNumber(usage.input_tokens);
+          if (input !== null) acc.inputTokens = input;
+          const output = asNumber(usage.output_tokens);
+          if (output !== null) acc.outputTokens = output;
+          const cached = asNumber(usage.cache_read_input_tokens);
+          if (cached !== null) acc.cachedInputTokens = cached;
+          const creation = asNumber(usage.cache_creation_input_tokens);
+          if (creation !== null) acc.cacheCreationTokens = creation;
+        }
         break;
       }
       case "content_block_start": {
