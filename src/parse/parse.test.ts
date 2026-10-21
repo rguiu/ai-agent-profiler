@@ -286,6 +286,34 @@ describe("parseTrace", () => {
     expect(result.format).toBe("anthropic");
     expect(result.cachedInputTokens).toBe(1800);
   });
+
+  it("overrides message_start totals with ollama-cloud's message_delta cache breakdown", () => {
+    // ollama-cloud's message_start reports input_tokens as the *total* (fresh +
+    // cached), and the final message_delta carries the real breakdown.
+    const body = sse([
+      {
+        type: "message_start",
+        message: {
+          model: "deepseek-v4-pro:0813",
+          usage: { input_tokens: 200000, output_tokens: 0 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: {
+          input_tokens: 1000,
+          cache_read_input_tokens: 199000,
+          output_tokens: 50,
+        },
+      },
+      { type: "message_stop" },
+    ]);
+    const result = parseTrace(traceFor("text/event-stream", Buffer.from(body)));
+    expect(result.inputTokens).toBe(1000);
+    expect(result.cachedInputTokens).toBe(199000);
+    expect(result.outputTokens).toBe(50);
+  });
 });
 
 describe("summarizeMessages", () => {
