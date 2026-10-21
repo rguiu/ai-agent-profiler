@@ -3,6 +3,9 @@ export {
   resolveConfigPath,
   configCandidates,
   ConfigError,
+  withBuiltinProviders,
+  OLLAMA_CLOUD_PROVIDER,
+  OLLAMA_CLOUD_UPSTREAM,
 } from "./load.js";
 export {
   configSchema,

@@ -7,6 +7,8 @@ import {
   configCandidates,
   loadConfig,
   resolveConfigPath,
+  withBuiltinProviders,
+  type Config,
 } from "./index.js";
 
 const created: string[] = [];
@@ -122,5 +124,26 @@ describe("config resolution", () => {
     expect(() => loadConfig(undefined, {}, emptyCwd, emptyHome)).toThrow(
       /No config file found/,
     );
+  });
+});
+
+describe("withBuiltinProviders", () => {
+  const base = {
+    providers: { anthropic: { upstream: "https://api.anthropic.com" } },
+  } as unknown as Config;
+
+  it("adds ollama-cloud when absent", () => {
+    const out = withBuiltinProviders(base);
+    expect(out.providers["ollama-cloud"]?.upstream).toBe("https://ollama.com");
+    expect(base.providers["ollama-cloud"]).toBeUndefined();
+  });
+
+  it("keeps a user-defined ollama-cloud", () => {
+    const custom = {
+      providers: { "ollama-cloud": { upstream: "https://proxy.test" } },
+    } as unknown as Config;
+    expect(
+      withBuiltinProviders(custom).providers["ollama-cloud"]?.upstream,
+    ).toBe("https://proxy.test");
   });
 });
