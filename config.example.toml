@@ -43,6 +43,19 @@ upstream = "https://api.deepseek.com"
 [providers.bedrock]
 upstream = "https://bedrock-runtime.eu-west-1.amazonaws.com"
 
+# Local Ollama daemon (native /api). Used by `aap run ollama pi|opencode` and
+# `aap run ollama-cli`; the daemon relays :cloud models to ollama.com itself,
+# so no key is needed here. Point at the daemon, not https://ollama.com.
+[providers.ollama]
+upstream = "http://127.0.0.1:11434"
+
+# Ollama cloud (`aap run ollama claude`) is a built-in provider, no entry needed.
+# Override the upstream only if you must. The API key is never stored in config;
+# export it in your shell instead:
+#   export OLLAMA_API_KEY="<your-ollama-api-key>"
+# [providers.ollama-cloud]
+# upstream = "https://ollama.com"
+
 # Pricing tables (never hardcoded in source). Keyed by model name; rates are
 # per million tokens. Used by `aap parse` to estimate cost. Check current prices.
 # cacheInputPerMTok is optional — if set, cache READS are charged at this rate
