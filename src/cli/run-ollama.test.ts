@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildOllamaClaudeEnv,
   fetchOllamaModels,
+  toDaemonCloudName,
   parseOllamaArgs,
   planOllamaLaunch,
   resolveModelChoice,
@@ -205,8 +206,32 @@ describe("planOllamaLaunch (non-interactive)", () => {
         "s",
         false,
       );
-      expect(plan?.agentArgs).toEqual(["launch", "opencode"]);
+      expect(plan?.agentArgs).toEqual([
+        "launch",
+        "opencode",
+        "--",
+        "--standalone",
+      ]);
       expect(plan?.model).toBeUndefined();
+    });
+
+    it("does not duplicate --standalone for opencode", async () => {
+      const plan = await planOllamaLaunch(
+        ["--model", "m", "opencode", "--standalone"],
+        {},
+        withDaemon,
+        "http://h:1",
+        "s",
+        false,
+      );
+      expect(plan?.agentArgs).toEqual([
+        "launch",
+        "opencode",
+        "--model",
+        "m",
+        "--",
+        "--standalone",
+      ]);
     });
 
     it("requires [providers.ollama]", async () => {
@@ -214,5 +239,13 @@ describe("planOllamaLaunch (non-interactive)", () => {
         await planOllamaLaunch(["pi"], {}, config, "http://h:1", "s", false),
       ).toBeNull();
     });
+  });
+});
+
+describe("toDaemonCloudName", () => {
+  it("marks untagged and tagged cloud models for the daemon", () => {
+    expect(toDaemonCloudName("glm-5.3-flash")).toBe("glm-5.3-flash:cloud");
+    expect(toDaemonCloudName("gpt-oss:120b")).toBe("gpt-oss:120b-cloud");
+    expect(toDaemonCloudName("kimi-k3:cloud")).toBe("kimi-k3:cloud");
   });
 });

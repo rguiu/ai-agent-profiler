@@ -65,9 +65,16 @@ export function buildOllamaLaunchArgs(
   model: string | undefined,
   agentArgs: string[],
 ): string[] {
+  // opencode 2.x attaches to a shared background service that keeps the
+  // config and env of whoever started it, so this launch's model and routing
+  // would be ignored. A private server picks them up.
+  const args =
+    agent === "opencode" && !agentArgs.includes("--standalone")
+      ? ["--standalone", ...agentArgs]
+      : agentArgs;
   const out = ["launch", agent];
   if (model) out.push("--model", model);
-  if (agentArgs.length > 0) out.push("--", ...agentArgs);
+  if (args.length > 0) out.push("--", ...args);
   return out;
 }
 
@@ -182,7 +189,14 @@ export async function planOllamaLaunch(
   const parsed = parseOllamaArgs(args);
   const agent = parsed.agent ?? "claude";
   if (isLaunchAgent(agent)) {
-    return planOllamaNativeLaunch(agent, parsed, config, origin, interactive);
+    return planOllamaNativeLaunch(
+      agent,
+      parsed,
+      env,
+      config,
+      origin,
+      interactive,
+    );
   }
   if (agent !== "claude") {
     console.error(
@@ -241,12 +255,37 @@ export async function planOllamaLaunch(
   };
 }
 
+// Cloud models are addressed through the daemon with a `cloud` marker:
+// `glm-5.3-flash` -> `glm-5.3-flash:cloud`, `gpt-oss:120b` -> `gpt-oss:120b-cloud`.
+export function toDaemonCloudName(name: string): string {
+  if (/[:-]cloud$/.test(name)) return name;
+  return name.includes(":") ? `${name}-cloud` : `${name}:cloud`;
+}
+
+// Local daemon models plus (when OLLAMA_API_KEY is set) the account's cloud
+// models, so the list matches what the claude path shows.
+async function listLaunchModels(
+  daemonUpstream: string,
+  config: Pick<Config, "providers">,
+  apiKey: string,
+): Promise<string[]> {
+  const local = await fetchOllamaModels(daemonUpstream, "");
+  if (!apiKey) return local;
+  const cloudUpstream =
+    config.providers[OLLAMA_CLOUD_PROVIDER]?.upstream ?? OLLAMA_CLOUD_UPSTREAM;
+  const cloud = (await fetchOllamaModels(cloudUpstream, apiKey)).map(
+    toDaemonCloudName,
+  );
+  return [...new Set([...local, ...cloud])].sort();
+}
+
 // pi / opencode: run `ollama launch <agent>` with OLLAMA_HOST pointed at the
 // proxy, which relays /api/* to the local daemon (`[providers.ollama]`). The
 // daemon handles local and `:cloud` models, so no OLLAMA_API_KEY is needed.
 async function planOllamaNativeLaunch(
   agent: string,
   parsed: OllamaArgs,
+  env: NodeJS.ProcessEnv,
   config: Pick<Config, "providers">,
   origin: string,
   interactive: boolean,
@@ -261,7 +300,15 @@ async function planOllamaNativeLaunch(
 
   let model = parsed.model;
   if (!model && interactive) {
-    const models = await fetchOllamaModels(daemon.upstream, "");
+    // Same first question as the claude path. Only used to list cloud models
+    // here (the daemon authenticates for the launch itself); blank skips them.
+    let apiKey = env.OLLAMA_API_KEY ?? "";
+    if (!apiKey) {
+      apiKey = await promptSecret(
+        "Ollama API key (OLLAMA_API_KEY, not stored; blank = local models only): ",
+      );
+    }
+    const models = await listLaunchModels(daemon.upstream, config, apiKey);
     if (models.length > 0) {
       console.error("Models:");
       models.forEach((m, i) => console.error(`  ${i + 1}) ${m}`));
