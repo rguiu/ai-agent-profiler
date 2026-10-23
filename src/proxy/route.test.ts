@@ -94,6 +94,20 @@ describe("parseRoute", () => {
     });
   });
 
+  it("routes the OpenAI-compatible /v1/ paths to ollama (opencode, pi)", () => {
+    expect(
+      parseRoute("/v1/chat/completions", withOllama, null, "ollama-sid"),
+    ).toEqual({
+      sessionId: "ollama-sid",
+      provider: "ollama",
+      upstreamPath: "/v1/chat/completions",
+    });
+  });
+
+  it("does not route /v1/ when ollama provider is not configured", () => {
+    expect(parseRoute("/v1/chat/completions", providers)).toBeNull();
+  });
+
   it("does not route /api/ when ollama provider is not configured", () => {
     expect(parseRoute("/api/chat", providers)).toBeNull();
   });

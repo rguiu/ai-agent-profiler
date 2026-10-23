@@ -10,7 +10,8 @@ const BEDROCK_PATH_RE = /^\/model\//;
 // Ollama CLI talks to its native API (/api/chat, /api/generate, /api/tags…).
 // OLLAMA_HOST carries only scheme+host+port — no path — so these arrive without
 // a session/provider prefix and are matched by path like Bedrock.
-const OLLAMA_PATH_RE = /^\/api\//;
+// The daemon also serves an OpenAI-compatible API under /v1/ (opencode, pi).
+const OLLAMA_PATH_RE = /^\/(api|v1)\//;
 
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
 
@@ -30,8 +31,8 @@ export function parseRoute(
     };
   }
 
-  // Ollama native paths: no prefix possible via OLLAMA_HOST. Attribute to the
-  // active ollama session (set by `aap run ollama-cli`).
+  // Ollama native/OpenAI-compat paths: no prefix possible via OLLAMA_HOST.
+  // Attribute to the active ollama session (set by `aap run ollama ...`).
   if (providers.has("ollama") && OLLAMA_PATH_RE.test(pathname)) {
     return {
       sessionId: ollamaSessionId ?? null,
