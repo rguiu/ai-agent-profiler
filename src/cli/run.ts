@@ -202,7 +202,7 @@ export async function run(args: string[]): Promise<void> {
   let { agent, agentArgs } = parsedArgs;
   if (!agent) {
     console.error(
-      "Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]\n       aap run ollama [--model <name>] [claude] [args...]",
+      "Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]\n       aap run ollama [--model <name>] [claude|pi|opencode] [args...]",
     );
     process.exitCode = 1;
     return;
@@ -295,7 +295,11 @@ export async function run(args: string[]): Promise<void> {
       );
     }
   }
-  if (ollamaPlan) {
+  if (ollamaPlan?.binary === "ollama") {
+    console.error(
+      `aap: ollama launch ${agent} via OLLAMA_HOST=${origin} (model ${ollamaPlan.model ?? "chosen by ollama"})`,
+    );
+  } else if (ollamaPlan) {
     console.error(
       `aap: routing claude via ollama-cloud (model ${ollamaPlan.model ?? "from args"})`,
     );
@@ -333,7 +337,8 @@ export async function run(args: string[]): Promise<void> {
     );
   }
 
-  const binary = agent === "ollama-cli" ? "ollama" : agent;
+  const binary =
+    ollamaPlan?.binary ?? (agent === "ollama-cli" ? "ollama" : agent);
   const child = spawn(binary, agentArgs, { stdio: "inherit", env });
 
   // The keep-alive ping is Anthropic-shaped and targets prompt caching, which

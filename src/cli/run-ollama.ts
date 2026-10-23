@@ -14,6 +14,9 @@ export interface OllamaArgs {
 
 export interface OllamaLaunchPlan {
   agent: string;
+  // Executable to spawn; defaults to the agent itself. The `ollama launch`
+  // agents run through the `ollama` binary.
+  binary?: string;
   agentArgs: string[];
   env: Record<string, string>;
   meta: Record<string, string>;
@@ -48,6 +51,26 @@ function agentArgsSetModel(agentArgs: string[]): boolean {
   );
 }
 
+// Agents started through the real `ollama launch <agent>`. Ollama configures
+// them to talk to the daemon at OLLAMA_HOST, which we point at the proxy.
+export const OLLAMA_LAUNCH_AGENTS = ["pi", "opencode"] as const;
+
+function isLaunchAgent(agent: string): boolean {
+  return (OLLAMA_LAUNCH_AGENTS as readonly string[]).includes(agent);
+}
+
+// `ollama launch <agent> [--model M] [-- agent args...]`
+export function buildOllamaLaunchArgs(
+  agent: string,
+  model: string | undefined,
+  agentArgs: string[],
+): string[] {
+  const out = ["launch", agent];
+  if (model) out.push("--model", model);
+  if (agentArgs.length > 0) out.push("--", ...agentArgs);
+  return out;
+}
+
 export function buildOllamaClaudeEnv(opts: {
   origin: string;
   sessionId: string;
@@ -58,6 +81,10 @@ export function buildOllamaClaudeEnv(opts: {
     ANTHROPIC_BASE_URL: `${opts.origin}/${opts.sessionId}/${OLLAMA_CLOUD_PROVIDER}`,
     ANTHROPIC_AUTH_TOKEN: opts.apiKey,
     ANTHROPIC_API_KEY: "",
+    // Ollama can't perform Anthropic's server-side auto-mode classifier
+    // checks; skip them so Claude Code doesn't show the billing-eligibility
+    // notice on every session.
+    CLAUDE_CODE_AUTO_MODE_SERVER: "0",
   };
   if (opts.model) {
     // Claude Code also sends opus/sonnet/haiku-tier requests (e.g. background
@@ -154,9 +181,12 @@ export async function planOllamaLaunch(
 ): Promise<OllamaLaunchPlan | null> {
   const parsed = parseOllamaArgs(args);
   const agent = parsed.agent ?? "claude";
+  if (isLaunchAgent(agent)) {
+    return planOllamaNativeLaunch(agent, parsed, config, origin, interactive);
+  }
   if (agent !== "claude") {
     console.error(
-      `aap: "aap run ollama" supports only the claude agent for now (got "${agent}")`,
+      `aap: "aap run ollama" supports claude, ${OLLAMA_LAUNCH_AGENTS.join(", ")} (got "${agent}")`,
     );
     return null;
   }
@@ -206,6 +236,53 @@ export async function planOllamaLaunch(
     agent,
     agentArgs: parsed.agentArgs,
     env: buildOllamaClaudeEnv({ origin, sessionId, apiKey, model }),
+    meta,
+    model,
+  };
+}
+
+// pi / opencode: run `ollama launch <agent>` with OLLAMA_HOST pointed at the
+// proxy, which relays /api/* to the local daemon (`[providers.ollama]`). The
+// daemon handles local and `:cloud` models, so no OLLAMA_API_KEY is needed.
+async function planOllamaNativeLaunch(
+  agent: string,
+  parsed: OllamaArgs,
+  config: Pick<Config, "providers">,
+  origin: string,
+  interactive: boolean,
+): Promise<OllamaLaunchPlan | null> {
+  const daemon = config.providers.ollama;
+  if (!daemon) {
+    console.error(
+      `aap: "aap run ollama ${agent}" needs [providers.ollama] in your config (upstream = your local daemon, e.g. http://127.0.0.1:11434). See the README's Ollama section.`,
+    );
+    return null;
+  }
+
+  let model = parsed.model;
+  if (!model && interactive) {
+    const models = await fetchOllamaModels(daemon.upstream, "");
+    if (models.length > 0) {
+      console.error("Models:");
+      models.forEach((m, i) => console.error(`  ${i + 1}) ${m}`));
+    }
+    // Blank answer leaves the choice to `ollama launch` itself.
+    model = resolveModelChoice(
+      await promptLine("Model (blank = let ollama ask): "),
+      models,
+    );
+  }
+
+  const meta: Record<string, string> = {
+    provider: "ollama",
+    launcher: "ollama-launch",
+  };
+  if (model) meta.model = model;
+  return {
+    agent,
+    binary: "ollama",
+    agentArgs: buildOllamaLaunchArgs(agent, model, parsed.agentArgs),
+    env: { OLLAMA_HOST: origin },
     meta,
     model,
   };

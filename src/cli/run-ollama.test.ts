@@ -47,6 +47,7 @@ describe("buildOllamaClaudeEnv", () => {
     );
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("k");
     expect(env.ANTHROPIC_API_KEY).toBe("");
+    expect(env.CLAUDE_CODE_AUTO_MODE_SERVER).toBe("0");
     for (const k of [
       "ANTHROPIC_MODEL",
       "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -156,16 +157,62 @@ describe("planOllamaLaunch (non-interactive)", () => {
     expect(plan?.agentArgs).toEqual(["--model", "m"]);
   });
 
-  it("rejects non-claude agents", async () => {
+  it("rejects unsupported agents", async () => {
     expect(
-      await planOllamaLaunch(
+      await planOllamaLaunch(["codex"], env, config, "http://h:1", "s", false),
+    ).toBeNull();
+  });
+
+  describe("ollama launch agents", () => {
+    const withDaemon = {
+      providers: { ollama: { upstream: "http://127.0.0.1:11434" } },
+    };
+
+    it("plans `ollama launch pi` through the proxy without an API key", async () => {
+      const plan = await planOllamaLaunch(
+        ["--model", "m", "pi", "-p", "hi"],
+        {},
+        withDaemon,
+        "http://h:1",
+        "sid",
+        false,
+      );
+      expect(plan?.agent).toBe("pi");
+      expect(plan?.binary).toBe("ollama");
+      expect(plan?.agentArgs).toEqual([
+        "launch",
+        "pi",
+        "--model",
+        "m",
+        "--",
+        "-p",
+        "hi",
+      ]);
+      expect(plan?.env).toEqual({ OLLAMA_HOST: "http://h:1" });
+      expect(plan?.meta).toEqual({
+        provider: "ollama",
+        launcher: "ollama-launch",
+        model: "m",
+      });
+    });
+
+    it("lets ollama pick the model when none is given non-interactively", async () => {
+      const plan = await planOllamaLaunch(
         ["opencode"],
-        env,
-        config,
+        {},
+        withDaemon,
         "http://h:1",
         "s",
         false,
-      ),
-    ).toBeNull();
+      );
+      expect(plan?.agentArgs).toEqual(["launch", "opencode"]);
+      expect(plan?.model).toBeUndefined();
+    });
+
+    it("requires [providers.ollama]", async () => {
+      expect(
+        await planOllamaLaunch(["pi"], {}, config, "http://h:1", "s", false),
+      ).toBeNull();
+    });
   });
 });
