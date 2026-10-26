@@ -72,6 +72,20 @@ upstream = "http://127.0.0.1:11434"
 # inputPerMTok = 0.27
 # outputPerMTok = 1.10
 
+# Ollama Cloud open-weight models (per M tokens), routed via `aap run ollama`.
+# Rates are Peak (12:00-18:00 UTC weekdays); Ollama also publishes cheaper
+# Off-Peak rates that aap has no time-of-day concept for, so Peak is used as the
+# conservative default. Check ollama.com/library/<model> for changes.
+# [pricing."deepseek-v4.1-flash"]
+# inputPerMTok = 0.30
+# outputPerMTok = 1.20
+# cacheInputPerMTok = 0.006
+# Dated snapshot as it appears in `aap run ollama` (same rates).
+# [pricing."deepseek-v4.1-flash:1017"]
+# inputPerMTok = 0.30
+# outputPerMTok = 1.20
+# cacheInputPerMTok = 0.006
+
 # Bedrock note: cost is ALWAYS computed locally from these rates — Bedrock
 # responses report token usage, never a dollar amount. The key must match the
 # model id Bedrock reports (from the request path, e.g. the whole
