@@ -111,6 +111,10 @@ if [ "$PRUNE" = "1" ]; then
 fi
 
 [ -n "$AGENT" ] || { usage; exit 1; }
+# The `aap run` launcher keyword defaults to the agent key, but an agent entry
+# may override it (e.g. opencode via `aap run ollama`), so tagging can stay
+# distinct while a different launcher drives the sub-agent.
+LAUNCHER="$AGENT"
 
 # Resolve agent config from agents.toml (preferred), fall back to hardcoded list.
 AGENTS_TOML="$HERE/agents.toml"
@@ -125,9 +129,10 @@ if [ -f "$AGENTS_TOML" ]; then
       if (!agent) process.exit(1);
       const invoke = agent.invoke || "";
       const binary = agent.binary || process.argv[2];
+      const launcher = agent.launcher || process.argv[2];
       const envKeys = Object.keys(agent.env || {});
       const envVars = envKeys.map(k => k + "=" + agent.env[k]).join(" ");
-      console.log(binary + "\t" + invoke + "\t" + envVars);
+      console.log(binary + "\t" + invoke + "\t" + envVars + "\t" + launcher);
     ' "$AGENTS_TOML" "$AGENT" 2>/dev/null || true
   }
   AGENT_INFO=$(agent_config)
@@ -135,8 +140,10 @@ if [ -f "$AGENTS_TOML" ]; then
     AGENT_BIN=$(echo "$AGENT_INFO" | cut -f1)
     INVOKE=$(echo "$AGENT_INFO" | cut -f2)
     AGENT_ENV=$(echo "$AGENT_INFO" | cut -f3)
+    LAUNCHER=$(echo "$AGENT_INFO" | cut -f4)
+    [ -n "$LAUNCHER" ] || LAUNCHER="$AGENT"
     [ -n "$AGENT_ENV" ] && export $(echo "$AGENT_ENV")
-    echo "agent=$AGENT  binary=$AGENT_BIN  invoke=$INVOKE"
+    echo "agent=$AGENT  binary=$AGENT_BIN  invoke=$INVOKE  launcher=$LAUNCHER"
   else
     echo "unknown agent: $AGENT (not found in $AGENTS_TOML)" >&2
     echo "available agents:" >&2
@@ -187,11 +194,15 @@ if [ -z "$TASKS_FILE" ] && [ -f "$SRC/TASKS" ]; then TASKS_FILE="$SRC/TASKS"; fi
 # Hidden reference files for grading agent-authored code (kept OUTSIDE the copied
 # fixture tree so answers don't leak). A task's verify line references them via
 # $AAP_BENCH_REF, e.g. `cp "$AAP_BENCH_REF"/methods.test.js test/ && node --test ...`.
+#
+# Deliberately NOT exported: an exported AAP_BENCH_REF reaches the agent's own
+# shell (it is inherited by `aap run`), letting a curious agent copy and read the
+# hidden reference tests. Kept as a plain shell variable it is still visible to
+# the verify `eval` below (which runs in this shell), but not to the agent.
 AAP_BENCH_REF=""
 if [ -z "$REPO" ] && [ -z "$DIR" ] && [ -d "$HERE/reference/$FIXTURE" ]; then
   AAP_BENCH_REF="$HERE/reference/$FIXTURE"
 fi
-export AAP_BENCH_REF
 
 # Each run gets a directory under benchmarks/runs/ that stores results, artifacts,
 # verify logs, and a final report — always, not just with --save-artifacts.
@@ -290,7 +301,7 @@ run_task() {
   [ -n "$TAG" ] && META_ARGS="$META_ARGS --meta run=$TAG"
 
   if [ "$DRY" = "1" ]; then
-    echo "[$TASK_N/$TASK_TOTAL] $id  (cd $scratch && AAP_SESSION_ID=$sid aap run $META_ARGS $AGENT $INVOKE \"$prompt\")"
+    echo "[$TASK_N/$TASK_TOTAL] $id  (cd $scratch && AAP_SESSION_ID=$sid aap run $META_ARGS $LAUNCHER $INVOKE \"$prompt\")"
     [ "$SAVE_ARTIFACTS" = "1" ] && echo "      artifacts -> $RUNS_ROOT/artifacts/$id/"
     [ -n "$verify" ] && echo "      verify: (cd $scratch && $verify) && aap tag $sid verify=pass"
     [ -n "$AAP_BENCH_REF" ] && echo "      (AAP_BENCH_REF=$AAP_BENCH_REF)"
@@ -301,7 +312,7 @@ run_task() {
   printf '\n\033[1m[%d/%d] %s\033[0m  agent=%s%s  elapsed=%dm%02ds\n' \
     "$TASK_N" "$TASK_TOTAL" "$id" "$AGENT" "${TAG:+ tag=$TAG}" $((elapsed/60)) $((elapsed%60))
   echo "    scratch=$scratch"
-  ( cd "$scratch" && AAP_SESSION_ID="$sid" aap run $META_ARGS "$AGENT" $INVOKE "$prompt" </dev/null ) || true
+  ( cd "$scratch" && AAP_SESSION_ID="$sid" aap run $META_ARGS "$LAUNCHER" $INVOKE "$prompt" </dev/null ) || true
 
   # Snapshot the agent's produced files BEFORE verify copies in any reference files.
   if [ "$SAVE_ARTIFACTS" = "1" ]; then

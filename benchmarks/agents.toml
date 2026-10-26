@@ -27,3 +27,12 @@ env = {}
 binary = "claude"
 invoke = "--model deepseek-v4-pro:0813 claude -p --dangerously-skip-permissions"
 env = {}
+
+# opencode launched via `aap run ollama opencode` (the real `ollama launch`
+# adapter), so it talks to DeepSeek through the local daemon's cloud relay.
+# `launcher = "ollama"` tells run.sh to pass "ollama" (not the key) to `aap run`.
+[opencode-ollama]
+binary = "opencode"
+invoke = "--model deepseek-v4-pro:0813-cloud opencode run --auto"
+launcher = "ollama"
+env = {}
