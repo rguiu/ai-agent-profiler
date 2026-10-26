@@ -17,7 +17,7 @@ import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
 import { forwardBedrock } from "./bedrock.js";
 import { LruMap } from "./lru.js";
-import { parseRoute } from "./route.js";
+import { parseRoute, isOllamaControlPath } from "./route.js";
 import { needsShaping, shapeRequestBody } from "./shape.js";
 import { Throttle } from "./throttle.js";
 
@@ -153,7 +153,9 @@ function handle(
   const isKeepAlive = req.headers["x-aap-keep-alive"] === "1";
 
   let trace: RequestTrace | undefined;
-  if (capture) {
+  // Control-plane calls (model list, health/account probes, model management)
+  // are forwarded but not traced: they have no prompt or response to profile.
+  if (capture && !isOllamaControlPath(pathname)) {
     const sessionId = route.sessionId ?? capture.nextUnattributedSession();
     trace = capture.begin({
       sessionId,

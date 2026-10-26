@@ -1,6 +1,7 @@
 export {
   Store,
   openStore,
+  PARSE_MAX_ATTEMPTS,
   _isReadOnlyQuery,
   type RequestRow,
   type RequestFinish,

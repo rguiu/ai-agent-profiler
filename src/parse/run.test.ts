@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { openStore } from "../store/index.js";
+import { openStore, PARSE_MAX_ATTEMPTS } from "../store/index.js";
 import { runParse } from "./run.js";
 
 const dirs: string[] = [];
@@ -31,7 +31,7 @@ const ANTHROPIC_SSE = [
   ``,
 ].join("\n");
 
-function writeTrace(dir: string): string {
+function writeTrace(dir: string, name = "trace.ndjson"): string {
   const events = [
     { type: "request", headers: {} },
     {
@@ -45,9 +45,34 @@ function writeTrace(dir: string): string {
     },
     { type: "end" },
   ];
-  const file = join(dir, "trace.ndjson");
+  const file = join(dir, name);
   writeFileSync(file, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
   return file;
+}
+
+// A finished request whose trace file is (or is not yet) on disk.
+function insertRequest(
+  store: ReturnType<typeof openStore>,
+  id: string,
+  traceFile: string,
+): void {
+  store.insertRequest({
+    id,
+    sessionId: "sess-1",
+    provider: "anthropic",
+    method: "POST",
+    path: "/x",
+    traceFile,
+    startedAt: "t0",
+  });
+  store.finishRequest(id, {
+    status: 200,
+    latencyMs: 1,
+    requestBytes: 1,
+    responseBytes: 1,
+    endedAt: "t1",
+    error: null,
+  });
 }
 
 interface MetricRecord {
@@ -142,6 +167,71 @@ describe("runParse", () => {
     expect((await runParse(store, {}, { all: false })).parsed).toBe(1);
     expect((await runParse(store, {}, { all: false })).parsed).toBe(0);
     expect((await runParse(store, {}, { all: true })).parsed).toBe(1);
+    store.close();
+  });
+
+  it("stops retrying a trace that is gone after bounded attempts", async () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    insertRequest(store, "req-1", join(dir, "gone.ndjson"));
+
+    for (let attempt = 1; attempt <= PARSE_MAX_ATTEMPTS; attempt++) {
+      expect(await runParse(store, {}, { all: false })).toEqual({
+        total: 1,
+        parsed: 0,
+        failed: 1,
+      });
+    }
+
+    // Past the cap the request is no longer selected, so the parse tick stops
+    // retrying (and re-logging) it forever.
+    expect(await runParse(store, {}, { all: false })).toEqual({
+      total: 0,
+      parsed: 0,
+      failed: 0,
+    });
+
+    const db = new Database(join(dir, "aap.sqlite"));
+    const row = db
+      .prepare("SELECT parse_attempts, parse_error FROM requests WHERE id = ?")
+      .get("req-1") as { parse_attempts: number; parse_error: string };
+    db.close();
+    store.close();
+    expect(row.parse_attempts).toBe(PARSE_MAX_ATTEMPTS);
+    expect(row.parse_error).toContain("ENOENT");
+  });
+
+  it("recovers once the trace appears and clears the failure state", async () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    insertRequest(store, "req-1", join(dir, "late.ndjson"));
+
+    expect((await runParse(store, {}, { all: false })).failed).toBe(1);
+    writeTrace(dir, "late.ndjson");
+    expect((await runParse(store, {}, { all: false })).parsed).toBe(1);
+
+    const db = new Database(join(dir, "aap.sqlite"));
+    const row = db
+      .prepare("SELECT parse_attempts, parse_error FROM requests WHERE id = ?")
+      .get("req-1");
+    db.close();
+    store.close();
+    expect(row).toEqual({ parse_attempts: 0, parse_error: null });
+  });
+
+  it("retries failed requests on an explicit --all parse", async () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    insertRequest(store, "req-1", join(dir, "gone.ndjson"));
+    for (let attempt = 0; attempt < PARSE_MAX_ATTEMPTS; attempt++) {
+      await runParse(store, {}, { all: false });
+    }
+    expect((await runParse(store, {}, { all: false })).total).toBe(0);
+    expect(await runParse(store, {}, { all: true })).toEqual({
+      total: 1,
+      parsed: 0,
+      failed: 1,
+    });
     store.close();
   });
 

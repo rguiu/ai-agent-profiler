@@ -13,6 +13,18 @@ const BEDROCK_PATH_RE = /^\/model\//;
 // The daemon also serves an OpenAI-compatible API under /v1/ (opencode, pi).
 const OLLAMA_PATH_RE = /^\/(api|v1)\//;
 
+// Ollama's OpenAI-compatible API lists models at /v1/models, and its native API
+// exposes control-plane endpoints that carry no prompt or response content:
+// model listing, health/account probes and model management. They are proxied
+// but never traced — otherwise every `ollama` invocation adds an empty request
+// to the session, the metrics and the search index.
+const OLLAMA_CONTROL_PATH_RE =
+  /^(?:\/api\/(?:tags|version|status|me|hello|show|ps|pull|push|create|delete|copy|blob|experimental)(?:\/|$)|\/v1\/models$)/;
+
+export function isOllamaControlPath(pathname: string): boolean {
+  return OLLAMA_CONTROL_PATH_RE.test(pathname);
+}
+
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
 
 export function parseRoute(

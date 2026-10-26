@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRoute } from "./route.js";
+import { isOllamaControlPath, parseRoute } from "./route.js";
 
 const providers = new Set(["anthropic", "openai"]);
 const withBedrock = new Set(["anthropic", "openai", "bedrock"]);
@@ -122,5 +122,43 @@ describe("parseRoute", () => {
   it("rejects session IDs with special characters", () => {
     expect(parseRoute("/foo bar/anthropic/v1/messages", providers)).toBeNull();
     expect(parseRoute("/foo%2F../anthropic/v1/messages", providers)).toBeNull();
+  });
+});
+
+describe("isOllamaControlPath", () => {
+  it("matches ollama control-plane endpoints", () => {
+    for (const path of [
+      "/api/tags",
+      "/api/version",
+      "/api/status",
+      "/api/me",
+      "/api/hello",
+      "/api/show",
+      "/api/ps",
+      "/api/pull",
+      "/api/push",
+      "/api/create",
+      "/api/delete",
+      "/api/copy",
+      "/api/blob/abc",
+      "/api/experimental/model-recommendations",
+      "/v1/models",
+    ]) {
+      expect(isOllamaControlPath(path), path).toBe(true);
+    }
+  });
+
+  it("leaves inference endpoints traceable", () => {
+    for (const path of [
+      "/api/chat",
+      "/api/generate",
+      "/api/embed",
+      "/api/embeddings",
+      "/v1/chat/completions",
+      "/v1/completions",
+      "/v1/embeddings",
+    ]) {
+      expect(isOllamaControlPath(path), path).toBe(false);
+    }
   });
 });
