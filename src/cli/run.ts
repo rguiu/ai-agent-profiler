@@ -94,8 +94,8 @@ export function buildToolSearchEnv(
 }
 
 // Auto mode's classifier checks run server-side on Anthropic's API. Any other
-// backend (Ollama, DeepSeek, Bedrock, a gateway) can't perform them, so Claude
-// Code nags about ineligibility on every session. Opt out up front there.
+// backend (Ollama, DeepSeek, Bedrock, Vertex, a gateway) can't perform them, so
+// Claude Code nags about ineligibility on every session. Opt out up front there.
 export function buildAutoModeEnv(
   agent: string,
   env: NodeJS.ProcessEnv,
@@ -105,9 +105,30 @@ export function buildAutoModeEnv(
   if (agent !== "claude" || env.CLAUDE_CODE_AUTO_MODE_SERVER !== undefined) {
     return {};
   }
-  return !forceNonAnthropic && isFirstPartyAnthropic(config, env)
-    ? {}
-    : { CLAUDE_CODE_AUTO_MODE_SERVER: "0" };
+  return forceNonAnthropic || routesClaudeOffAnthropic(config, env)
+    ? { CLAUDE_CODE_AUTO_MODE_SERVER: "0" }
+    : {};
+}
+
+function envFlag(value: string | undefined): boolean {
+  return Boolean(value) && value !== "0";
+}
+
+// Without `[providers.anthropic]` aap doesn't set ANTHROPIC_BASE_URL, so
+// Claude Code keeps its own (first-party) endpoint unless a cloud backend is
+// selected in the env.
+function routesClaudeOffAnthropic(
+  config: Pick<Config, "providers">,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (
+    envFlag(env.CLAUDE_CODE_USE_BEDROCK) ||
+    envFlag(env.CLAUDE_CODE_USE_VERTEX)
+  ) {
+    return true;
+  }
+  if (!config.providers.anthropic) return false;
+  return !isFirstPartyAnthropic(config, env);
 }
 
 // True when Claude Code will be talking to a first-party Anthropic endpoint.

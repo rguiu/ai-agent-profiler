@@ -48,7 +48,8 @@ describe("buildOllamaClaudeEnv", () => {
     );
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("k");
     expect(env.ANTHROPIC_API_KEY).toBe("");
-    expect(env.CLAUDE_CODE_AUTO_MODE_SERVER).toBe("0");
+    // Left to buildAutoModeEnv, which respects an explicit user value.
+    expect(env.CLAUDE_CODE_AUTO_MODE_SERVER).toBeUndefined();
     for (const k of [
       "ANTHROPIC_MODEL",
       "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -197,9 +198,22 @@ describe("planOllamaLaunch (non-interactive)", () => {
       });
     });
 
-    it("lets ollama pick the model when none is given non-interactively", async () => {
+    it("fails without a model when not interactive", async () => {
+      expect(
+        await planOllamaLaunch(
+          ["opencode"],
+          {},
+          withDaemon,
+          "http://h:1",
+          "s",
+          false,
+        ),
+      ).toBeNull();
+    });
+
+    it("accepts a --model after the agent without prompting", async () => {
       const plan = await planOllamaLaunch(
-        ["opencode"],
+        ["pi", "--model", "glm-5.3-flash"],
         {},
         withDaemon,
         "http://h:1",
@@ -208,9 +222,10 @@ describe("planOllamaLaunch (non-interactive)", () => {
       );
       expect(plan?.agentArgs).toEqual([
         "launch",
-        "opencode",
+        "pi",
         "--",
-        "--standalone",
+        "--model",
+        "glm-5.3-flash",
       ]);
       expect(plan?.model).toBeUndefined();
     });

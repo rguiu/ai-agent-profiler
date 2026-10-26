@@ -104,6 +104,17 @@ describe("parseRoute", () => {
     });
   });
 
+  it("keeps session routes whose id is `v1` or `api` off ollama", () => {
+    expect(parseRoute("/v1/anthropic/v1/messages", withOllama)).toEqual({
+      sessionId: "v1",
+      provider: "anthropic",
+      upstreamPath: "/v1/messages",
+    });
+    expect(parseRoute("/api/anthropic/v1/messages", withOllama)?.provider).toBe(
+      "anthropic",
+    );
+  });
+
   it("does not route /v1/ when ollama provider is not configured", () => {
     expect(parseRoute("/v1/chat/completions", providers)).toBeNull();
   });

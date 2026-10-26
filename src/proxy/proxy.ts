@@ -122,13 +122,6 @@ function handle(
 
   if (handleControl(req, res, pathname, registry, state, capture, prevBodies))
     return;
-  // The ollama CLI probes `HEAD /` to see whether a server is up and aborts
-  // ("something went wrong") on anything but 200. `/` is the UI otherwise.
-  if (req.method === "HEAD" && pathname === "/" && providers.has("ollama")) {
-    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-    res.end();
-    return;
-  }
   if (handleUi(req, res, pathname)) return;
   if (store && handleApi(req, res, pathname, store, searchStore)) return;
 

@@ -45,7 +45,13 @@ export function parseRoute(
 
   // Ollama native/OpenAI-compat paths: no prefix possible via OLLAMA_HOST.
   // Attribute to the active ollama session (set by `aap run ollama ...`).
-  if (providers.has("ollama") && OLLAMA_PATH_RE.test(pathname)) {
+  // `/v1/anthropic/...` is a session route whose id happens to be `v1` (or
+  // `api`), not an ollama call, so a provider in the second segment wins.
+  if (
+    providers.has("ollama") &&
+    OLLAMA_PATH_RE.test(pathname) &&
+    !providers.has(pathname.split("/")[2] ?? "")
+  ) {
     return {
       sessionId: ollamaSessionId ?? null,
       provider: "ollama",

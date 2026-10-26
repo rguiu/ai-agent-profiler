@@ -43,9 +43,7 @@ interface Stack {
   tracesDir: string;
 }
 
-async function startStack(
-  opts: { ollama?: boolean } = {},
-): Promise<Stack> {
+async function startStack(opts: { ollama?: boolean } = {}): Promise<Stack> {
   const dir = mkdtempSync(join(tmpdir(), "aap-cap-"));
   const upstream = http.createServer(upstreamHandler);
   const upstreamPort = await listen(upstream);
@@ -84,7 +82,11 @@ async function startStack(
   cleanup.push(() => store.close());
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
 
-  return { proxyPort, dbPath: join(dir, "aap.sqlite"), tracesDir: join(dir, "traces") };
+  return {
+    proxyPort,
+    dbPath: join(dir, "aap.sqlite"),
+    tracesDir: join(dir, "traces"),
+  };
 }
 
 async function waitFor<T>(

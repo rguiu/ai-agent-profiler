@@ -88,10 +88,6 @@ export function buildOllamaClaudeEnv(opts: {
     ANTHROPIC_BASE_URL: `${opts.origin}/${opts.sessionId}/${OLLAMA_CLOUD_PROVIDER}`,
     ANTHROPIC_AUTH_TOKEN: opts.apiKey,
     ANTHROPIC_API_KEY: "",
-    // Ollama can't perform Anthropic's server-side auto-mode classifier
-    // checks; skip them so Claude Code doesn't show the billing-eligibility
-    // notice on every session.
-    CLAUDE_CODE_AUTO_MODE_SERVER: "0",
   };
   if (opts.model) {
     // Claude Code also sends opus/sonnet/haiku-tier requests (e.g. background
@@ -122,7 +118,7 @@ export async function fetchOllamaModels(
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetchFn(`${upstream.replace(/\/+$/, "")}/api/tags`, {
-      headers: { authorization: `Bearer ${apiKey}` },
+      headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
       signal: ctrl.signal,
     });
     if (!res.ok) return [];
@@ -269,14 +265,13 @@ async function listLaunchModels(
   config: Pick<Config, "providers">,
   apiKey: string,
 ): Promise<string[]> {
-  const local = await fetchOllamaModels(daemonUpstream, "");
-  if (!apiKey) return local;
   const cloudUpstream =
     config.providers[OLLAMA_CLOUD_PROVIDER]?.upstream ?? OLLAMA_CLOUD_UPSTREAM;
-  const cloud = (await fetchOllamaModels(cloudUpstream, apiKey)).map(
-    toDaemonCloudName,
-  );
-  return [...new Set([...local, ...cloud])].sort();
+  const [local, cloud] = await Promise.all([
+    fetchOllamaModels(daemonUpstream, ""),
+    apiKey ? fetchOllamaModels(cloudUpstream, apiKey) : Promise.resolve([]),
+  ]);
+  return [...new Set([...local, ...cloud.map(toDaemonCloudName)])].sort();
 }
 
 // pi / opencode: run `ollama launch <agent>` with OLLAMA_HOST pointed at the
@@ -298,8 +293,18 @@ async function planOllamaNativeLaunch(
     return null;
   }
 
+  // A `--model` after the agent goes to the agent untouched, as on the
+  // claude path.
   let model = parsed.model;
-  if (!model && interactive) {
+  const modelInArgs = agentArgsSetModel(parsed.agentArgs);
+  if (!model && !modelInArgs && !interactive) {
+    // `ollama launch` would ask for a model on a stdin that isn't a TTY.
+    console.error(
+      "aap: no model given. Pass --model <name> (prompts are disabled without a TTY).",
+    );
+    return null;
+  }
+  if (!model && !modelInArgs) {
     // Same first question as the claude path. Only used to list cloud models
     // here (the daemon authenticates for the launch itself); blank skips them.
     let apiKey = env.OLLAMA_API_KEY ?? "";

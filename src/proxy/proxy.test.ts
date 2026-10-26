@@ -110,22 +110,12 @@ describe("proxy passthrough", () => {
     expect(await res.text()).toBe("data: 0\n\ndata: 1\n\n");
   });
 
-  it("answers the ollama CLI's `HEAD /` liveness probe when ollama is configured", async () => {
-    const config = buildConfig(1);
-    config.providers.ollama = { upstream: "http://127.0.0.1:1" };
-    const proxy = createProxyServer(config, new SessionRegistry());
-    const port = await listen(proxy);
-    servers.push(proxy);
-    const res = await fetch(`http://127.0.0.1:${port}/`, { method: "HEAD" });
-    expect(res.status).toBe(200);
-  });
-
-  it("does not answer `HEAD /` without an ollama provider", async () => {
+  it("answers the ollama CLI's `HEAD /` liveness probe", async () => {
     const { proxyPort } = await startStack();
     const res = await fetch(`http://127.0.0.1:${proxyPort}/`, {
       method: "HEAD",
     });
-    expect(res.status).not.toBe(200);
+    expect(res.status).toBe(200);
   });
 
   it("returns 404 for an unknown provider", async () => {
