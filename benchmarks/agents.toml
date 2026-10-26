@@ -22,3 +22,8 @@ env = {}
 binary = "stackpilot"
 invoke = "--yolo -p"
 env = {}
+
+[ollama]
+binary = "claude"
+invoke = "--model deepseek-v4-pro:0813 claude -p --dangerously-skip-permissions"
+env = {}

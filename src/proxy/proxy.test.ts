@@ -110,6 +110,14 @@ describe("proxy passthrough", () => {
     expect(await res.text()).toBe("data: 0\n\ndata: 1\n\n");
   });
 
+  it("answers the ollama CLI's `HEAD /` liveness probe", async () => {
+    const { proxyPort } = await startStack();
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/`, {
+      method: "HEAD",
+    });
+    expect(res.status).toBe(200);
+  });
+
   it("returns 404 for an unknown provider", async () => {
     const { proxyPort } = await startStack();
     const res = await fetch(`http://127.0.0.1:${proxyPort}/sess/nope/echo`);

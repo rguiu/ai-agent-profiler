@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildOllamaClaudeEnv,
   fetchOllamaModels,
+  toDaemonCloudName,
   parseOllamaArgs,
   planOllamaLaunch,
   resolveModelChoice,
@@ -47,6 +48,8 @@ describe("buildOllamaClaudeEnv", () => {
     );
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("k");
     expect(env.ANTHROPIC_API_KEY).toBe("");
+    // Left to buildAutoModeEnv, which respects an explicit user value.
+    expect(env.CLAUDE_CODE_AUTO_MODE_SERVER).toBeUndefined();
     for (const k of [
       "ANTHROPIC_MODEL",
       "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -156,16 +159,108 @@ describe("planOllamaLaunch (non-interactive)", () => {
     expect(plan?.agentArgs).toEqual(["--model", "m"]);
   });
 
-  it("rejects non-claude agents", async () => {
+  it("rejects unsupported agents", async () => {
     expect(
-      await planOllamaLaunch(
-        ["opencode"],
-        env,
-        config,
+      await planOllamaLaunch(["codex"], env, config, "http://h:1", "s", false),
+    ).toBeNull();
+  });
+
+  describe("ollama launch agents", () => {
+    const withDaemon = {
+      providers: { ollama: { upstream: "http://127.0.0.1:11434" } },
+    };
+
+    it("plans `ollama launch pi` through the proxy without an API key", async () => {
+      const plan = await planOllamaLaunch(
+        ["--model", "m", "pi", "-p", "hi"],
+        {},
+        withDaemon,
+        "http://h:1",
+        "sid",
+        false,
+      );
+      expect(plan?.agent).toBe("pi");
+      expect(plan?.binary).toBe("ollama");
+      expect(plan?.agentArgs).toEqual([
+        "launch",
+        "pi",
+        "--model",
+        "m",
+        "--",
+        "-p",
+        "hi",
+      ]);
+      expect(plan?.env).toEqual({ OLLAMA_HOST: "http://h:1" });
+      expect(plan?.meta).toEqual({
+        provider: "ollama",
+        launcher: "ollama-launch",
+        model: "m",
+      });
+    });
+
+    it("fails without a model when not interactive", async () => {
+      expect(
+        await planOllamaLaunch(
+          ["opencode"],
+          {},
+          withDaemon,
+          "http://h:1",
+          "s",
+          false,
+        ),
+      ).toBeNull();
+    });
+
+    it("accepts a --model after the agent without prompting", async () => {
+      const plan = await planOllamaLaunch(
+        ["pi", "--model", "glm-5.3-flash"],
+        {},
+        withDaemon,
         "http://h:1",
         "s",
         false,
-      ),
-    ).toBeNull();
+      );
+      expect(plan?.agentArgs).toEqual([
+        "launch",
+        "pi",
+        "--",
+        "--model",
+        "glm-5.3-flash",
+      ]);
+      expect(plan?.model).toBeUndefined();
+    });
+
+    it("does not duplicate --standalone for opencode", async () => {
+      const plan = await planOllamaLaunch(
+        ["--model", "m", "opencode", "--standalone"],
+        {},
+        withDaemon,
+        "http://h:1",
+        "s",
+        false,
+      );
+      expect(plan?.agentArgs).toEqual([
+        "launch",
+        "opencode",
+        "--model",
+        "m",
+        "--",
+        "--standalone",
+      ]);
+    });
+
+    it("requires [providers.ollama]", async () => {
+      expect(
+        await planOllamaLaunch(["pi"], {}, config, "http://h:1", "s", false),
+      ).toBeNull();
+    });
+  });
+});
+
+describe("toDaemonCloudName", () => {
+  it("marks untagged and tagged cloud models for the daemon", () => {
+    expect(toDaemonCloudName("glm-5.3-flash")).toBe("glm-5.3-flash:cloud");
+    expect(toDaemonCloudName("gpt-oss:120b")).toBe("gpt-oss:120b-cloud");
+    expect(toDaemonCloudName("kimi-k3:cloud")).toBe("kimi-k3:cloud");
   });
 });

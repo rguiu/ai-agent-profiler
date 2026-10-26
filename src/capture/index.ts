@@ -1,5 +1,6 @@
 export {
   FileCapture,
+  captureError,
   type Capture,
   type RequestContext,
   type RequestTrace,

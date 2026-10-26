@@ -48,6 +48,17 @@ describe("handleUi", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
+  it("answers HEAD like GET without a body", async () => {
+    const port = await start();
+    for (const path of ["/", "/ui/app.js"]) {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "HEAD",
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("");
+    }
+  });
+
   it("passes through non-UI paths (returns false)", async () => {
     const port = await start();
     const res = await fetch(`http://127.0.0.1:${port}/sessions`);

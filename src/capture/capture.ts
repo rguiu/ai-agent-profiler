@@ -36,6 +36,18 @@ export interface Capture {
   begin(ctx: RequestContext): RequestTrace;
 }
 
+// A failed trace write (removed or unwritable trace dir, disk full…) makes the
+// trace unusable. Surface it on the request so it stops looking like a
+// successful request that simply never got parsed.
+export function captureError(
+  writeError: Error | null,
+  requestError: string | null,
+): string | null {
+  if (!writeError) return requestError;
+  const message = `capture: ${writeError.message}`;
+  return requestError ? `${message}; ${requestError}` : message;
+}
+
 class FileRequestTrace implements RequestTrace {
   private requestBytes = 0;
   private responseBytes = 0;
@@ -132,14 +144,13 @@ class FileRequestTrace implements RequestTrace {
       requestBytes: this.requestBytes,
       responseBytes: this.responseBytes,
       endedAt: new Date(endedAt).toISOString(),
-      error: this.errorMessage,
+      error: captureError(this.writeError, this.errorMessage),
     });
   }
 }
 
 export class FileCapture implements Capture {
   private readonly tracesDir: string;
-  private readonly createdDirs = new Set<string>();
   private unattributedId: string | null = null;
   private unattributedLastSeen = 0;
 
@@ -173,10 +184,10 @@ export class FileCapture implements Capture {
     });
 
     const sessionDir = join(this.tracesDir, ctx.sessionId);
-    if (!this.createdDirs.has(sessionDir)) {
-      mkdirSync(sessionDir, { recursive: true });
-      this.createdDirs.add(sessionDir);
-    }
+    // Idempotent and cheap, so it runs on every request: a session (or its
+    // trace dir) can be deleted while the proxy is still serving it, and a
+    // cached "already created" flag made every later request traceless.
+    mkdirSync(sessionDir, { recursive: true });
     const traceFile = join(sessionDir, `${ctx.requestId}.ndjson`);
     const stream = createWriteStream(traceFile, { flags: "a" });
 

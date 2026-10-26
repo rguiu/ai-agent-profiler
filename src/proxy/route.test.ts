@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRoute } from "./route.js";
+import { isOllamaControlPath, parseRoute } from "./route.js";
 
 const providers = new Set(["anthropic", "openai"]);
 const withBedrock = new Set(["anthropic", "openai", "bedrock"]);
@@ -94,6 +94,31 @@ describe("parseRoute", () => {
     });
   });
 
+  it("routes the OpenAI-compatible /v1/ paths to ollama (opencode, pi)", () => {
+    expect(
+      parseRoute("/v1/chat/completions", withOllama, null, "ollama-sid"),
+    ).toEqual({
+      sessionId: "ollama-sid",
+      provider: "ollama",
+      upstreamPath: "/v1/chat/completions",
+    });
+  });
+
+  it("keeps session routes whose id is `v1` or `api` off ollama", () => {
+    expect(parseRoute("/v1/anthropic/v1/messages", withOllama)).toEqual({
+      sessionId: "v1",
+      provider: "anthropic",
+      upstreamPath: "/v1/messages",
+    });
+    expect(parseRoute("/api/anthropic/v1/messages", withOllama)?.provider).toBe(
+      "anthropic",
+    );
+  });
+
+  it("does not route /v1/ when ollama provider is not configured", () => {
+    expect(parseRoute("/v1/chat/completions", providers)).toBeNull();
+  });
+
   it("does not route /api/ when ollama provider is not configured", () => {
     expect(parseRoute("/api/chat", providers)).toBeNull();
   });
@@ -108,5 +133,43 @@ describe("parseRoute", () => {
   it("rejects session IDs with special characters", () => {
     expect(parseRoute("/foo bar/anthropic/v1/messages", providers)).toBeNull();
     expect(parseRoute("/foo%2F../anthropic/v1/messages", providers)).toBeNull();
+  });
+});
+
+describe("isOllamaControlPath", () => {
+  it("matches ollama control-plane endpoints", () => {
+    for (const path of [
+      "/api/tags",
+      "/api/version",
+      "/api/status",
+      "/api/me",
+      "/api/hello",
+      "/api/show",
+      "/api/ps",
+      "/api/pull",
+      "/api/push",
+      "/api/create",
+      "/api/delete",
+      "/api/copy",
+      "/api/blob/abc",
+      "/api/experimental/model-recommendations",
+      "/v1/models",
+    ]) {
+      expect(isOllamaControlPath(path), path).toBe(true);
+    }
+  });
+
+  it("leaves inference endpoints traceable", () => {
+    for (const path of [
+      "/api/chat",
+      "/api/generate",
+      "/api/embed",
+      "/api/embeddings",
+      "/v1/chat/completions",
+      "/v1/completions",
+      "/v1/embeddings",
+    ]) {
+      expect(isOllamaControlPath(path), path).toBe(false);
+    }
   });
 });

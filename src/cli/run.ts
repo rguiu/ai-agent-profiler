@@ -93,6 +93,44 @@ export function buildToolSearchEnv(
     : {};
 }
 
+// Auto mode's classifier checks run server-side on Anthropic's API. Any other
+// backend (Ollama, DeepSeek, Bedrock, Vertex, a gateway) can't perform them, so
+// Claude Code nags about ineligibility on every session. Opt out up front there.
+export function buildAutoModeEnv(
+  agent: string,
+  env: NodeJS.ProcessEnv,
+  config: Pick<Config, "providers">,
+  forceNonAnthropic = false,
+): Record<string, string> {
+  if (agent !== "claude" || env.CLAUDE_CODE_AUTO_MODE_SERVER !== undefined) {
+    return {};
+  }
+  return forceNonAnthropic || routesClaudeOffAnthropic(config, env)
+    ? { CLAUDE_CODE_AUTO_MODE_SERVER: "0" }
+    : {};
+}
+
+function envFlag(value: string | undefined): boolean {
+  return Boolean(value) && value !== "0";
+}
+
+// Without `[providers.anthropic]` aap doesn't set ANTHROPIC_BASE_URL, so
+// Claude Code keeps its own (first-party) endpoint unless a cloud backend is
+// selected in the env.
+function routesClaudeOffAnthropic(
+  config: Pick<Config, "providers">,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (
+    envFlag(env.CLAUDE_CODE_USE_BEDROCK) ||
+    envFlag(env.CLAUDE_CODE_USE_VERTEX)
+  ) {
+    return true;
+  }
+  if (!config.providers.anthropic) return false;
+  return !isFirstPartyAnthropic(config, env);
+}
+
 // True when Claude Code will be talking to a first-party Anthropic endpoint.
 // Bedrock is a distinct API (AWS), not the Anthropic messages endpoint, so it
 // is not first-party here. Otherwise we trust the `anthropic` provider's
@@ -185,7 +223,7 @@ export async function run(args: string[]): Promise<void> {
   let { agent, agentArgs } = parsedArgs;
   if (!agent) {
     console.error(
-      "Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]\n       aap run ollama [--model <name>] [claude] [args...]",
+      "Usage: aap run [--cache-1h] [--hooks] [--meta key=value ...] <agent> [args...]\n       aap run ollama [--model <name>] [claude|pi|opencode] [args...]",
     );
     process.exitCode = 1;
     return;
@@ -239,6 +277,13 @@ export async function run(args: string[]): Promise<void> {
     ? {}
     : buildToolSearchEnv(agent, process.env, config, agentArgs);
 
+  const autoModeOverrides = buildAutoModeEnv(
+    agent,
+    process.env,
+    config,
+    ollamaPlan !== null,
+  );
+
   const session: SessionInfo = {
     id: sessionId,
     client: agent,
@@ -252,6 +297,7 @@ export async function run(args: string[]): Promise<void> {
     ...process.env,
     ...overrides,
     ...toolSearchOverrides,
+    ...autoModeOverrides,
   };
 
   console.error(`aap: session ${sessionId} (cwd ${cwd})`);
@@ -270,7 +316,11 @@ export async function run(args: string[]): Promise<void> {
       );
     }
   }
-  if (ollamaPlan) {
+  if (ollamaPlan?.binary === "ollama") {
+    console.error(
+      `aap: ollama launch ${agent} via OLLAMA_HOST=${origin} (model ${ollamaPlan.model ?? "chosen by ollama"})`,
+    );
+  } else if (ollamaPlan) {
     console.error(
       `aap: routing claude via ollama-cloud (model ${ollamaPlan.model ?? "from args"})`,
     );
@@ -308,7 +358,8 @@ export async function run(args: string[]): Promise<void> {
     );
   }
 
-  const binary = agent === "ollama-cli" ? "ollama" : agent;
+  const binary =
+    ollamaPlan?.binary ?? (agent === "ollama-cli" ? "ollama" : agent);
   const child = spawn(binary, agentArgs, { stdio: "inherit", env });
 
   // The keep-alive ping is Anthropic-shaped and targets prompt caching, which

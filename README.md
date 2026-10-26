@@ -241,7 +241,24 @@ aap run ollama                  # terminal 2 — lists your models, then starts 
   `ENABLE_TOOL_SEARCH` is not forced on (Anthropic-only).
 - Sessions are tagged `provider=ollama-cloud` and `model=<name>`. Add a `[pricing.*]`
   table for the model if you want cost estimates; otherwise cost stays empty.
-- Only the `claude` agent is supported for now.
+- `claude` goes straight to Ollama cloud; `pi` and `opencode` use the real launcher (below).
+
+#### pi / opencode via `ollama launch`
+
+`aap run ollama pi` and `aap run ollama opencode` run `ollama launch <agent>` with
+`OLLAMA_HOST` pointed at the profiler, so traffic goes through the local-daemon route
+from [Ollama (local proxy)](#ollama-local-proxy):
+
+```
+aap run ollama pi                              # pick a model, then `ollama launch pi`
+aap run ollama --model gpt-oss:120b opencode   # skip the prompt
+aap run ollama pi -- -p "hello"                # args after the agent go after `--`
+```
+
+- Requires `[providers.ollama]` pointing at your local daemon (`ollama serve`); no
+  `OLLAMA_API_KEY` is needed because the daemon authenticates cloud models itself.
+- The model list comes from the daemon; a blank answer lets `ollama launch` ask.
+- Sessions are tagged `provider=ollama`, `launcher=ollama-launch`.
 
 ### Providers & known issues
 

@@ -26,7 +26,10 @@ export function handleUi(
   const asset = ROUTES[pathname];
   if (!asset) return false;
 
-  if (req.method !== "GET") {
+  // HEAD is GET without a body; liveness probes (e.g. the ollama CLI's
+  // `HEAD /`) must get 200, not 405.
+  const isHead = req.method === "HEAD";
+  if (req.method !== "GET" && !isHead) {
     res.writeHead(405, { "content-type": "text/plain" });
     res.end("method not allowed");
     return true;
@@ -41,7 +44,10 @@ export function handleUi(
     return true;
   }
 
-  res.writeHead(200, { "content-type": asset.type });
-  res.end(body);
+  res.writeHead(200, {
+    "content-type": asset.type,
+    "content-length": body.length,
+  });
+  res.end(isHead ? undefined : body);
   return true;
 }

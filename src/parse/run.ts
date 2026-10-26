@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { Config } from "../config/index.js";
-import type { Store } from "../store/index.js";
+import { PARSE_MAX_ATTEMPTS, type Store } from "../store/index.js";
 import {
   computeCost,
   extractResponseText,
@@ -70,9 +70,15 @@ export async function runParse(
       }
 
       parsed++;
+      store.clearParseFailure(target.id);
     } catch (err) {
       failed++;
-      console.error(`parse: ${target.id} failed: ${(err as Error).message}`);
+      const message = (err as Error).message;
+      const attempts = store.markParseFailure(target.id, message);
+      const terminal = !opts.all && attempts >= PARSE_MAX_ATTEMPTS;
+      console.error(
+        `parse: ${target.id} failed (attempt ${attempts})${terminal ? " — giving up" : ""}: ${message}`,
+      );
     }
   }
 

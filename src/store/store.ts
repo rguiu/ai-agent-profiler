@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS requests (
   request_bytes  INTEGER,
   response_bytes INTEGER,
   error          TEXT,
+  -- Trace parsing state, so a request whose trace is missing or corrupt is
+  -- retried a bounded number of times instead of on every parse tick.
+  parse_attempts INTEGER NOT NULL DEFAULT 0,
+  parse_error    TEXT,
   keep_alive     INTEGER DEFAULT 0
 );
 
@@ -73,6 +77,12 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls (request_id);
 
 
 `;
+
+// A trace that cannot be read (deleted dir, corrupt NDJSON, unfinished write…)
+// is retried on the next parse tick, but only up to this many attempts, so a
+// permanently broken trace does not produce log lines forever. `aap parse --all`
+// still retries failed requests explicitly.
+export const PARSE_MAX_ATTEMPTS = 3;
 
 export interface RequestRow {
   id: string;
@@ -353,6 +363,8 @@ export class Store {
   private readonly finishRequestStmt;
   private readonly allTargetsStmt;
   private readonly pendingTargetsStmt;
+  private readonly markParseFailureStmt;
+  private readonly clearParseFailureStmt;
   private readonly searchIndexTargetsStmt;
   private readonly upsertMetricsStmt;
   private readonly deleteToolCallsStmt;
@@ -414,6 +426,17 @@ export class Store {
       WHERE m.request_id IS NULL
         AND r.trace_file IS NOT NULL
         AND r.ended_at IS NOT NULL
+        AND r.parse_attempts < @maxAttempts
+    `);
+    this.markParseFailureStmt = db.prepare(`
+      UPDATE requests SET
+        parse_attempts = parse_attempts + 1,
+        parse_error    = @error
+      WHERE id = @id
+      RETURNING parse_attempts
+    `);
+    this.clearParseFailureStmt = db.prepare(`
+      UPDATE requests SET parse_attempts = 0, parse_error = NULL WHERE id = ?
     `);
     // Only parsed requests qualify for search indexing: the metrics JOIN
     // guarantees model/kind are available and the trace was readable.
@@ -681,9 +704,28 @@ export class Store {
     });
   }
 
-  requestsToParse(all: boolean): ParseTarget[] {
-    const stmt = all ? this.allTargetsStmt : this.pendingTargetsStmt;
-    return stmt.all() as ParseTarget[];
+  requestsToParse(
+    all: boolean,
+    maxAttempts: number = PARSE_MAX_ATTEMPTS,
+  ): ParseTarget[] {
+    if (all) return this.allTargetsStmt.all() as ParseTarget[];
+    return this.pendingTargetsStmt.all({
+      maxAttempts,
+    }) as ParseTarget[];
+  }
+
+  // Records a failed parse attempt and returns the new attempt count, so the
+  // caller can tell a transient miss from a request it should stop retrying.
+  markParseFailure(requestId: string, error: string): number {
+    const row = this.markParseFailureStmt.get({
+      id: requestId,
+      error,
+    }) as { parse_attempts: number } | undefined;
+    return row?.parse_attempts ?? 0;
+  }
+
+  clearParseFailure(requestId: string): void {
+    this.clearParseFailureStmt.run(requestId);
   }
 
   searchIndexTargets(): SearchIndexTarget[] {
@@ -1177,6 +1219,8 @@ export function openStore(dir: string): Store {
   ensureColumn(db, "metrics", "cache_creation_input_tokens", "INTEGER");
   ensureColumn(db, "metrics", "kind", "TEXT");
   ensureColumn(db, "requests", "keep_alive", "INTEGER");
+  ensureColumn(db, "requests", "parse_attempts", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "requests", "parse_error", "TEXT");
   ensureColumn(db, "sessions", "meta", "TEXT");
   ensureColumn(db, "sessions", "title", "TEXT");
   ensureColumn(db, "sessions", "summary", "TEXT");
