@@ -13,6 +13,7 @@ import { install } from "./install.js";
 import { intro } from "./intro.js";
 import { mcp } from "./mcp.js";
 import { parse } from "./parse.js";
+import { route } from "./route.js";
 import { run } from "./run.js";
 import { searchCli } from "./search.js";
 import { serve } from "./serve.js";
@@ -25,6 +26,7 @@ function printHelp(): void {
 Usage:
   aap install          Set up ~/.aap/config.toml from the example config
   aap serve            Start the profiler proxy
+  aap route [--write]  Point agents at the proxy via their own config (no wrapper)
   aap run <agent>      Launch an agent through the profiler
   aap parse [--all]    Derive metrics from captured traces
   aap index [--all]    Build the full-text search index from captured traces
@@ -54,6 +56,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "run":
       await run(argv.slice(1));
+      return;
+    case "route":
+      await route(argv.slice(1));
       return;
     case "parse":
       await parse(argv.slice(1));

@@ -130,6 +130,23 @@ function readFinishedRequest(dbPath: string): FinishedRequest | undefined {
   return readRequests(dbPath).find((r) => r.ended_at !== null);
 }
 
+interface SessionRecord {
+  id: string;
+  client: string | null;
+  cwd: string | null;
+}
+
+function readSession(dbPath: string, id: string): SessionRecord | undefined {
+  const db = new Database(dbPath);
+  try {
+    return db
+      .prepare("SELECT id, client, cwd FROM sessions WHERE id = ?")
+      .get(id) as SessionRecord | undefined;
+  } finally {
+    db.close();
+  }
+}
+
 interface TraceEvent {
   type: string;
   headers?: Record<string, string | string[]>;
@@ -191,6 +208,68 @@ describe("FileCapture end-to-end", () => {
 
     const row = await waitFor(() => readFinishedRequest(dbPath));
     expect(row.session_id.startsWith("unattributed-")).toBe(true);
+  });
+
+  it("attributes traffic to the session id the client advertises", async () => {
+    const { proxyPort, dbPath } = await startStack();
+
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/test/echo`, {
+        method: "POST",
+        headers: {
+          "x-claude-code-session-id": "cc-3f2b8c1e",
+          "user-agent": "claude-cli/2.1.13 (external, cli)",
+        },
+        body: "x",
+      })
+    ).text();
+
+    const row = await waitFor(() => readFinishedRequest(dbPath));
+    expect(row.session_id).toBe("cc-3f2b8c1e");
+    // The client is inferred from the request, since no launcher registered it.
+    expect(readSession(dbPath, "cc-3f2b8c1e")?.client).toBe("claude");
+  });
+
+  it("keeps an explicit session path ahead of the client's own id", async () => {
+    const { proxyPort, dbPath } = await startStack();
+
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/pinned-1/test/echo`, {
+        method: "POST",
+        headers: { "x-claude-code-session-id": "cc-ignored" },
+        body: "x",
+      })
+    ).text();
+
+    const row = await waitFor(() => readFinishedRequest(dbPath));
+    expect(row.session_id).toBe("pinned-1");
+  });
+
+  it("buckets unattributed traffic per client", async () => {
+    const { proxyPort, dbPath } = await startStack();
+
+    for (const ua of ["opencode/1.0.42", "pi/1.4.0"]) {
+      await (
+        await fetch(`http://127.0.0.1:${proxyPort}/test/echo`, {
+          method: "POST",
+          headers: { "user-agent": ua },
+          body: "x",
+        })
+      ).text();
+    }
+
+    const rows = await waitFor(() => {
+      const all = readRequests(dbPath).filter((r) => r.ended_at !== null);
+      return all.length === 2 ? all : undefined;
+    });
+    const sessions = new Set(rows.map((r) => r.session_id));
+    expect(sessions.size).toBe(2);
+    expect(
+      [...sessions].some((id) => id.startsWith("unattributed-opencode-")),
+    ).toBe(true);
+    expect([...sessions].some((id) => id.startsWith("unattributed-pi-"))).toBe(
+      true,
+    );
   });
 
   it("keeps capturing after the session's trace dir is deleted", async () => {

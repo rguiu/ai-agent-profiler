@@ -18,18 +18,18 @@ The **capture core is complete** — the profiler reliably records raw, high-fid
 
 ## Locked decisions
 
-| Area             | Decision                                                    | Why                                                                                                                                                                                                   |
-| ---------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime          | **Node + TypeScript**                                       | Strong streaming primitives; one language shared with the future React/TS UI, including shared data-model types. Chosen over Go for maintainability by the author; over Python for the unified stack. |
-| Interception     | **Base-URL reverse proxy**                                  | Agents point their provider base URL at the profiler. No CA cert / MITM. Works with Claude Code + Opencode base-URL overrides.                                                                        |
-| Proxy hop        | **Native `node:http`/`https`**                              | Byte-faithful passthrough, no header normalization, zero deps. Fidelity matters for a profiler.                                                                                                       |
-| Routing          | **Single port, path `/<session_id>/<provider>/...`**        | One port to manage; provider and session both read from the URL.                                                                                                                                      |
-| Session identity | **Launcher wrapper injects `session_id`**                   | The only reliable way to distinguish concurrent agents (e.g. multiple terminal tabs). Passive signals (source port, headers) are unreliable.                                                          |
-| cwd / repo       | **Captured by the wrapper** (best-effort, nullable)         | The wrapper runs in the user's shell, where cwd + git context actually exist. The proxy alone cannot see them.                                                                                        |
-| Raw storage      | **Per-session append-only NDJSON + SQLite index**           | Cheapest possible capture, zero hot-path DB contention, highest fidelity. Index holds metadata + byte offsets.                                                                                        |
-| Structured store | **SQLite via `better-sqlite3`**                             | Fast, simple, single-file. Plain SQL, no ORM.                                                                                                                                                         |
-| Config           | **TOML/YAML file + env overrides**                          | Human-editable routes + pricing tables (pricing must not be hardcoded). Env overrides ports/secrets.                                                                                                  |
-| Secrets          | **Redact `authorization` / `x-api-key` before persistence** | Never store API keys. Redaction on by default.                                                                                                                                                        |
+| Area             | Decision                                                          | Why                                                                                                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime          | **Node + TypeScript**                                             | Strong streaming primitives; one language shared with the future React/TS UI, including shared data-model types. Chosen over Go for maintainability by the author; over Python for the unified stack. |
+| Interception     | **Base-URL reverse proxy**                                        | Agents point their provider base URL at the profiler. No CA cert / MITM. Works with Claude Code + Opencode base-URL overrides.                                                                        |
+| Proxy hop        | **Native `node:http`/`https`**                                    | Byte-faithful passthrough, no header normalization, zero deps. Fidelity matters for a profiler.                                                                                                       |
+| Routing          | **Single port, path `/<provider>/...` (session optional)**        | One port to manage; the provider comes from the URL, the session from the path when pinned and from a request header otherwise.                                                                       |
+| Session identity | **Client-advertised header, else launcher pin, else idle window** | Claude Code sends `x-claude-code-session-id` on every request, so a constant base URL still yields per-conversation sessions (`aap route`). A path session id (`aap run`, benchmarking) always wins.  |
+| cwd / repo       | **Recovered from the system prompt's `<env>` block** (nullable)   | Agents describe their working directory to the model, so the parser can read it back off the hot path and backfill the session. `aap run` sets it directly at launch; COALESCE keeps that value.      |
+| Raw storage      | **Per-session append-only NDJSON + SQLite index**                 | Cheapest possible capture, zero hot-path DB contention, highest fidelity. Index holds metadata + byte offsets.                                                                                        |
+| Structured store | **SQLite via `better-sqlite3`**                                   | Fast, simple, single-file. Plain SQL, no ORM.                                                                                                                                                         |
+| Config           | **TOML/YAML file + env overrides**                                | Human-editable routes + pricing tables (pricing must not be hardcoded). Env overrides ports/secrets.                                                                                                  |
+| Secrets          | **Redact `authorization` / `x-api-key` before persistence**       | Never store API keys. Redaction on by default.                                                                                                                                                        |
 
 ---
 
@@ -38,14 +38,15 @@ The **capture core is complete** — the profiler reliably records raw, high-fid
 ```
 +--------------------------+
 | Claude Code / Opencode   |
-| (launched via `aap run`) |
+| (via `aap route` or run) |
 +------------+-------------+
-             |  ANTHROPIC_BASE_URL=http://localhost:8080/<session_id>/anthropic
+             |  ANTHROPIC_BASE_URL=http://localhost:8080/anthropic
+             |  session: x-claude-code-session-id header (or /<session_id>/ in the path)
              v
 +--------------------------+
 | AI Agent Profiler        |
 |                          |
-|  cli/      aap serve|run|parse|sessions|commands|tag|export|compare|mcp|config
+|  cli/      aap serve|route|run|parse|sessions|commands|tag|export|compare|mcp|config
 |  proxy/    listener, routing, passthrough + tee, /health + /_control
 |  session/  registry + control endpoint
 |  capture/  async NDJSON sink, redaction
@@ -70,15 +71,16 @@ The **capture core is complete** — the profiler reliably records raw, high-fid
 
 ## Request lifecycle
 
-1. **Launch.** `aap run claude` generates a `session_id` (UUID), reads cwd + git repo/remote, registers `{session_id, cwd, repo, client, started_at}` with the proxy's local control endpoint, sets provider base URLs to `http://localhost:<port>/<session_id>/<provider>`, then `exec`s the real agent.
-2. **Ingress.** A request arrives at the single listener. The proxy parses `session_id` and `provider` from the path prefix and looks up the upstream URL in config.
+0. **Route (once).** `aap route --write` edits each agent's own user-level config (`~/.claude/settings.json` `env`, `~/.config/opencode/opencode.json`, `~/.pi/agent/models.json`) so its provider base URL is the constant `http://localhost:<port>/<provider>`. That is the whole wrapper-free setup; `--undo` restores the backed-up originals. Alternatively `aap run claude` generates a `session_id` (UUID), reads cwd + git repo/remote, registers `{session_id, cwd, repo, client, started_at}` with the proxy's local control endpoint, sets the base URLs to `http://localhost:<port>/<session_id>/<provider>`, then `exec`s the real agent.
+1. **Ingress.** A request arrives at the single listener. The proxy parses `provider` (and a session id, when the path pins one) from the path and looks up the upstream URL in config.
+2. **Attribution.** The session id is taken from the path pin if present, else from `x-aap-session` / `x-claude-code-session-id`, else the synthetic unattributed bucket for that client. The client itself comes from `x-aap-client` or the user agent.
 3. **Passthrough.** The proxy strips `/<session_id>/<provider>` and forwards the remaining path (e.g. `/v1/messages`) upstream over HTTPS, byte-for-byte. The upstream response streams straight back to the agent, unbuffered.
 4. **Tee (async).** In parallel, request bytes and the response stream are teed into an async capture sink (a `PassThrough`) that writes NDJSON to the session's trace file. This never applies backpressure to the client stream.
 5. **Index.** Metadata rows (session, request, response) with file pointers + timing are written to SQLite.
 6. **Parse (off hot path).** A parser reads the raw trace to extract model, token usage (including provider prompt-cache hit tokens), stop reason, tool calls, and context composition (message count, system-prompt and tool-definition tokens), and computes cost from the pricing config, writing results back to SQLite. It runs re-runnably via `aap parse` and automatically on a low-frequency background tick inside `aap serve`, so finished requests become metrics without a manual step — never on the request hot path.
 7. **Read & analyse (off hot path).** The read API (`api/`), MCP server, and `/ui` derive everything on demand from the indexed metrics and the raw traces: per-session recommendations, tool-result amplification, context growth, the shell-command breakdown, and a per-request message-stack composition (`GET /requests/:id/messages`).
 
-**Fallback:** a request without the `/<session_id>/` prefix (agent run directly, no wrapper) is attributed to a synthetic "unattributed" session, grouped by an idle-timeout window.
+**Attribution precedence:** explicit path pin (benchmarking, `aap run`) → client-advertised session header (Claude Code) → the active Bedrock/Ollama pin → a synthetic `unattributed-<client>-<uuid>` session, one bucket per client, split after `[sessions].idleTimeoutMs` of silence. A launcher-less session's `cwd`/`repo` is backfilled during parse from the `<env>` block in the system prompt, so it looks the same as a registered one (`aap sessions`, `/sessions`, exports).
 
 ---
 

@@ -1,10 +1,10 @@
 import type { ChildProcess } from "node:child_process";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join, dirname } from "node:path";
 import { loadConfig, type Config } from "../config/index.js";
 import { ensureHooksInstalled, hooksPath } from "../hook/install.js";
-import type { SessionInfo } from "../session/index.js";
+import { detectRepo, type SessionInfo } from "../session/index.js";
 import { planOllamaLaunch } from "./run-ollama.js";
 
 const PROVIDER_ENV: Readonly<Record<string, string>> = {
@@ -496,25 +496,5 @@ export async function registerSession(
     console.error(
       `aap: could not reach proxy at ${origin} — is 'aap serve' running? (${(err as Error).message})`,
     );
-  }
-}
-
-function detectRepo(cwd: string): string | null {
-  return (
-    tryGit(["config", "--get", "remote.origin.url"], cwd) ??
-    tryGit(["rev-parse", "--show-toplevel"], cwd)
-  );
-}
-
-function tryGit(args: string[], cwd: string): string | null {
-  try {
-    const out = execFileSync("git", args, {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const value = out.toString().trim();
-    return value.length > 0 ? value : null;
-  } catch {
-    return null;
   }
 }

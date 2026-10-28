@@ -16,6 +16,7 @@ import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
 import { forwardBedrock } from "./bedrock.js";
+import { clientFromHeaders, sessionIdFromHeaders } from "./attribution.js";
 import { LruMap } from "./lru.js";
 import { parseRoute, isOllamaControlPath } from "./route.js";
 import { needsShaping, shapeRequestBody } from "./shape.js";
@@ -145,13 +146,32 @@ function handle(
   const method = req.method ?? "GET";
   const isKeepAlive = req.headers["x-aap-keep-alive"] === "1";
 
+  // Transparent attribution: an explicit session id (path pin or the active
+  // Bedrock/Ollama session) wins, then the one the client advertises itself.
+  // That is what lets a client reach the proxy with a constant base URL and no
+  // launcher — see `aap route`.
+  const client = clientFromHeaders(req.headers);
+  const headerSessionId = sessionIdFromHeaders(req.headers);
+  const sessionId = route.sessionId ?? headerSessionId ?? null;
+
+  // A header-attributed session has no registration, so seed the registry with
+  // what we know. Without this, per-session meta (armada_node, cache_ttl) and
+  // `/_control/sessions` would miss every launcher-less session.
+  if (sessionId && !route.sessionId && store && !registry.get(sessionId)) {
+    registry.register({
+      id: sessionId,
+      client: client ?? undefined,
+      startedAt: new Date().toISOString(),
+    });
+  }
+
   let trace: RequestTrace | undefined;
   // Control-plane calls (model list, health/account probes, model management)
   // are forwarded but not traced: they have no prompt or response to profile.
   if (capture && !isOllamaControlPath(pathname)) {
-    const sessionId = route.sessionId ?? capture.nextUnattributedSession();
     trace = capture.begin({
-      sessionId,
+      sessionId:
+        sessionId ?? capture.nextUnattributedSession(Date.now(), client),
       requestId: randomUUID(),
       provider: route.provider,
       method,
@@ -160,13 +180,14 @@ function handle(
       headers: req.headers,
       startedAt: Date.now(),
       keepAlive: isKeepAlive || undefined,
+      client,
     });
   }
 
   const extraHeaders: Record<string, string> = {};
   let cacheTtlUpgrade = false;
-  if (route.sessionId) {
-    const session = registry.get(route.sessionId);
+  if (sessionId) {
+    const session = registry.get(sessionId);
     if (session?.meta?.armada_node) {
       extraHeaders["x-armada-node"] = session.meta.armada_node;
     }
@@ -207,11 +228,11 @@ function handle(
       logger,
       extraHeaders,
       throttle,
-      sessionId: route.sessionId,
+      sessionId,
       prevBodies,
       cacheTtlUpgrade,
       meta: {
-        sessionId: route.sessionId,
+        sessionId,
         provider: route.provider,
         method,
         path: route.upstreamPath,

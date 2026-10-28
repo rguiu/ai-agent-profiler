@@ -23,23 +23,31 @@ dashboard — no install required: **https://rguiu.github.io/ai-agent-profiler/*
 
 ## How it works
 
-Launch your agent through a small wrapper that points its provider base URL at the
-profiler:
+Point your agent's provider base URL at the profiler and use it normally — no wrapper,
+no special command:
 
 ```
 aap serve            # terminal 1: proxy + read API
-aap run claude       # terminal 2: launch an agent (or: aap run opencode)
+aap route --write    # once: routes claude/opencode/pi through their own config files
+claude               # terminal 2: just use the agent
 ```
 
 The profiler streams traffic through untouched, tees a copy to append-only trace files,
 and indexes metadata in SQLite. Metrics are computed off the hot path so token streaming
 stays unbuffered. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-`aap run` is **not required** — the proxy is transparent, so any client pointed at it is
-captured. What `aap run` adds is **attribution**: a stable session id, the working
-directory + git repo, and per-session grouping for concurrent agents. Without it,
-requests still land in an "unattributed" session. None of this metadata is ever sent to
-the LLM.
+Sessions are attributed from the request itself: Claude Code advertises its own session
+id (`x-claude-code-session-id`), which the proxy records, and the working directory is
+recovered off the hot path from the `<env>` block in the system prompt. `aap route` is
+only a config writer — it edits `~/.claude/settings.json`, `~/.config/opencode/opencode.json`
+and `~/.pi/agent/models.json`, the files those agents already read, and `aap route --undo`
+restores them. Clients that advertise no session id (opencode, pi, the Ollama CLI) are
+grouped per client and split after `[sessions].idleTimeoutMs` of silence.
+
+`aap run <agent>` still exists for the cases a config file can't express — an explicit
+session id in the base URL (benchmark pinning), `--meta` tags, `--cache-1h`, and the
+`ollama launch` path — and it wins over the inferred attribution. None of this metadata
+is ever sent to the LLM.
 
 ## Features
 
