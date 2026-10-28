@@ -249,6 +249,28 @@ describe("planOllamaLaunch (non-interactive)", () => {
       ]);
     });
 
+    it("places --standalone after the `run` subcommand", async () => {
+      const plan = await planOllamaLaunch(
+        ["--model", "m", "opencode", "run", "--auto", "hi"],
+        {},
+        withDaemon,
+        "http://h:1",
+        "s",
+        false,
+      );
+      expect(plan?.agentArgs).toEqual([
+        "launch",
+        "opencode",
+        "--model",
+        "m",
+        "--",
+        "run",
+        "--standalone",
+        "--auto",
+        "hi",
+      ]);
+    });
+
     it("requires [providers.ollama]", async () => {
       expect(
         await planOllamaLaunch(["pi"], {}, config, "http://h:1", "s", false),

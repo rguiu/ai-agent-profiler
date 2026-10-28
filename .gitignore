@@ -1,6 +1,9 @@
 # Private seed / working notes (not part of the public repo)
 notes/
 
+# Private note-taking reports (local-only, not published)
+docs/opencode-ollama-poc-report.html
+
 # Marketing / article drafts (LinkedIn, Slack, blog) — not part of the repo
 docs/articles/
 docs/archive/

@@ -67,11 +67,13 @@ export function buildOllamaLaunchArgs(
 ): string[] {
   // opencode 2.x attaches to a shared background service that keeps the
   // config and env of whoever started it, so this launch's model and routing
-  // would be ignored. A private server picks them up.
-  const args =
-    agent === "opencode" && !agentArgs.includes("--standalone")
-      ? ["--standalone", ...agentArgs]
-      : agentArgs;
+  // would be ignored. A private server picks them up. opencode's usage is
+  // `opencode <subcommand> [flags]`, so `--standalone` must follow the
+  // subcommand (`run`), not precede it.
+  const args = [...agentArgs];
+  if (agent === "opencode" && !args.includes("--standalone")) {
+    args.splice(1, 0, "--standalone");
+  }
   const out = ["launch", agent];
   if (model) out.push("--model", model);
   if (args.length > 0) out.push("--", ...args);
