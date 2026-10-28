@@ -30,6 +30,7 @@ interface Marker {
 interface Options {
   write: boolean;
   undo: boolean;
+  cacheTtl?: "1h";
   clients: ClientId[];
 }
 
@@ -66,7 +67,10 @@ export async function route(args: string[]): Promise<void> {
       printOllama(origin);
       continue;
     }
-    const patch = clientPatch(client, origin, config.providers);
+    const patch = clientPatch(client, origin, config.providers, {
+      env: process.env,
+      cacheTtl: opts.cacheTtl,
+    });
     if (Object.keys(patch).length === 0) {
       console.log(
         `\n${label(client)}: no matching provider in config — skipped`,
@@ -120,19 +124,27 @@ export async function route(args: string[]): Promise<void> {
     console.log(
       `\nRe-run with \`aap route --write\` to apply, or \`aap route --write claude\` for one client.`,
     );
+    console.log(
+      `Claude Code optimisations (ENABLE_TOOL_SEARCH, CLAUDE_CODE_AUTO_MODE_SERVER)`,
+    );
+    console.log(
+      `are written into the same settings file; add --cache-1h for the 1h prompt cache.`,
+    );
   }
 }
 
 function parseArgs(args: string[]): Options {
   let write = false;
   let undo = false;
+  let cacheTtl: "1h" | undefined;
   const clients: ClientId[] = [];
   for (const arg of args) {
     if (arg === "--write") write = true;
     else if (arg === "--undo") undo = true;
+    else if (arg === "--cache-1h") cacheTtl = "1h";
     else if (arg === "--help" || arg === "-h") {
       console.log(
-        "Usage: aap route [--write] [--undo] [claude|opencode|pi|ollama ...]",
+        "Usage: aap route [--write] [--undo] [--cache-1h] [claude|opencode|pi|ollama ...]",
       );
       process.exit(0);
     } else if ((CLIENT_IDS as readonly string[]).includes(arg)) {
@@ -142,7 +154,7 @@ function parseArgs(args: string[]): Options {
       process.exitCode = 1;
     }
   }
-  return { write, undo, clients };
+  return { write, undo, cacheTtl, clients };
 }
 
 async function probe(origin: string): Promise<boolean> {

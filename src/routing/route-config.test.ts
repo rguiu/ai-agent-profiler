@@ -47,6 +47,7 @@ describe("claudeSettingsPatch", () => {
         ANTHROPIC_BASE_URL: `${ORIGIN}/anthropic`,
         OPENAI_BASE_URL: `${ORIGIN}/openai`,
         ANTHROPIC_BEDROCK_BASE_URL: ORIGIN,
+        ENABLE_TOOL_SEARCH: "true",
       },
     });
   });
@@ -54,8 +55,65 @@ describe("claudeSettingsPatch", () => {
   it("only routes the providers the config has", () => {
     expect(
       claudeSettingsPatch(ORIGIN, { anthropic: providers.anthropic }),
-    ).toEqual({ env: { ANTHROPIC_BASE_URL: `${ORIGIN}/anthropic` } });
+    ).toEqual({
+      env: {
+        ANTHROPIC_BASE_URL: `${ORIGIN}/anthropic`,
+        ENABLE_TOOL_SEARCH: "true",
+      },
+    });
     expect(claudeSettingsPatch(ORIGIN, {})).toEqual({});
+  });
+
+  // The launcher used to be the only place these were set; without it they
+  // have to live in the settings file the shell and IDE both read.
+  it("carries the Claude Code optimisations the launcher would set", () => {
+    // Off first-party Anthropic: no deferred tool schemas (400), and auto mode
+    // would nag because its classifier only runs on Anthropic's API.
+    const gateway = { anthropic: { upstream: "https://gw.internal.dev" } };
+    expect(claudeSettingsPatch(ORIGIN, gateway, { env: {} })).toEqual({
+      env: {
+        ANTHROPIC_BASE_URL: `${ORIGIN}/anthropic`,
+        CLAUDE_CODE_AUTO_MODE_SERVER: "0",
+      },
+    });
+    // Bedrock is a different API: same treatment.
+    expect(
+      claudeSettingsPatch(ORIGIN, providers, {
+        env: { CLAUDE_CODE_USE_BEDROCK: "1" },
+      }),
+    ).toMatchObject({ env: { CLAUDE_CODE_AUTO_MODE_SERVER: "0" } });
+  });
+
+  it("respects an explicit opt-out in the ambient environment", () => {
+    // A settings `env` value beats the exported variable, so writing it would
+    // silently override what the user asked for.
+    expect(
+      claudeSettingsPatch(ORIGIN, providers, {
+        env: {
+          ENABLE_TOOL_SEARCH: "false",
+          CLAUDE_CODE_AUTO_MODE_SERVER: "1",
+        },
+      }),
+    ).toEqual({
+      env: {
+        ANTHROPIC_BASE_URL: `${ORIGIN}/anthropic`,
+        OPENAI_BASE_URL: `${ORIGIN}/openai`,
+        ANTHROPIC_BEDROCK_BASE_URL: ORIGIN,
+      },
+    });
+  });
+
+  it("writes the native 1h prompt cache TTL on --cache-1h", () => {
+    expect(claudeSettingsPatch(ORIGIN, providers, { cacheTtl: "1h" })).toEqual({
+      env: {
+        ANTHROPIC_BASE_URL: `${ORIGIN}/anthropic`,
+        OPENAI_BASE_URL: `${ORIGIN}/openai`,
+        ANTHROPIC_BEDROCK_BASE_URL: ORIGIN,
+        ENABLE_TOOL_SEARCH: "true",
+      },
+      promptCacheTtl: "1h",
+      subagentPromptCacheTtl: "1h",
+    });
   });
 });
 

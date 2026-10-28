@@ -44,10 +44,17 @@ and `~/.pi/agent/models.json`, the files those agents already read, and `aap rou
 restores them. Clients that advertise no session id (opencode, pi, the Ollama CLI) are
 grouped per client and split after `[sessions].idleTimeoutMs` of silence.
 
+The optimisations `aap run` used to apply as child-process env survive routing: the
+`env` block it writes also carries `ENABLE_TOOL_SEARCH` (deferred tool schemas —
+first-party Anthropic only), `CLAUDE_CODE_AUTO_MODE_SERVER=0` (off first-party
+Anthropic) and, with `aap route --write --cache-1h`, Claude Code's native one-hour
+prompt-cache TTL. Values you already export are respected; the same gating lives in
+`src/routing/claude-env.ts` for both paths.
+
 `aap run <agent>` still exists for the cases a config file can't express — an explicit
-session id in the base URL (benchmark pinning), `--meta` tags, `--cache-1h`, and the
-`ollama launch` path — and it wins over the inferred attribution. None of this metadata
-is ever sent to the LLM.
+session id in the base URL (benchmark pinning), `--meta` tags, the keep-alive ping, the
+proxy-side cache-TTL rewrite for non-Claude clients, and the `ollama launch` path — and
+it wins over the inferred attribution. None of this metadata is ever sent to the LLM.
 
 ## Features
 
@@ -335,10 +342,15 @@ is prepended to PATH. The wrappers filter output:
 
 ## Cache maintenance
 
-**`upgradeCacheTtl` (via `--cache-1h`).** Claude Code always requests the 5-minute
-cache. `aap run claude --cache-1h` rewrites `cache_control` markers to 1h before
-forwarding. Costs 2× input on write vs 1.25× for 5m but survives 12× longer —
-wins when idle gaps fall between 5 min and 1 hour.
+**1h cache TTL (via `--cache-1h`).** Claude Code always requests the 5-minute
+cache. Costs 2× input on write vs 1.25× for 5m but survives 12× longer — wins when
+idle gaps fall between 5 min and 1 hour. There are two ways to get it:
+
+- `aap route --write --cache-1h claude` writes Claude Code's own `promptCacheTtl` and
+  `subagentPromptCacheTtl` settings — no launcher, and the bytes are the client's.
+- `aap run claude --cache-1h` sets `meta.cache_ttl=1h` and the proxy rewrites
+  `cache_control` markers to 1h before forwarding (the only option for non-Claude
+  clients, and for Claude Code versions without the settings key).
 
 **Keep-alive.** `AAP_KEEP_ALIVE=1 aap run claude` replays the last request with
 `max_tokens: 1` to prevent cache expiry during idle. Best with `--cache-1h` (pings

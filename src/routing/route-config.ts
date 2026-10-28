@@ -1,4 +1,5 @@
 import type { ProviderConfig } from "../config/index.js";
+import { claudeEnvOptimizations } from "./claude-env.js";
 
 /**
  * Client configuration for transparent routing.
@@ -24,6 +25,16 @@ export const CLIENT_IDS: readonly ClientId[] = [
 /** Providers whose base URL an agent can be pointed at directly. */
 type Providers = Readonly<Record<string, ProviderConfig>>;
 
+export interface ClientPatchOptions {
+  /** Ambient environment the routing was chosen in. `aap run` reads it to gate
+   * the Claude Code optimisations (Bedrock/Vertex selected, explicit opt-outs);
+   * `aap route` has no child process, so it passes the user's shell env and the
+   * optimisations land in the settings file instead. */
+  env?: NodeJS.ProcessEnv;
+  /** `--cache-1h`: write Claude Code's native one-hour prompt cache TTL. */
+  cacheTtl?: "1h";
+}
+
 /** Base URL an agent should use for a provider. Mirrors `buildProviderEnv`:
  * Claude Code appends `/v1/messages` itself, OpenAI-compatible clients do not
  * (opencode and pi take the API path as part of the base URL). */
@@ -41,10 +52,15 @@ export function providerBaseUrl(
 /**
  * Claude Code: `~/.claude/settings.json` `env` block. User scope (not project)
  * so it applies to terminal, IDE and desktop sessions without a trust prompt.
+ *
+ * The `env` block is also where the launcher-only optimisations go, because a
+ * settings value overwrites the same variable exported in the shell — so we
+ * only write the ones the ambient env hasn't already decided.
  */
 export function claudeSettingsPatch(
   origin: string,
   providers: Providers,
+  opts: ClientPatchOptions = {},
 ): Record<string, unknown> {
   const env: Record<string, string> = {};
   if (providers.anthropic) {
@@ -68,7 +84,22 @@ export function claudeSettingsPatch(
   if (providers.bedrock) {
     env.ANTHROPIC_BEDROCK_BASE_URL = origin;
   }
-  return Object.keys(env).length > 0 ? { env } : {};
+  // ENABLE_TOOL_SEARCH (deferred tool schemas) and
+  // CLAUDE_CODE_AUTO_MODE_SERVER (off first-party Anthropic) — the same gating
+  // `aap run` applies, so demoting the launcher doesn't drop them.
+  Object.assign(env, claudeEnvOptimizations(providers, opts.env ?? {}));
+
+  const patch: Record<string, unknown> = {};
+  if (Object.keys(env).length > 0) patch.env = env;
+  // Claude Code ≥ 2.1.242 has a first-class TTL key. Setting it here beats the
+  // proxy rewrite `aap run --cache-1h` uses, which needs per-session meta the
+  // proxy can't have when nothing wraps the launch. Both keys so subagents,
+  // compaction and title requests match the main conversation.
+  if (opts.cacheTtl === "1h") {
+    patch.promptCacheTtl = "1h";
+    patch.subagentPromptCacheTtl = "1h";
+  }
+  return patch;
 }
 
 /** opencode: `~/.config/opencode/opencode.json` — one baseURL per provider. */
@@ -147,10 +178,11 @@ export function clientPatch(
   client: ClientId,
   origin: string,
   providers: Providers,
+  opts: ClientPatchOptions = {},
 ): Record<string, unknown> {
   switch (client) {
     case "claude":
-      return claudeSettingsPatch(origin, providers);
+      return claudeSettingsPatch(origin, providers, opts);
     case "opencode":
       return opencodeConfigPatch(origin, providers);
     case "pi":

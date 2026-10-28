@@ -4,8 +4,20 @@ import { randomUUID } from "node:crypto";
 import { join, dirname } from "node:path";
 import { loadConfig, type Config } from "../config/index.js";
 import { ensureHooksInstalled, hooksPath } from "../hook/install.js";
+import {
+  autoModeEnv,
+  isFirstPartyAnthropic as isFirstPartyAnthropicEndpoint,
+  toolSearchEnv,
+} from "../routing/claude-env.js";
 import { detectRepo, type SessionInfo } from "../session/index.js";
 import { planOllamaLaunch } from "./run-ollama.js";
+
+export function isFirstPartyAnthropic(
+  config: Pick<Config, "providers">,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return isFirstPartyAnthropicEndpoint(config.providers, env);
+}
 
 const PROVIDER_ENV: Readonly<Record<string, string>> = {
   anthropic: "ANTHROPIC_BASE_URL",
@@ -67,93 +79,28 @@ function explicitlyNoTools(agentArgs: string[]): boolean {
   return false;
 }
 
-// Claude Code caches its tool definitions per ANTHROPIC_BASE_URL; routing it
-// through the proxy changes that URL and invalidates the cache, so every
-// request resends the full tool list. ENABLE_TOOL_SEARCH defers tool schemas
-// instead, keeping the cache valid. Default it on for Claude Code unless the
-// caller already set it explicitly — but only when the endpoint actually serves
-// a first-party Anthropic model. Deferred custom tools are only supported on
-// Anthropic models (upstream #89211); forcing ENABLE_TOOL_SEARCH=true for a
-// non-Anthropic endpoint (DeepSeek/Bedrock/Ollama/gateway) yields a 400.
+// Claude Code optimisations gated on the endpoint, shared with `aap route` so
+// the wrapper-free path writes the same values. The launcher-level rule is
+// only this one: a caller passing `--tools ""` asked for a tool-less call, so
+// deferring tool schemas is meaningless there.
 export function buildToolSearchEnv(
   agent: string,
   env: NodeJS.ProcessEnv,
   config: Pick<Config, "providers">,
   agentArgs: string[] = [],
 ): Record<string, string> {
-  if (
-    agent !== "claude" ||
-    env.ENABLE_TOOL_SEARCH !== undefined ||
-    explicitlyNoTools(agentArgs)
-  ) {
-    return {};
-  }
-  return isFirstPartyAnthropic(config, env)
-    ? { ENABLE_TOOL_SEARCH: "true" }
-    : {};
+  if (agent !== "claude" || explicitlyNoTools(agentArgs)) return {};
+  return toolSearchEnv(config.providers, env);
 }
 
-// Auto mode's classifier checks run server-side on Anthropic's API. Any other
-// backend (Ollama, DeepSeek, Bedrock, Vertex, a gateway) can't perform them, so
-// Claude Code nags about ineligibility on every session. Opt out up front there.
 export function buildAutoModeEnv(
   agent: string,
   env: NodeJS.ProcessEnv,
   config: Pick<Config, "providers">,
   forceNonAnthropic = false,
 ): Record<string, string> {
-  if (agent !== "claude" || env.CLAUDE_CODE_AUTO_MODE_SERVER !== undefined) {
-    return {};
-  }
-  return forceNonAnthropic || routesClaudeOffAnthropic(config, env)
-    ? { CLAUDE_CODE_AUTO_MODE_SERVER: "0" }
-    : {};
-}
-
-function envFlag(value: string | undefined): boolean {
-  return Boolean(value) && value !== "0";
-}
-
-// Without `[providers.anthropic]` aap doesn't set ANTHROPIC_BASE_URL, so
-// Claude Code keeps its own (first-party) endpoint unless a cloud backend is
-// selected in the env.
-function routesClaudeOffAnthropic(
-  config: Pick<Config, "providers">,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  if (
-    envFlag(env.CLAUDE_CODE_USE_BEDROCK) ||
-    envFlag(env.CLAUDE_CODE_USE_VERTEX)
-  ) {
-    return true;
-  }
-  if (!config.providers.anthropic) return false;
-  return !isFirstPartyAnthropic(config, env);
-}
-
-// True when Claude Code will be talking to a first-party Anthropic endpoint.
-// Bedrock is a distinct API (AWS), not the Anthropic messages endpoint, so it
-// is not first-party here. Otherwise we trust the `anthropic` provider's
-// upstream host: only api.anthropic.com (or an *.anthropic.com enterprise
-// endpoint) counts. A third-party gateway serving a real Anthropic model is
-// deliberately left "not first-party" — the safe default is to not force true.
-export function isFirstPartyAnthropic(
-  config: Pick<Config, "providers">,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const useBedrock =
-    env.CLAUDE_CODE_USE_BEDROCK && env.CLAUDE_CODE_USE_BEDROCK !== "0";
-  if (useBedrock) return false;
-
-  const upstream = config.providers.anthropic?.upstream;
-  if (!upstream) return false;
-
-  try {
-    const host = new URL(upstream).hostname.toLowerCase();
-    return host === "api.anthropic.com" || host.endsWith(".anthropic.com");
-  } catch {
-    return false;
-  }
+  if (agent !== "claude") return {};
+  return autoModeEnv(config.providers, env, forceNonAnthropic);
 }
 
 // A caller may pin the session id (e.g. a benchmark harness that needs to tag

@@ -82,6 +82,8 @@ The **capture core is complete** — the profiler reliably records raw, high-fid
 
 **Attribution precedence:** explicit path pin (benchmarking, `aap run`) → client-advertised session header (Claude Code) → the active Bedrock/Ollama pin → a synthetic `unattributed-<client>-<uuid>` session, one bucket per client, split after `[sessions].idleTimeoutMs` of silence. A launcher-less session's `cwd`/`repo` is backfilled during parse from the `<env>` block in the system prompt, so it looks the same as a registered one (`aap sessions`, `/sessions`, exports).
 
+**Launcher-only behaviour moves into the config file.** `aap run` used to be the sole place the Claude Code optimisations were applied, as child-process env: `ENABLE_TOOL_SEARCH` (deferred tool schemas, first-party Anthropic only), `CLAUDE_CODE_AUTO_MODE_SERVER=0` (off first-party Anthropic), and the 1h prompt-cache TTL via proxy rewriting. Without a launcher none of that would fire, so `src/routing/claude-env.ts` holds the gating once and both paths read it: `aap run` exports the result, `aap route` writes it into the `env` block of `~/.claude/settings.json`. The TTL is written as the native `promptCacheTtl` / `subagentPromptCacheTtl` keys instead of being rewritten on the proxy, because the rewrite depends on per-session `meta.cache_ttl` that only a launcher can set. Values already present in the user's shell are left alone — a settings `env` entry would silently override them.
+
 ---
 
 ## Storage model

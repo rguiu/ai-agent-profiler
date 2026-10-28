@@ -32,6 +32,10 @@ beforeEach(() => {
   saved.AAP_CONFIG = process.env.AAP_CONFIG;
   process.env.HOME = home;
   process.env.AAP_CONFIG = configPath;
+  // The patch reflects the ambient env; keep the test independent of the
+  // developer's shell.
+  delete process.env.ENABLE_TOOL_SEARCH;
+  delete process.env.CLAUDE_CODE_AUTO_MODE_SERVER;
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
@@ -61,6 +65,7 @@ describe("aap route", () => {
     const written = read(settings);
     expect(written.env).toEqual({
       ANTHROPIC_BASE_URL: "http://127.0.0.1:1/anthropic",
+      ENABLE_TOOL_SEARCH: "true",
     });
 
     await route(["--undo"]);
@@ -80,7 +85,11 @@ describe("aap route", () => {
     await route(["--write", "claude"]);
     expect(read(settings)).toEqual({
       ...original,
-      env: { FOO: "bar", ANTHROPIC_BASE_URL: "http://127.0.0.1:1/anthropic" },
+      env: {
+        FOO: "bar",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:1/anthropic",
+        ENABLE_TOOL_SEARCH: "true",
+      },
     });
 
     await route(["--undo"]);
@@ -106,6 +115,30 @@ describe("aap route", () => {
 
     await route(["--write", "claude"]);
     expect(readFileSync(settings, "utf8")).toBe("{ not json");
+  });
+
+  it("writes the optimisations and the 1h cache TTL", async () => {
+    const settings = join(home, ".claude/settings.json");
+    await route(["--write", "--cache-1h", "claude"]);
+    expect(read(settings)).toEqual({
+      env: {
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:1/anthropic",
+        ENABLE_TOOL_SEARCH: "true",
+      },
+      promptCacheTtl: "1h",
+      subagentPromptCacheTtl: "1h",
+    });
+    await route(["--undo"]);
+    expect(existsSync(settings)).toBe(false);
+  });
+
+  it("leaves a user's explicit opt-out alone", async () => {
+    const settings = join(home, ".claude/settings.json");
+    process.env.ENABLE_TOOL_SEARCH = "false";
+    await route(["--write", "claude"]);
+    expect(read(settings)).toEqual({
+      env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:1/anthropic" },
+    });
   });
 
   it("does nothing on --undo when nothing was applied", async () => {
