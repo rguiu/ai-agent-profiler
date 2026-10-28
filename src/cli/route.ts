@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import { loadConfig } from "../config/index.js";
+import { loadConfig, withBuiltinProviders } from "../config/index.js";
 import {
   CLIENT_IDS,
   clientConfigPath,
@@ -49,10 +49,13 @@ export async function route(args: string[]): Promise<void> {
     return;
   }
 
-  // Plain loadConfig, like `aap run`: only providers the user configured are
-  // routed. The built-ins serve adds (ollama-cloud) must not leak into a
-  // client's config file.
-  const config = loadConfig();
+  // Built-ins included on purpose: opencode resolves a model id to a provider
+  // that has to exist in its own config, and `ollama-cloud/<model>` is in
+  // opencode's catalog. Without the entry opencode sends that model straight to
+  // ollama.com, so the run is real but untraced. Only the opencode patch is
+  // built from the provider map (claude and pi name their providers
+  // explicitly), so no other client grows a built-in.
+  const config = withBuiltinProviders(loadConfig());
   const origin = `http://${config.server.host}:${config.server.port}`;
   const healthy = await probe(origin);
 

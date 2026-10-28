@@ -149,9 +149,16 @@ describe("aap route", () => {
   it("routes opencode and pi in their own config files", async () => {
     await route(["--write", "opencode", "pi"]);
 
+    // `ollama-cloud` is a proxy built-in, but opencode resolves a model id to a
+    // provider that must exist in its own config: `ollama-cloud/<model>` is in
+    // its catalog, so without the entry the request goes straight to
+    // ollama.com and the run is untraced.
     expect(read(join(home, ".config/opencode/opencode.json"))).toEqual({
       provider: {
         anthropic: { options: { baseURL: "http://127.0.0.1:1/anthropic/v1" } },
+        "ollama-cloud": {
+          options: { baseURL: "http://127.0.0.1:1/ollama-cloud/v1" },
+        },
       },
     });
     expect(read(join(home, ".pi/agent/models.json"))).toEqual({
@@ -163,5 +170,17 @@ describe("aap route", () => {
       false,
     );
     expect(existsSync(join(home, ".pi/agent/models.json"))).toBe(false);
+  });
+  it("keeps the built-in ollama-cloud out of the claude and pi configs", async () => {
+    await route(["--write", "claude", "pi"]);
+
+    // Claude Code and pi name the providers they route, so the built-in cannot
+    // leak into their files the way it lands in opencode's provider map.
+    expect(
+      readFileSync(join(home, ".claude/settings.json"), "utf8"),
+    ).not.toContain("ollama-cloud");
+    expect(
+      readFileSync(join(home, ".pi/agent/models.json"), "utf8"),
+    ).not.toContain("ollama-cloud");
   });
 });

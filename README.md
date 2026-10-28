@@ -41,7 +41,11 @@ id (`x-claude-code-session-id`), which the proxy records, and the working direct
 recovered off the hot path from the `<env>` block in the system prompt. `aap route` is
 only a config writer — it edits `~/.claude/settings.json`, `~/.config/opencode/opencode.json`
 and `~/.pi/agent/models.json`, the files those agents already read, and `aap route --undo`
-restores them. Clients that advertise no session id (opencode, pi, the Ollama CLI) are
+restores them. opencode's patch also carries the built-in `ollama-cloud` provider: it
+resolves a model id to a provider that must exist in its own config, so without that
+entry `ollama-cloud/<model>` — a model opencode knows from its catalog — is sent
+straight to ollama.com and the run is real but untraced. Clients that advertise no
+session id (opencode, pi, the Ollama CLI) are
 grouped per client and split after `[sessions].idleTimeoutMs` of silence.
 
 The optimisations `aap run` used to apply as child-process env survive routing: the
