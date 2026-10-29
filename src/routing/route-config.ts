@@ -1,5 +1,6 @@
 import type { ProviderConfig } from "../config/index.js";
 import { claudeEnvOptimizations } from "./claude-env.js";
+import { shellProfilePath } from "./shell-profile.js";
 
 /**
  * Client configuration for transparent routing.
@@ -170,7 +171,9 @@ export function clientConfigPath(client: ClientId, home: string): string {
     case "pi":
       return `${home}/.pi/agent/models.json`;
     case "ollama":
-      return `${home}/.zshrc`;
+      // Not a config file: ollama's launcher rewrites the agent's provider from
+      // OLLAMA_HOST, so `aap route` owns a scoped function in the login profile.
+      return shellProfilePath(home) ?? `${home}/.zshrc`;
   }
 }
 

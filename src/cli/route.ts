@@ -17,6 +17,13 @@ import {
   mergeConfig,
   type ClientId,
 } from "../routing/route-config.js";
+import { proxyOrigin } from "../routing/origin.js";
+import {
+  ollamaShellState,
+  removeOllamaBlock,
+  shellProfilePath,
+  upsertOllamaBlock,
+} from "../routing/shell-profile.js";
 
 const BACKUP_SUFFIX = ".aap-backup";
 const MARKER_VERSION = 1;
@@ -24,7 +31,7 @@ const MARKER_VERSION = 1;
 interface Marker {
   version: number;
   origin: string;
-  files: { path: string; existed: boolean }[];
+  files: { path: string; existed: boolean; kind?: "json" | "shell" }[];
 }
 
 interface Options {
@@ -56,7 +63,7 @@ export async function route(args: string[]): Promise<void> {
   // built from the provider map (claude and pi name their providers
   // explicitly), so no other client grows a built-in.
   const config = withBuiltinProviders(loadConfig());
-  const origin = `http://${config.server.host}:${config.server.port}`;
+  const origin = proxyOrigin(config.server);
   const healthy = await probe(origin);
 
   printHealth(origin, healthy);
@@ -65,9 +72,9 @@ export async function route(args: string[]): Promise<void> {
   const applied: { client: ClientId; path: string }[] = [];
 
   for (const client of targets) {
-    const path = clientConfigPath(client, homedir());
     if (client === "ollama") {
-      printOllama(origin);
+      const path = routeOllama(origin, opts.write);
+      if (path !== null) applied.push({ client, path });
       continue;
     }
     const patch = clientPatch(client, origin, config.providers, {
@@ -80,6 +87,7 @@ export async function route(args: string[]): Promise<void> {
       );
       continue;
     }
+    const path = clientConfigPath(client, homedir());
     const existing = readJson(path);
     if (existing === "broken") {
       console.log(
@@ -122,6 +130,12 @@ export async function route(args: string[]): Promise<void> {
         `as unattributed-<client>-… and split after [sessions].idleTimeoutMs.`,
       );
       console.log(`Undo with \`aap route --undo\`.`);
+      if (applied.some((entry) => entry.client === "ollama")) {
+        console.log(
+          `Open a new terminal (or \`exec $SHELL\`) so the \`ollama\` shell function`,
+        );
+        console.log(`is loaded before the next \`ollama launch\`.`);
+      }
     }
   } else if (targets.some((c) => c !== "ollama")) {
     console.log(
@@ -178,15 +192,85 @@ function printHealth(origin: string, healthy: boolean): void {
   );
 }
 
-function printOllama(origin: string): void {
-  const routed = process.env.OLLAMA_HOST === origin;
-  console.log(`\n${label("ollama")}  (shell environment)`);
+/**
+ * Route `ollama launch <agent>`. Unlike Claude Code, opencode and pi, ollama
+ * takes no config file of its own for this: it builds the agent's inline config
+ * from `OLLAMA_HOST` at launch time, which overrides the provider entries
+ * `aap route` writes for opencode/pi. The only lever is the environment, so the
+ * managed block lives in the login profile and scopes the redirect to `launch`.
+ *
+ * Returns the profile path when this run changed it.
+ */
+function routeOllama(origin: string, write: boolean): string | null {
+  const home = homedir();
+  const path = shellProfilePath(home, process.env);
   console.log(
-    `  state:    ${routed ? "routed" : "not set in this shell (add to your shell profile)"}`,
+    `\n${label("ollama")}  ${path === null ? `(unsupported $SHELL "${process.env.SHELL ?? ""}")` : displayPath(path)}`,
   );
+
+  const block = `ollama() { … OLLAMA_HOST='${origin}' command ollama "$@" … }  # \`launch\` only`;
+  if (path === null) {
+    console.log(`  state:  not routed`);
+    console.log(`  patch:  ${block}`);
+    console.log(
+      `\n  aap route only edits zsh and bash profiles; add this function yourself.`,
+    );
+    return null;
+  }
+
+  const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const state = ollamaShellState(text);
+  const routed = state.managed
+    ? state.managedOrigin === origin
+    : state.exportedOrigin === origin;
+  console.log(`  state:  ${ollamaStateLabel(state, origin, routed)}`);
+  console.log(`  patch:  ${block}`);
+
+  if (!write) return null;
+  if (routed) {
+    console.log(
+      state.managed
+        ? `  ...already routed, left untouched`
+        : `  ...your export already routes it; left untouched (it also moves \`ollama serve\`'s bind address)`,
+    );
+    return null;
+  }
+
+  const backup = path + BACKUP_SUFFIX;
+  const existed = existsSync(path);
+  // Keep the first backup pristine so it is still the file the user had before
+  // `aap route` touched anything.
+  if (existed && !existsSync(backup)) {
+    writeFileSync(backup, text);
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, upsertOllamaBlock(text, origin));
+  recordMarker(path, existed, origin, "shell");
   console.log(
-    `  patch:    export OLLAMA_HOST=${origin}  # the Ollama daemon relays :cloud models`,
+    existed
+      ? `  wrote:  ${displayPath(path)} (original kept as ${BACKUP_SUFFIX})`
+      : `  wrote:  ${displayPath(path)} (created)`,
   );
+  return path;
+}
+
+function ollamaStateLabel(
+  state: ReturnType<typeof ollamaShellState>,
+  origin: string,
+  routed: boolean,
+): string {
+  if (routed) {
+    return state.managed
+      ? "routed"
+      : `routed (OLLAMA_HOST exported in this file)`;
+  }
+  if (state.managed) {
+    return `routed to ${state.managedOrigin ?? "an unreadable value"} — not ${origin} (will be updated)`;
+  }
+  if (state.exportedOrigin) {
+    return `not routed — OLLAMA_HOST is exported to ${state.exportedOrigin}`;
+  }
+  return `not routed (proxy is ${origin})`;
 }
 
 function applyPatch(
@@ -204,15 +288,20 @@ function applyPatch(
     writeFileSync(backup, JSON.stringify(existing, null, 2) + "\n");
   }
   writeFileSync(path, JSON.stringify(merged, null, 2) + "\n");
-  recordMarker(path, existing !== null, origin);
+  recordMarker(path, existing !== null, origin, "json");
 }
 
-function recordMarker(path: string, existed: boolean, origin: string): void {
+function recordMarker(
+  path: string,
+  existed: boolean,
+  origin: string,
+  kind: "json" | "shell",
+): void {
   const markerPath = markerPathFor(homedir());
   const marker = readMarker(markerPath);
   const files = marker?.files ?? [];
   if (!files.some((f) => f.path === path)) {
-    files.push({ path, existed });
+    files.push({ path, existed, kind });
   }
   mkdirSync(dirname(markerPath), { recursive: true });
   writeFileSync(
@@ -229,6 +318,10 @@ function undo(home: string): void {
     return;
   }
   for (const file of marker.files) {
+    if (file.kind === "shell") {
+      undoShellProfile(file.path, file.existed);
+      continue;
+    }
     const backup = file.path + BACKUP_SUFFIX;
     if (file.existed && existsSync(backup)) {
       renameSync(backup, file.path);
@@ -241,6 +334,27 @@ function undo(home: string): void {
   }
   rmSync(markerPath, { force: true });
   console.log("aap route: routing removed.");
+}
+
+/**
+ * Remove only the managed block from a shell profile. Restoring the backup
+ * would also throw away anything the user added after `aap route --write`.
+ */
+function undoShellProfile(path: string, existed: boolean): void {
+  if (!existsSync(path)) return;
+  const text = readFileSync(path, "utf8");
+  const remaining = removeOllamaBlock(text);
+  if (remaining === text) return;
+
+  if (!existed && remaining.trim().length === 0) {
+    rmSync(path, { force: true });
+  } else {
+    writeFileSync(path, remaining);
+  }
+  // The backup was a safety net for the edit we just reverted; keeping it would
+  // leave a stale copy of the profile next to the real one.
+  rmSync(path + BACKUP_SUFFIX, { force: true });
+  console.log(`removed  aap's ollama block from ${displayPath(path)}`);
 }
 
 function readMarker(path: string): Marker | null {

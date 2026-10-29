@@ -30,8 +30,10 @@ beforeEach(() => {
   writeFileSync(configPath, CONFIG);
   saved.HOME = process.env.HOME;
   saved.AAP_CONFIG = process.env.AAP_CONFIG;
+  saved.SHELL = process.env.SHELL;
   process.env.HOME = home;
   process.env.AAP_CONFIG = configPath;
+  process.env.SHELL = "/bin/zsh";
   // The patch reflects the ambient env; keep the test independent of the
   // developer's shell.
   delete process.env.ENABLE_TOOL_SEARCH;
@@ -45,6 +47,8 @@ afterEach(() => {
   process.env.HOME = saved.HOME;
   if (saved.AAP_CONFIG === undefined) delete process.env.AAP_CONFIG;
   else process.env.AAP_CONFIG = saved.AAP_CONFIG;
+  if (saved.SHELL === undefined) delete process.env.SHELL;
+  else process.env.SHELL = saved.SHELL;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -182,5 +186,88 @@ describe("aap route", () => {
     expect(
       readFileSync(join(home, ".pi/agent/models.json"), "utf8"),
     ).not.toContain("ollama-cloud");
+  });
+
+  it("dialects the loopback when the server binds a wildcard address", async () => {
+    writeFileSync(
+      configPath,
+      CONFIG.replace('host = "127.0.0.1"', 'host = "0.0.0.0"'),
+    );
+
+    await route(["--write", "claude"]);
+
+    // 0.0.0.0 is a bind address; an agent cannot dial it on every platform.
+    expect(read(join(home, ".claude/settings.json"))).toEqual({
+      env: {
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:1/anthropic",
+        ENABLE_TOOL_SEARCH: "true",
+      },
+    });
+  });
+});
+
+describe("aap route ollama", () => {
+  const profile = (): string => join(home, ".zshrc");
+
+  it("routes `ollama launch` from the login profile and undoes just its block", async () => {
+    writeFileSync(profile(), "export EDITOR=vim\n");
+
+    await route(["--write", "ollama"]);
+    const written = readFileSync(profile(), "utf8");
+    expect(written).toContain("export EDITOR=vim");
+    expect(written).toContain("ollama() {");
+    expect(written).toContain("OLLAMA_HOST='http://127.0.0.1:1'");
+    // A bare export would also move `ollama serve`'s bind address.
+    expect(written).not.toMatch(/^\s*export\s+OLLAMA_HOST=/m);
+
+    await route(["--undo"]);
+    expect(readFileSync(profile(), "utf8")).toBe("export EDITOR=vim\n");
+  });
+
+  it("is idempotent", async () => {
+    await route(["--write", "ollama"]);
+    const first = readFileSync(profile(), "utf8");
+
+    await route(["--write", "ollama"]);
+    expect(readFileSync(profile(), "utf8")).toBe(first);
+  });
+
+  it("moves its block when the proxy port changes", async () => {
+    await route(["--write", "ollama"]);
+    writeFileSync(configPath, CONFIG.replace("port = 1", "port = 2"));
+
+    await route(["--write", "ollama"]);
+    const written = readFileSync(profile(), "utf8");
+    expect(written).toContain("OLLAMA_HOST='http://127.0.0.1:2'");
+    expect(written).not.toContain("127.0.0.1:1'");
+    expect(written.match(/aap route: ollama >>>/g)).toHaveLength(1);
+  });
+
+  it("removes a profile it created on --undo", async () => {
+    await route(["--write", "ollama"]);
+    expect(existsSync(profile())).toBe(true);
+
+    await route(["--undo"]);
+    expect(existsSync(profile())).toBe(false);
+    expect(existsSync(`${profile()}.aap-backup`)).toBe(false);
+  });
+
+  it("does not edit a shell profile it cannot write", async () => {
+    process.env.SHELL = "/usr/bin/fish";
+
+    await route(["--write", "ollama"]);
+
+    expect(existsSync(profile())).toBe(false);
+    expect(existsSync(join(home, ".config/fish/config.fish"))).toBe(false);
+  });
+
+  it("leaves a user's own matching export alone", async () => {
+    writeFileSync(profile(), "export OLLAMA_HOST=http://127.0.0.1:1\n");
+
+    await route(["--write", "ollama"]);
+
+    expect(readFileSync(profile(), "utf8")).toBe(
+      "export OLLAMA_HOST=http://127.0.0.1:1\n",
+    );
   });
 });

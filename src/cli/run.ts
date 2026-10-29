@@ -9,6 +9,7 @@ import {
   isFirstPartyAnthropic as isFirstPartyAnthropicEndpoint,
   toolSearchEnv,
 } from "../routing/claude-env.js";
+import { proxyOrigin } from "../routing/origin.js";
 import { detectRepo, type SessionInfo } from "../session/index.js";
 import { planOllamaLaunch } from "./run-ollama.js";
 
@@ -178,8 +179,7 @@ export async function run(args: string[]): Promise<void> {
 
   const config = loadConfig();
   const sessionId = resolveSessionId(process.env);
-  const host = normalizeHost(config.server.host);
-  const origin = `http://${host}:${config.server.port}`;
+  const origin = proxyOrigin(config.server);
   const cwd = process.cwd();
 
   // `aap run ollama`: pick model interactively and route Claude Code to the
@@ -378,10 +378,6 @@ function addTerminationHandlers(
       child.kill("SIGKILL");
     }
   });
-}
-
-function normalizeHost(host: string): string {
-  return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
 }
 
 function resolvePrimaryProvider(config: Config, agent: string): string {

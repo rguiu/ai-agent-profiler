@@ -28,7 +28,7 @@ no special command:
 
 ```
 aap serve            # terminal 1: proxy + read API
-aap route --write    # once: routes claude/opencode/pi through their own config files
+aap route --write    # once: routes claude/opencode/pi config files, and ollama's launcher
 claude               # terminal 2: just use the agent
 ```
 
@@ -48,6 +48,15 @@ straight to ollama.com and the run is real but untraced. Clients that advertise 
 session id (opencode, pi, the Ollama CLI) are
 grouped per client and split after `[sessions].idleTimeoutMs` of silence.
 
+`ollama launch <agent>` is the exception: it ignores those config files, because at
+launch time it hands the agent an inline config whose base URL is `OLLAMA_HOST + "/v1"`
+(which also overrides the opencode/pi entries `aap route` writes). Routing it means
+setting the environment for the `ollama` process, so `aap route --write ollama` adds a
+marked block to `~/.zshrc` (or `~/.bashrc`) that defines a small `ollama` function:
+`launch` runs with `OLLAMA_HOST` pointed at the proxy, everything else — notably
+`ollama serve`, which uses `OLLAMA_HOST` as its bind address — runs untouched.
+Re-open the shell after writing, and `aap route --undo` removes only that block.
+
 The optimisations `aap run` used to apply as child-process env survive routing: the
 `env` block it writes also carries `ENABLE_TOOL_SEARCH` (deferred tool schemas —
 first-party Anthropic only), `CLAUDE_CODE_AUTO_MODE_SERVER=0` (off first-party
@@ -56,9 +65,10 @@ prompt-cache TTL. Values you already export are respected; the same gating lives
 `src/routing/claude-env.ts` for both paths.
 
 `aap run <agent>` still exists for the cases a config file can't express — an explicit
-session id in the base URL (benchmark pinning), `--meta` tags, the keep-alive ping, the
-proxy-side cache-TTL rewrite for non-Claude clients, and the `ollama launch` path — and
-it wins over the inferred attribution. None of this metadata is ever sent to the LLM.
+session id in the base URL (benchmark pinning), `--meta` tags, the keep-alive ping, and
+the proxy-side cache-TTL rewrite for non-Claude clients — and it wins over the inferred
+attribution. `aap run ollama` remains the way to launch Claude Code on Ollama cloud,
+which ollama's own launcher cannot route. None of this metadata is ever sent to the LLM.
 
 ## Features
 
@@ -264,9 +274,17 @@ aap run ollama                  # terminal 2 — lists your models, then starts 
 
 #### pi / opencode via `ollama launch`
 
-`aap run ollama pi` and `aap run ollama opencode` run `ollama launch <agent>` with
-`OLLAMA_HOST` pointed at the profiler, so traffic goes through the local-daemon route
-from [Ollama (local proxy)](#ollama-local-proxy):
+There are two ways to route `ollama launch`. Without a wrapper, `aap route --write ollama`
+adds the scoped `ollama` function to your shell profile (see [How it works](#how-it-works)):
+
+```
+aap route --write ollama   # once; then re-open the shell
+ollama launch opencode     # traffic goes through the profiler
+```
+
+`aap run ollama pi` and `aap run ollama opencode` do the same for one launch, with
+`OLLAMA_HOST` pointed at the profiler only in the child's environment — useful when you
+don't want a profile edit, or want to pin the model from the command line:
 
 ```
 aap run ollama pi                              # pick a model, then `ollama launch pi`
@@ -284,19 +302,27 @@ aap run ollama pi -- -p "hello"                # args after the agent go after `
 `aap` redirects each agent's provider base URL through the proxy. How that redirect
 works — and its caveats — differ per provider:
 
-| Provider      | Routing                                                                                      | Known issues                                                                                                                                                                      |
-| ------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Anthropic** | `ANTHROPIC_BASE_URL` → `/<session>/anthropic`                                                | —                                                                                                                                                                                 |
-| **OpenAI**    | `OPENAI_BASE_URL` → `/<session>/openai`                                                      | —                                                                                                                                                                                 |
-| **DeepSeek**  | opencode only, via `OPENCODE_CONFIG_CONTENT`                                                 | Not routed for non-opencode agents (no base-URL env). Base path is `/v1`; set `apiPath` if different.                                                                             |
-| **Bedrock**   | Host-based `/model/...` (no session prefix); attributed to the active `meta.bedrock` session | Requires SigV4 re-signing, so AWS creds / `AWS_PROFILE` must be available to `aap serve`. Concurrent Bedrock sessions can mis-attribute (routing is host-based, not per-session). |
-| **Ollama**    | Host-based `/api/...` (native API); attributed to the active `meta.ollama` session           | See below.                                                                                                                                                                        |
+| Provider      | Routing                                                                                                                                                                     | Known issues                                                                                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Anthropic** | `ANTHROPIC_BASE_URL` → `/<session>/anthropic`                                                                                                                               | —                                                                                                                                                                                 |
+| **OpenAI**    | `OPENAI_BASE_URL` → `/<session>/openai`                                                                                                                                     | —                                                                                                                                                                                 |
+| **DeepSeek**  | opencode only, via `OPENCODE_CONFIG_CONTENT`                                                                                                                                | Not routed for non-opencode agents (no base-URL env). Base path is `/v1`; set `apiPath` if different.                                                                             |
+| **Bedrock**   | Host-based `/model/...` (no session prefix); attributed to the active `meta.bedrock` session                                                                                | Requires SigV4 re-signing, so AWS creds / `AWS_PROFILE` must be available to `aap serve`. Concurrent Bedrock sessions can mis-attribute (routing is host-based, not per-session). |
+| **Ollama**    | Host-based `/api/...` and `/v1/...` (no session prefix); attributed to the active `meta.ollama` session. `aap route --write ollama` scopes `OLLAMA_HOST` to `ollama launch` | See below.                                                                                                                                                                        |
 
 #### Ollama specifics
 
 - `OLLAMA_HOST` accepts only scheme+host+port (no path), so requests can't carry a
-  `/<session>/` prefix. They're matched by the `/api/` path and attributed to the
-  session started by `aap run ollama-cli` — concurrent Ollama sessions can mis-attribute.
+  `/<session>/` prefix. They're matched by the `/api/` (or `/v1/`) path and attributed to
+  the session started by `aap run ollama-cli` — concurrent Ollama sessions can
+  mis-attribute.
+- `ollama launch <agent>` builds the agent's base URL from `OLLAMA_HOST` when it starts,
+  overriding the provider entries `aap route` writes for opencode/pi. That is why
+  `aap route --write ollama` writes a shell function instead of a config file, and why
+  the block is scoped to `launch`: `ollama serve` reads `OLLAMA_HOST` to pick its bind
+  address and must keep using its own.
+- `aap route` writes the loopback form (`127.0.0.1`) even when `[server].host` is a
+  wildcard (`0.0.0.0`), because a bind address is not something an agent can dial.
 - The daemon streams newline-delimited JSON labelled `application/json` (not
   `x-ndjson`); `aap` detects and parses it. Token usage comes from
   `prompt_eval_count`/`eval_count`; Ollama reports no cache tokens.
