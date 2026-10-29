@@ -84,3 +84,23 @@ describe("SessionRegistry idle eviction", () => {
     expect(reg.size).toBe(1);
   });
 });
+
+describe("SessionRegistry ollama aliases", () => {
+  it("finds the session that registered an alias hostname", () => {
+    const reg = new SessionRegistry();
+    reg.register({
+      ...info("s"),
+      meta: { alias: "abc.localhost", launcher: "ollama-launch" },
+    });
+
+    expect(reg.byOllamaAlias("abc.localhost")?.id).toBe("s");
+    expect(reg.byOllamaAlias("other.localhost")).toBeUndefined();
+  });
+
+  it("ignores sessions without an alias", () => {
+    const reg = new SessionRegistry();
+    reg.register({ ...info("s"), meta: { ollama: "1" } });
+
+    expect(reg.byOllamaAlias("abc.localhost")).toBeUndefined();
+  });
+});

@@ -99,6 +99,21 @@ describe("buildProviderEnv", () => {
     expect(env.OLLAMA_HOST).toBe("http://localhost:8080");
   });
 
+  it("dials the session's loopback alias when one was allocated", () => {
+    const withOllama: Pick<Config, "providers"> = {
+      providers: { ollama: { upstream: "https://ollama.com" } },
+    };
+    const env = buildProviderEnv(
+      "ollama-cli",
+      withOllama,
+      "http://127.0.0.1:8080",
+      "sid1",
+      undefined,
+      "http://127.0.0.7:8080",
+    );
+    expect(env.OLLAMA_HOST).toBe("http://127.0.0.7:8080");
+  });
+
   it("does not set OLLAMA_HOST when ollama provider is absent", () => {
     const env = buildProviderEnv(
       "ollama-cli",

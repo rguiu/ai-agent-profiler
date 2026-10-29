@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { clientFromHeaders, sessionIdFromHeaders } from "./attribution.js";
+import {
+  clientFromHeaders,
+  sessionAliasFromHeaders,
+  sessionIdFromHeaders,
+} from "./attribution.js";
 
 describe("sessionIdFromHeaders", () => {
   it("reads the session id Claude Code advertises", () => {
@@ -66,5 +70,32 @@ describe("clientFromHeaders", () => {
     expect(
       clientFromHeaders({ "x-aap-client": "bad client", "user-agent": "pi/1" }),
     ).toBe("pi");
+  });
+});
+
+describe("sessionAliasFromHeaders", () => {
+  it("reads the per-session name aap run dialled", () => {
+    expect(
+      sessionAliasFromHeaders({
+        host: "e1b2e1bb-2235-45bc-becc-d6edcf2d04ad.localhost:8080",
+      }),
+    ).toBe("e1b2e1bb-2235-45bc-becc-d6edcf2d04ad.localhost");
+  });
+
+  it("ignores the shared address", () => {
+    expect(sessionAliasFromHeaders({ host: "127.0.0.1:8080" })).toBeNull();
+    expect(sessionAliasFromHeaders({ host: "localhost:8080" })).toBeNull();
+  });
+
+  it("ignores hosts that are not .localhost names", () => {
+    expect(sessionAliasFromHeaders({ host: "example.com:8080" })).toBeNull();
+    expect(sessionAliasFromHeaders({ host: "192.168.1.5:8080" })).toBeNull();
+    expect(sessionAliasFromHeaders({})).toBeNull();
+  });
+
+  it("normalises case, since hostnames are case-insensitive", () => {
+    expect(sessionAliasFromHeaders({ host: "ABC.localhost:8080" })).toBe(
+      "abc.localhost",
+    );
   });
 });

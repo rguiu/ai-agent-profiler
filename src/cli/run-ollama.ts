@@ -183,6 +183,9 @@ export async function planOllamaLaunch(
   origin: string,
   sessionId: string,
   interactive: boolean = Boolean(process.stdin.isTTY && process.stderr.isTTY),
+  /** `OLLAMA_HOST` for `ollama launch`: the session's loopback alias when the
+   * proxy binds a wildcard address, otherwise the shared origin. */
+  hostOrigin: string = origin,
 ): Promise<OllamaLaunchPlan | null> {
   const parsed = parseOllamaArgs(args);
   const agent = parsed.agent ?? "claude";
@@ -192,7 +195,7 @@ export async function planOllamaLaunch(
       parsed,
       env,
       config,
-      origin,
+      hostOrigin,
       interactive,
     );
   }
@@ -284,7 +287,7 @@ async function planOllamaNativeLaunch(
   parsed: OllamaArgs,
   env: NodeJS.ProcessEnv,
   config: Pick<Config, "providers">,
-  origin: string,
+  hostOrigin: string,
   interactive: boolean,
 ): Promise<OllamaLaunchPlan | null> {
   const daemon = config.providers.ollama;
@@ -336,7 +339,7 @@ async function planOllamaNativeLaunch(
     agent,
     binary: "ollama",
     agentArgs: buildOllamaLaunchArgs(agent, model, parsed.agentArgs),
-    env: { OLLAMA_HOST: origin },
+    env: { OLLAMA_HOST: hostOrigin },
     meta,
     model,
   };

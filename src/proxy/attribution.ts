@@ -90,3 +90,20 @@ export function clientFromHeaders(headers: IncomingHttpHeaders): string | null {
   }
   return clientFromUserAgent(headerValue(headers, "user-agent"));
 }
+
+// `aap run` gives each launch its own `<session>.localhost` name, because
+// OLLAMA_HOST cannot carry a session id in the path and loopback IP aliases
+// need root on macOS. The name resolves to the same loopback address as any
+// other request; only the Host header tells the sessions apart.
+const SESSION_ALIAS_RE = /^([a-z0-9.-]{1,63})\.localhost(?::\d+)?$/i;
+
+/** Alias hostname the client dialled, or null for the shared address. */
+export function sessionAliasFromHeaders(
+  headers: IncomingHttpHeaders,
+): string | null {
+  const host = headerValue(headers, "host");
+  const match = SESSION_ALIAS_RE.exec(host ?? "");
+  return match?.[1] === undefined
+    ? null
+    : `${match[1].toLowerCase()}.localhost`;
+}

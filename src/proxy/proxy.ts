@@ -16,7 +16,11 @@ import type { Store } from "../store/index.js";
 import { handleUi } from "../ui/index.js";
 import type { RequestLogEntry, RequestLogger } from "./log.js";
 import { forwardBedrock } from "./bedrock.js";
-import { clientFromHeaders, sessionIdFromHeaders } from "./attribution.js";
+import {
+  clientFromHeaders,
+  sessionAliasFromHeaders,
+  sessionIdFromHeaders,
+} from "./attribution.js";
 import { LruMap } from "./lru.js";
 import { parseRoute, isOllamaControlPath } from "./route.js";
 import { needsShaping, shapeRequestBody } from "./shape.js";
@@ -53,11 +57,13 @@ export function createProxyServer(
   search?: SearchStore | null,
 ): http.Server {
   const providers = new Set(Object.keys(config.providers));
-  // Seed the active provider sessions from persisted state (most-recent first)
-  // so single-session routing survives a restart even though the in-memory
-  // registry starts empty (no hydration).
+  // Seed the active Bedrock session from persisted state (most-recent first) so
+  // single-session routing survives a restart even though the in-memory registry
+  // starts empty (no hydration). Ollama is deliberately not seeded: its pin is
+  // only a fallback for `aap run` when the OS won't resolve the session alias,
+  // and resurrecting one after a restart would make a launcher-less
+  // `ollama launch` join a dead session instead of its own bucket.
   let initialBedrock: string | null = null;
-  let initialOllama: string | null = null;
   for (const s of store?.recentSessions() ?? []) {
     const meta = s.meta ? (JSON.parse(s.meta) as Record<string, string>) : null;
     if (
@@ -66,17 +72,11 @@ export function createProxyServer(
       meta?.bedrock === "1"
     )
       initialBedrock = s.id;
-    if (
-      initialOllama === null &&
-      providers.has("ollama") &&
-      meta?.ollama === "1"
-    )
-      initialOllama = s.id;
-    if (initialBedrock !== null && initialOllama !== null) break;
+    if (initialBedrock !== null) break;
   }
   const state: ProxyState = {
     activeBedrockSession: initialBedrock,
-    activeOllamaSession: initialOllama,
+    activeOllamaSession: null,
   };
 
   const throttle = new Throttle(config.throttle);
@@ -152,7 +152,16 @@ function handle(
   // launcher — see `aap route`.
   const client = clientFromHeaders(req.headers);
   const headerSessionId = sessionIdFromHeaders(req.headers);
-  const sessionId = route.sessionId ?? headerSessionId ?? null;
+  // A launcher-started ollama agent dials `<session>.localhost`; that name is
+  // the session id OLLAMA_HOST cannot carry in a path. It beats the pin, so a
+  // second launch never merges into whichever session `aap run` started earlier.
+  const aliasSessionId =
+    route.provider === "ollama"
+      ? (registry.byOllamaAlias(sessionAliasFromHeaders(req.headers) ?? "")
+          ?.id ?? null)
+      : null;
+  const sessionId =
+    route.sessionId ?? aliasSessionId ?? headerSessionId ?? null;
 
   // A header-attributed session has no registration, so seed the registry with
   // what we know. Without this, per-session meta (armada_node, cache_ttl) and

@@ -18,3 +18,23 @@ export function proxyOrigin(server: {
 }): string {
   return `http://${clientHost(server.host)}:${server.port}`;
 }
+
+/**
+ * Hostname that identifies one launcher session.
+ *
+ * `OLLAMA_HOST` carries no path, so an agent ollama starts cannot send a
+ * `/session/provider` prefix, and loopback IP aliases (`127.0.0.x`) need root
+ * on macOS. RFC 6761 reserves the `.localhost` TLD for loopback, so the session
+ * id can ride in the hostname and needs no configuration. Not every resolver
+ * honours it (plain glibc without systemd-resolved does not), so `aap run`
+ * probes the name and falls back to pinning the session when it doesn't
+ * resolve.
+ */
+export function ollamaAliasHostname(sessionId: string): string {
+  const label =
+    sessionId
+      .toLowerCase()
+      .replace(/[^a-z0-9.-]/g, "-")
+      .slice(0, 63) || "session";
+  return `${label}.localhost`;
+}

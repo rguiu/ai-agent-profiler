@@ -57,6 +57,13 @@ marked block to `~/.zshrc` (or `~/.bashrc`) that defines a small `ollama` functi
 `ollama serve`, which uses `OLLAMA_HOST` as its bind address — runs untouched.
 Re-open the shell after writing, and `aap route --undo` removes only that block.
 
+A launch started by `aap run ollama …` is attributed per launch: `OLLAMA_HOST` can't
+carry a session ID in a path, so `aap run` dials `<session>.localhost` — a name RFC 6761
+reserves for loopback, so it needs no resolver or root — and the proxy maps that Host
+header back to the session it registered. A launch started from your own shell has no
+alias, so its traffic lands in a per-client `unattributed-opencode-…` bucket instead of
+joining someone else's session.
+
 The optimisations `aap run` used to apply as child-process env survive routing: the
 `env` block it writes also carries `ENABLE_TOOL_SEARCH` (deferred tool schemas —
 first-party Anthropic only), `CLAUDE_CODE_AUTO_MODE_SERVER=0` (off first-party
@@ -313,9 +320,14 @@ works — and its caveats — differ per provider:
 #### Ollama specifics
 
 - `OLLAMA_HOST` accepts only scheme+host+port (no path), so requests can't carry a
-  `/<session>/` prefix. They're matched by the `/api/` (or `/v1/`) path and attributed to
-  the session started by `aap run ollama-cli` — concurrent Ollama sessions can
-  mis-attribute.
+  `/<session>/` prefix. `aap run ollama …` gives each launch its own
+  `<session>.localhost` name and registers it as the session's `meta.alias`; the proxy
+  attributes a prefix-less `/api` or `/v1` request to the Host it dialled. RFC 6761
+  reserves that TLD for loopback, and `aap run` probes it first — where the OS resolver
+  doesn't implement it, `aap` falls back to pinning the session (`meta.ollama`) for the
+  next prefix-less request, which is ambiguous when two agents run at once. Either way,
+  traffic with no alias — a plain `ollama launch …` — is grouped per client, like the
+  other launcher-less agents.
 - `ollama launch <agent>` builds the agent's base URL from `OLLAMA_HOST` when it starts,
   overriding the provider entries `aap route` writes for opencode/pi. That is why
   `aap route --write ollama` writes a shell function instead of a config file, and why
