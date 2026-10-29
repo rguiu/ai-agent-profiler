@@ -23,6 +23,21 @@ describe("sessionIdFromHeaders", () => {
     ).toBe("benchmark-run-1");
   });
 
+  it("reads opencode's root session id, not the subagent child", () => {
+    expect(
+      sessionIdFromHeaders({
+        "x-opencode-session": "ses_root",
+        "x-opencode-session-id": "ses_child",
+      }),
+    ).toBe("ses_root");
+  });
+
+  it("falls back to opencode's current session id when the root is absent", () => {
+    expect(
+      sessionIdFromHeaders({ "x-opencode-session-id": "ses_child" }),
+    ).toBe("ses_child");
+  });
+
   it("ignores ids that cannot be a trace directory", () => {
     expect(sessionIdFromHeaders({})).toBeNull();
     expect(

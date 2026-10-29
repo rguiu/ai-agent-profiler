@@ -153,9 +153,11 @@ class FileRequestTrace implements RequestTrace {
 
 export class FileCapture implements Capture {
   private readonly tracesDir: string;
-  /** One unattributed bucket per client, so concurrent agents (pi + opencode)
-   * don't collapse into a single session just because neither sends a session
-   * id. Keyed by client; "" holds traffic with no identifiable client. */
+  /** One unattributed bucket per client, so concurrent agents that advertise no
+   * session id (e.g. pi) don't collapse into a single session just because they
+   * send none. Keyed by client; "" holds traffic with no identifiable client.
+   * opencode is not affected: it sends `x-opencode-session`, so it is attributed
+   * to its own session instead. */
   private readonly unattributed = new Map<
     string,
     { id: string; lastSeen: number }

@@ -7,7 +7,9 @@ import type { IncomingHttpHeaders } from "node:http";
  * is why it has to intercept every launch. Clients that already send a session
  * id of their own don't need that: the base URL stays constant, so it can live
  * in a config file (`aap route`), and the traffic is still attributed per
- * session. Claude Code sends `x-claude-code-session-id` on every request.
+ * session. Claude Code sends `x-claude-code-session-id` on every request;
+ * opencode sends `x-opencode-session` (the root session, stable across its
+ * subagent children) and `x-opencode-session-id` (the current child session).
  *
  * Precedence is explicit > header > unattributed: a session id in the path
  * (benchmark pinning) or the active Bedrock/Ollama pin always wins, so `aap run`
@@ -16,6 +18,11 @@ import type { IncomingHttpHeaders } from "node:http";
 export const SESSION_HEADERS = [
   "x-aap-session",
   "x-claude-code-session-id",
+  // Root session first: opencode's subagent requests carry the child in
+  // `x-opencode-session-id` but keep the root here, so a launch and its
+  // subagents stay in one session instead of splitting per child.
+  "x-opencode-session",
+  "x-opencode-session-id",
 ] as const;
 
 /** Same shape route.ts accepts for path session ids — it becomes a directory. */

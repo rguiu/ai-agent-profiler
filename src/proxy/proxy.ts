@@ -146,10 +146,10 @@ function handle(
   const method = req.method ?? "GET";
   const isKeepAlive = req.headers["x-aap-keep-alive"] === "1";
 
-  // Transparent attribution: an explicit session id (path pin or the active
-  // Bedrock/Ollama session) wins, then the one the client advertises itself.
-  // That is what lets a client reach the proxy with a constant base URL and no
-  // launcher — see `aap route`.
+  // Transparent attribution: an explicit session id (path pin or launcher
+  // alias) wins, then the id the client advertises itself, then the single
+  // active Bedrock/Ollama pin. That is what lets a client reach the proxy with
+  // a constant base URL and no launcher — see `aap route`.
   const client = clientFromHeaders(req.headers);
   const headerSessionId = sessionIdFromHeaders(req.headers);
   // A launcher-started ollama agent dials `<session>.localhost`; that name is
@@ -160,13 +160,35 @@ function handle(
       ? (registry.byOllamaAlias(sessionAliasFromHeaders(req.headers) ?? "")
           ?.id ?? null)
       : null;
+  // route.sessionId is either an explicit path pin (benchmarking, `aap run`) or
+  // one of the single-slot pins (Bedrock, Ollama). A pin is only a fallback: an
+  // agent that advertises its own id (opencode's x-opencode-session) has finer
+  // granularity, so preferring the header stops concurrent launcher-less
+  // launches from collapsing into one pinned session. Bedrock keeps the pin
+  // ahead of the header so `aap run claude` on Bedrock keeps its launcher id.
+  const isExplicitPathPin =
+    route.sessionId !== null &&
+    pathname.startsWith(`/${route.sessionId}/`);
+  const explicitSessionId = isExplicitPathPin ? route.sessionId : null;
+  const pinSessionId = isExplicitPathPin ? null : route.sessionId;
+  const clientSessionId = route.provider === "ollama" ? headerSessionId : null;
   const sessionId =
-    route.sessionId ?? aliasSessionId ?? headerSessionId ?? null;
+    explicitSessionId ??
+    aliasSessionId ??
+    clientSessionId ??
+    pinSessionId ??
+    headerSessionId ??
+    null;
 
   // A header-attributed session has no registration, so seed the registry with
   // what we know. Without this, per-session meta (armada_node, cache_ttl) and
   // `/_control/sessions` would miss every launcher-less session.
-  if (sessionId && !route.sessionId && store && !registry.get(sessionId)) {
+  if (
+    sessionId &&
+    sessionId !== route.sessionId &&
+    store &&
+    !registry.get(sessionId)
+  ) {
     registry.register({
       id: sessionId,
       client: client ?? undefined,
@@ -177,7 +199,12 @@ function handle(
   let trace: RequestTrace | undefined;
   // Control-plane calls (model list, health/account probes, model management)
   // are forwarded but not traced: they have no prompt or response to profile.
-  if (capture && !isOllamaControlPath(pathname)) {
+  // Match the upstream path, not the incoming one — `aap route` prefixes it
+  // with the provider (/ollama/api/tags), which would otherwise look like
+  // inference and create an empty unattributed session on every opencode launch.
+  const isControlCall =
+    route.provider === "ollama" && isOllamaControlPath(route.upstreamPath);
+  if (capture && !isControlCall) {
     trace = capture.begin({
       sessionId:
         sessionId ?? capture.nextUnattributedSession(Date.now(), client),

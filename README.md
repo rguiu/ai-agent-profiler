@@ -37,7 +37,9 @@ and indexes metadata in SQLite. Metrics are computed off the hot path so token s
 stays unbuffered. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 Sessions are attributed from the request itself: Claude Code advertises its own session
-id (`x-claude-code-session-id`), which the proxy records, and the working directory is
+id (`x-claude-code-session-id`) and opencode advertises its root session
+(`x-opencode-session`, plus the current child in `x-opencode-session-id`), which the
+proxy records, and the working directory is
 recovered off the hot path from the `<env>` block in the system prompt. `aap route` is
 only a config writer — it edits `~/.claude/settings.json`, `~/.config/opencode/opencode.json`
 and `~/.pi/agent/models.json`, the files those agents already read, and `aap route --undo`
@@ -45,8 +47,8 @@ restores them. opencode's patch also carries the built-in `ollama-cloud` provide
 resolves a model id to a provider that must exist in its own config, so without that
 entry `ollama-cloud/<model>` — a model opencode knows from its catalog — is sent
 straight to ollama.com and the run is real but untraced. Clients that advertise no
-session id (opencode, pi, the Ollama CLI) are
-grouped per client and split after `[sessions].idleTimeoutMs` of silence.
+session id (pi, the Ollama CLI) are grouped per client and split after
+`[sessions].idleTimeoutMs` of silence.
 
 `ollama launch <agent>` is the exception: it ignores those config files, because at
 launch time it hands the agent an inline config whose base URL is `OLLAMA_HOST + "/v1"`
@@ -61,8 +63,10 @@ A launch started by `aap run ollama …` is attributed per launch: `OLLAMA_HOST`
 carry a session ID in a path, so `aap run` dials `<session>.localhost` — a name RFC 6761
 reserves for loopback, so it needs no resolver or root — and the proxy maps that Host
 header back to the session it registered. A launch started from your own shell has no
-alias, so its traffic lands in a per-client `unattributed-opencode-…` bucket instead of
-joining someone else's session.
+alias, so it is attributed by the agent's own session header when it sends one —
+opencode's `x-opencode-session`, stable across its subagents, keeps each launch in its
+own session. Agents that send none (pi, the Ollama CLI) land in a per-client
+`unattributed-pi-…` bucket instead of joining someone else's session.
 
 The optimisations `aap run` used to apply as child-process env survive routing: the
 `env` block it writes also carries `ENABLE_TOOL_SEARCH` (deferred tool schemas —
