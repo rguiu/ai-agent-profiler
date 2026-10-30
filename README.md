@@ -222,6 +222,17 @@ provider through the proxy. opencode still supplies the API key itself; the prox
 forwards it and redacts it from stored traces. If a provider's base path isn't `/v1`,
 set `apiPath` on its `[providers.<name>]` entry.
 
+It also passes `--standalone`, because opencode 2.x otherwise attaches to a shared
+background service (`opencode serve --service`) that keeps the config and environment of
+whichever launch started it — the new launch's routing and chosen model would be
+silently ignored, and its traffic attributed to the old session. The trade-off is a
+private server per launch.
+
+When you stop using `aap run` and rely on `aap route` instead, stop any service still
+holding a launcher's routing: `opencode service stop` from a clean shell. `aap route`
+warns when it detects such a service, or an `OPENCODE_CONFIG_CONTENT` in the current
+environment (either one overrides the config file).
+
 **Token & cost capture.** OpenAI-compatible providers omit the `usage` block from
 streaming responses unless the request opts in, which otherwise leaves token counts —
 and therefore cost — unrecoverable. The proxy automatically injects

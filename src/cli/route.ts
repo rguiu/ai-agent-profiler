@@ -19,6 +19,11 @@ import {
 } from "../routing/route-config.js";
 import { proxyOrigin } from "../routing/origin.js";
 import {
+  findRoutingHazards,
+  formatRoutingHazards,
+  opencodeServiceProbe,
+} from "../routing/opencode-service.js";
+import {
   ollamaShellState,
   removeOllamaBlock,
   shellProfilePath,
@@ -69,6 +74,9 @@ export async function route(args: string[]): Promise<void> {
   printHealth(origin, healthy);
 
   const targets = opts.clients.length > 0 ? opts.clients : [...CLIENT_IDS];
+  if (targets.includes("opencode")) {
+    printOpenCodeRoutingHazards(origin, Object.keys(config.providers));
+  }
   const applied: { client: ClientId; path: string }[] = [];
 
   for (const client of targets) {
@@ -190,6 +198,29 @@ function printHealth(origin: string, healthy: boolean): void {
   console.log(
     `proxy:  ${origin}  ${healthy ? "ok" : "UNREACHABLE (start it with `aap serve`)"}`,
   );
+}
+
+/**
+ * opencode 2.x prefers the shared background service's env over the config
+ * file. A launcher-started daemon (or an inherited OPENCODE_CONFIG_CONTENT)
+ * therefore wins over the file `aap route` writes, silently attributing raw
+ * sessions to a session from a past `aap run`. Surface it instead of letting it
+ * look routed.
+ */
+function printOpenCodeRoutingHazards(
+  origin: string,
+  providers: readonly string[],
+): void {
+  const hazards = findRoutingHazards({
+    origin,
+    providers,
+    env: process.env,
+    probe: opencodeServiceProbe,
+  });
+  const lines = formatRoutingHazards(hazards);
+  if (lines.length === 0) return;
+  console.log("");
+  for (const line of lines) console.log(line);
 }
 
 /**

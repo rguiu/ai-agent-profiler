@@ -5,6 +5,7 @@ import {
   OLLAMA_CLOUD_UPSTREAM,
   type Config,
 } from "../config/index.js";
+import { withStandaloneArgs } from "../routing/opencode-service.js";
 
 export interface OllamaArgs {
   model?: string;
@@ -67,13 +68,8 @@ export function buildOllamaLaunchArgs(
 ): string[] {
   // opencode 2.x attaches to a shared background service that keeps the
   // config and env of whoever started it, so this launch's model and routing
-  // would be ignored. A private server picks them up. opencode's usage is
-  // `opencode <subcommand> [flags]`, so `--standalone` must follow the
-  // subcommand (`run`), not precede it.
-  const args = [...agentArgs];
-  if (agent === "opencode" && !args.includes("--standalone")) {
-    args.splice(1, 0, "--standalone");
-  }
+  // would be ignored. A private server picks them up.
+  const args = withStandaloneArgs(agent, agentArgs);
   const out = ["launch", agent];
   if (model) out.push("--model", model);
   if (args.length > 0) out.push("--", ...args);

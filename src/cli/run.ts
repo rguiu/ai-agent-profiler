@@ -11,6 +11,7 @@ import {
 } from "../routing/claude-env.js";
 import { lookup } from "node:dns/promises";
 import { ollamaAliasHostname, proxyOrigin } from "../routing/origin.js";
+import { withStandaloneArgs } from "../routing/opencode-service.js";
 import { detectRepo, type SessionInfo } from "../session/index.js";
 import { planOllamaLaunch } from "./run-ollama.js";
 
@@ -336,7 +337,13 @@ export async function run(args: string[]): Promise<void> {
 
   const binary =
     ollamaPlan?.binary ?? (agent === "ollama-cli" ? "ollama" : agent);
-  const child = spawn(binary, agentArgs, { stdio: "inherit", env });
+  const spawnArgs = withStandaloneArgs(agent, agentArgs);
+  if (spawnArgs !== agentArgs) {
+    console.error(
+      `aap: opencode runs with --standalone so this launch's routing applies`,
+    );
+  }
+  const child = spawn(binary, spawnArgs, { stdio: "inherit", env });
 
   // The keep-alive ping is Anthropic-shaped and targets prompt caching, which
   // Ollama doesn't have.
