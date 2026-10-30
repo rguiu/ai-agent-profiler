@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Config } from "../config/index.js";
 import { SessionRegistry } from "../session/index.js";
+import type { Store } from "../store/index.js";
 import { createProxyServer } from "./index.js";
 import type { RequestLogEntry } from "./index.js";
 
@@ -43,17 +44,21 @@ const upstreamHandler: http.RequestListener = (req, res) => {
 
 async function startStack(
   logger?: (entry: RequestLogEntry) => void,
+  options: {
+    providers?: (upstreamPort: number) => Config["providers"];
+    store?: Store;
+  } = {},
 ): Promise<{ proxyPort: number }> {
   const upstream = http.createServer(upstreamHandler);
   const upstreamPort = await listen(upstream);
   servers.push(upstream);
 
-  const config = buildConfig(upstreamPort);
+  const config = buildConfig(upstreamPort, options.providers?.(upstreamPort));
   const proxy = createProxyServer(
     config,
     new SessionRegistry(),
     undefined,
-    undefined,
+    options.store,
     logger,
   );
   const proxyPort = await listen(proxy);
@@ -61,16 +66,46 @@ async function startStack(
   return { proxyPort };
 }
 
-function buildConfig(upstreamPort: number): Config {
+function buildConfig(
+  upstreamPort: number,
+  providers?: Config["providers"],
+): Config {
   return {
     server: { port: 0, host: "127.0.0.1" },
     sessions: { idleTimeoutMs: 300_000 },
     storage: { dir: "data" },
-    providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
+    providers: providers ?? {
+      test: { upstream: `http://127.0.0.1:${upstreamPort}` },
+    },
     pricing: {},
     throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
     search: { enabled: false, intervalMs: 5000, batchSize: 50 },
   };
+}
+
+/** Request with an explicit `Host`, which fetch/undici won't let us set. */
+function requestWithHost(
+  port: number,
+  path: string,
+  host: string,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method: "POST",
+        headers: { host, "content-type": "application/json" },
+      },
+      (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode ?? 0));
+      },
+    );
+    req.on("error", reject);
+    req.end("{}");
+  });
 }
 
 afterEach(async () => {
@@ -144,6 +179,90 @@ describe("proxy passthrough", () => {
     expect(entry?.status).toBe(200);
     expect(entry?.responseBytes).toBeGreaterThan(0);
     expect(entry?.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("ollama launch attribution", () => {
+  const ollamaProviders = (upstreamPort: number): Config["providers"] => ({
+    ollama: { upstream: `http://127.0.0.1:${upstreamPort}` },
+  });
+
+  async function registerAlias(
+    proxyPort: number,
+    id: string,
+    alias: string,
+  ): Promise<void> {
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/_control/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, client: "opencode", meta: { alias } }),
+    });
+    expect(res.status).toBe(200);
+  }
+
+  it("attributes a prefix-less /v1 request to the alias it dialled", async () => {
+    const entries: RequestLogEntry[] = [];
+    const { proxyPort } = await startStack((entry) => entries.push(entry), {
+      providers: ollamaProviders,
+    });
+    await registerAlias(proxyPort, "sess-alias", "sess-alias.localhost");
+
+    await requestWithHost(
+      proxyPort,
+      "/v1/chat/completions",
+      `sess-alias.localhost:${proxyPort}`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.sessionId).toBe("sess-alias");
+    expect(entries[0]?.provider).toBe("ollama");
+  });
+
+  it("does not attribute shared-loopback traffic to a registered alias", async () => {
+    const entries: RequestLogEntry[] = [];
+    const { proxyPort } = await startStack((entry) => entries.push(entry), {
+      providers: ollamaProviders,
+    });
+    await registerAlias(proxyPort, "sess-alias", "sess-alias.localhost");
+
+    await requestWithHost(
+      proxyPort,
+      "/v1/chat/completions",
+      `127.0.0.1:${proxyPort}`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(entries[0]?.sessionId).toBeNull();
+  });
+
+  it("does not resurrect a pinned ollama session from the store", async () => {
+    const entries: RequestLogEntry[] = [];
+    const store = {
+      recentSessions: () => [
+        {
+          id: "old-session",
+          client: "opencode",
+          cwd: null,
+          repo: null,
+          started_at: "2026-01-01T00:00:00Z",
+          meta: JSON.stringify({ ollama: "1" }),
+        },
+      ],
+    } as unknown as Store;
+    const { proxyPort } = await startStack((entry) => entries.push(entry), {
+      providers: ollamaProviders,
+      store,
+    });
+
+    await requestWithHost(
+      proxyPort,
+      "/v1/chat/completions",
+      `127.0.0.1:${proxyPort}`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(entries[0]?.sessionId).toBeNull();
   });
 });
 

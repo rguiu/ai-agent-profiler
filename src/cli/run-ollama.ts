@@ -5,6 +5,7 @@ import {
   OLLAMA_CLOUD_UPSTREAM,
   type Config,
 } from "../config/index.js";
+import { withStandaloneArgs } from "../routing/opencode-service.js";
 
 export interface OllamaArgs {
   model?: string;
@@ -67,13 +68,8 @@ export function buildOllamaLaunchArgs(
 ): string[] {
   // opencode 2.x attaches to a shared background service that keeps the
   // config and env of whoever started it, so this launch's model and routing
-  // would be ignored. A private server picks them up. opencode's usage is
-  // `opencode <subcommand> [flags]`, so `--standalone` must follow the
-  // subcommand (`run`), not precede it.
-  const args = [...agentArgs];
-  if (agent === "opencode" && !args.includes("--standalone")) {
-    args.splice(1, 0, "--standalone");
-  }
+  // would be ignored. A private server picks them up.
+  const args = withStandaloneArgs(agent, agentArgs);
   const out = ["launch", agent];
   if (model) out.push("--model", model);
   if (args.length > 0) out.push("--", ...args);
@@ -183,6 +179,9 @@ export async function planOllamaLaunch(
   origin: string,
   sessionId: string,
   interactive: boolean = Boolean(process.stdin.isTTY && process.stderr.isTTY),
+  /** `OLLAMA_HOST` for `ollama launch`: the session's loopback alias when the
+   * proxy binds a wildcard address, otherwise the shared origin. */
+  hostOrigin: string = origin,
 ): Promise<OllamaLaunchPlan | null> {
   const parsed = parseOllamaArgs(args);
   const agent = parsed.agent ?? "claude";
@@ -192,7 +191,7 @@ export async function planOllamaLaunch(
       parsed,
       env,
       config,
-      origin,
+      hostOrigin,
       interactive,
     );
   }
@@ -284,7 +283,7 @@ async function planOllamaNativeLaunch(
   parsed: OllamaArgs,
   env: NodeJS.ProcessEnv,
   config: Pick<Config, "providers">,
-  origin: string,
+  hostOrigin: string,
   interactive: boolean,
 ): Promise<OllamaLaunchPlan | null> {
   const daemon = config.providers.ollama;
@@ -336,7 +335,7 @@ async function planOllamaNativeLaunch(
     agent,
     binary: "ollama",
     agentArgs: buildOllamaLaunchArgs(agent, model, parsed.agentArgs),
-    env: { OLLAMA_HOST: origin },
+    env: { OLLAMA_HOST: hostOrigin },
     meta,
     model,
   };

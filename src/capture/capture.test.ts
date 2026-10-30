@@ -130,6 +130,23 @@ function readFinishedRequest(dbPath: string): FinishedRequest | undefined {
   return readRequests(dbPath).find((r) => r.ended_at !== null);
 }
 
+interface SessionRecord {
+  id: string;
+  client: string | null;
+  cwd: string | null;
+}
+
+function readSession(dbPath: string, id: string): SessionRecord | undefined {
+  const db = new Database(dbPath);
+  try {
+    return db
+      .prepare("SELECT id, client, cwd FROM sessions WHERE id = ?")
+      .get(id) as SessionRecord | undefined;
+  } finally {
+    db.close();
+  }
+}
+
 interface TraceEvent {
   type: string;
   headers?: Record<string, string | string[]>;
@@ -191,6 +208,154 @@ describe("FileCapture end-to-end", () => {
 
     const row = await waitFor(() => readFinishedRequest(dbPath));
     expect(row.session_id.startsWith("unattributed-")).toBe(true);
+  });
+
+  it("attributes traffic to the session id the client advertises", async () => {
+    const { proxyPort, dbPath } = await startStack();
+
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/test/echo`, {
+        method: "POST",
+        headers: {
+          "x-claude-code-session-id": "cc-3f2b8c1e",
+          "user-agent": "claude-cli/2.1.13 (external, cli)",
+        },
+        body: "x",
+      })
+    ).text();
+
+    const row = await waitFor(() => readFinishedRequest(dbPath));
+    expect(row.session_id).toBe("cc-3f2b8c1e");
+    // The client is inferred from the request, since no launcher registered it.
+    expect(readSession(dbPath, "cc-3f2b8c1e")?.client).toBe("claude");
+  });
+
+  it("attributes opencode traffic to the session header it advertises", async () => {
+    const { proxyPort, dbPath } = await startStack({ ollama: true });
+
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "x-opencode-session": "ses_root1",
+          "x-opencode-session-id": "ses_child1",
+          "user-agent": "opencode/latest/2.1.3/cli",
+        },
+        body: "{}",
+      })
+    ).text();
+
+    const row = await waitFor(() => readFinishedRequest(dbPath));
+    // The root session wins, so a subagent's child id does not split the launch.
+    expect(row.session_id).toBe("ses_root1");
+    expect(readSession(dbPath, "ses_root1")?.client).toBe("opencode");
+  });
+
+  it("keeps concurrent opencode launches in separate sessions", async () => {
+    const { proxyPort, dbPath } = await startStack({ ollama: true });
+
+    for (const sid of ["ses_first", "ses_second"]) {
+      await (
+        await fetch(`http://127.0.0.1:${proxyPort}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "x-opencode-session": sid,
+            "user-agent": "opencode/latest/2.1.3/cli",
+          },
+          body: "{}",
+        })
+      ).text();
+    }
+
+    const sessions = await waitFor(() => {
+      const rows = readRequests(dbPath).filter((r) => r.ended_at !== null);
+      return rows.length === 2 ? rows : undefined;
+    });
+    expect(new Set(sessions.map((r) => r.session_id))).toEqual(
+      new Set(["ses_first", "ses_second"]),
+    );
+  });
+
+  it("prefers opencode's session id over the single active ollama pin", async () => {
+    const { proxyPort, dbPath } = await startStack({ ollama: true });
+    const register = await fetch(
+      `http://127.0.0.1:${proxyPort}/_control/sessions`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "pinned-launch", meta: { ollama: "1" } }),
+      },
+    );
+    expect(register.status).toBe(200);
+
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "x-opencode-session": "ses_own",
+          "user-agent": "opencode/latest/2.1.3/cli",
+        },
+        body: "{}",
+      })
+    ).text();
+
+    const row = await waitFor(() => readFinishedRequest(dbPath));
+    expect(row.session_id).toBe("ses_own");
+  });
+
+  it("does not create a session for an ollama control call under a provider prefix", async () => {
+    const { proxyPort, dbPath } = await startStack({ ollama: true });
+
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/ollama/api/tags`, {
+        headers: { "user-agent": "opencode/latest/2.1.3/cli" },
+      })
+    ).text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(readRequests(dbPath)).toHaveLength(0);
+  });
+
+  it("keeps an explicit session path ahead of the client's own id", async () => {
+    const { proxyPort, dbPath } = await startStack();
+
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/pinned-1/test/echo`, {
+        method: "POST",
+        headers: { "x-claude-code-session-id": "cc-ignored" },
+        body: "x",
+      })
+    ).text();
+
+    const row = await waitFor(() => readFinishedRequest(dbPath));
+    expect(row.session_id).toBe("pinned-1");
+  });
+
+  it("buckets unattributed traffic per client", async () => {
+    const { proxyPort, dbPath } = await startStack();
+
+    for (const ua of ["opencode/1.0.42", "pi/1.4.0"]) {
+      await (
+        await fetch(`http://127.0.0.1:${proxyPort}/test/echo`, {
+          method: "POST",
+          headers: { "user-agent": ua },
+          body: "x",
+        })
+      ).text();
+    }
+
+    const rows = await waitFor(() => {
+      const all = readRequests(dbPath).filter((r) => r.ended_at !== null);
+      return all.length === 2 ? all : undefined;
+    });
+    const sessions = new Set(rows.map((r) => r.session_id));
+    expect(sessions.size).toBe(2);
+    expect(
+      [...sessions].some((id) => id.startsWith("unattributed-opencode-")),
+    ).toBe(true);
+    expect([...sessions].some((id) => id.startsWith("unattributed-pi-"))).toBe(
+      true,
+    );
   });
 
   it("keeps capturing after the session's trace dir is deleted", async () => {

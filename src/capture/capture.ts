@@ -10,6 +10,8 @@ export interface RequestContext {
   sessionId: string;
   requestId: string;
   provider: string;
+  /** Agent inferred from the request (UA / x-aap-client), when known. */
+  client?: string | null;
   method: string;
   path: string;
   httpVersion: string;
@@ -32,7 +34,7 @@ export interface RequestTrace {
 
 export interface Capture {
   upsertSession(info: SessionInfo): void;
-  nextUnattributedSession(now?: number): string;
+  nextUnattributedSession(now?: number, client?: string | null): string;
   begin(ctx: RequestContext): RequestTrace;
 }
 
@@ -151,8 +153,15 @@ class FileRequestTrace implements RequestTrace {
 
 export class FileCapture implements Capture {
   private readonly tracesDir: string;
-  private unattributedId: string | null = null;
-  private unattributedLastSeen = 0;
+  /** One unattributed bucket per client, so concurrent agents that advertise no
+   * session id (e.g. pi) don't collapse into a single session just because they
+   * send none. Keyed by client; "" holds traffic with no identifiable client.
+   * opencode is not affected: it sends `x-opencode-session`, so it is attributed
+   * to its own session instead. */
+  private readonly unattributed = new Map<
+    string,
+    { id: string; lastSeen: number }
+  >();
 
   constructor(
     private readonly store: Store,
@@ -166,20 +175,26 @@ export class FileCapture implements Capture {
     this.store.upsertSession(info);
   }
 
-  nextUnattributedSession(now = Date.now()): string {
-    if (
-      this.unattributedId === null ||
-      now - this.unattributedLastSeen > this.idleTimeoutMs
-    ) {
-      this.unattributedId = `unattributed-${randomUUID()}`;
+  nextUnattributedSession(now = Date.now(), client?: string | null): string {
+    const key = client ?? "";
+    const current = this.unattributed.get(key);
+    if (current && now - current.lastSeen <= this.idleTimeoutMs) {
+      current.lastSeen = now;
+      return current.id;
     }
-    this.unattributedLastSeen = now;
-    return this.unattributedId;
+    const id = key
+      ? `unattributed-${key}-${randomUUID()}`
+      : `unattributed-${randomUUID()}`;
+    this.unattributed.set(key, { id, lastSeen: now });
+    return id;
   }
 
   begin(ctx: RequestContext): RequestTrace {
+    // COALESCE on conflict: a launcher-registered session keeps its cwd/repo
+    // (and `aap run` keeps winning over an inferred client).
     this.store.upsertSession({
       id: ctx.sessionId,
+      client: ctx.client ?? undefined,
       startedAt: new Date(ctx.startedAt).toISOString(),
     });
 

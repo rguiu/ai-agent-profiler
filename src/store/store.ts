@@ -839,6 +839,25 @@ export class Store {
     return true;
   }
 
+  /** Fill in location for a session that arrived without a launcher (the
+   * parser recovers the cwd from the system prompt). COALESCE keeps a value set
+   * by `aap run` and makes repeated backfills harmless. Returns false when the
+   * session is unknown. */
+  backfillSessionLocation(
+    id: string,
+    cwd: string,
+    repo: string | null,
+  ): boolean {
+    const row = this.getSessionStmt.get(id) as { id: string } | undefined;
+    if (!row) return false;
+    this.db
+      .prepare(
+        "UPDATE sessions SET cwd = COALESCE(cwd, ?), repo = COALESCE(repo, ?) WHERE id = ?",
+      )
+      .run(cwd, repo, id);
+    return true;
+  }
+
   sessionIdsByMeta(key: string, value: string): string[] {
     const rows = this.db
       .prepare(

@@ -211,6 +211,19 @@ describe("planOllamaLaunch (non-interactive)", () => {
       ).toBeNull();
     });
 
+    it("points OLLAMA_HOST at the session's loopback alias", async () => {
+      const plan = await planOllamaLaunch(
+        ["--model", "m", "opencode"],
+        {},
+        withDaemon,
+        "http://127.0.0.1:8080",
+        "sid",
+        false,
+        "http://127.0.0.9:8080",
+      );
+      expect(plan?.env).toEqual({ OLLAMA_HOST: "http://127.0.0.9:8080" });
+    });
+
     it("accepts a --model after the agent without prompting", async () => {
       const plan = await planOllamaLaunch(
         ["pi", "--model", "glm-5.3-flash"],
