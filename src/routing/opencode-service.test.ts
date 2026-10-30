@@ -60,6 +60,15 @@ describe("withStandaloneArgs", () => {
     expect(withStandaloneArgs("claude", [])).toEqual([]);
     expect(withStandaloneArgs("pi", ["run"])).toEqual(["run"]);
   });
+
+  it("leaves non-launch subcommands alone", () => {
+    expect(withStandaloneArgs("opencode", ["serve"])).toEqual(["serve"]);
+    expect(withStandaloneArgs("opencode", ["session", "list"])).toEqual([
+      "session",
+      "list",
+    ]);
+    expect(withStandaloneArgs("opencode", ["models"])).toEqual(["models"]);
+  });
 });
 
 describe("proxySessionIds", () => {

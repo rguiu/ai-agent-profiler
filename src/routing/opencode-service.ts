@@ -37,7 +37,12 @@ export function withStandaloneArgs(
     return agentArgs;
   }
   const args = [...agentArgs];
-  const at = args[0] !== undefined && !args[0].startsWith("-") ? 1 : 0;
+  const subcommand = args[0] !== undefined && !args[0].startsWith("-");
+  // Only the interactive TUI and `run` are launches. Other subcommands
+  // (serve, session, models, …) do not attach to the shared service the same
+  // way, and `--standalone` is not a subcommand flag there.
+  if (subcommand && args[0] !== "run") return agentArgs;
+  const at = subcommand ? 1 : 0;
   args.splice(at, 0, "--standalone");
   return args;
 }
