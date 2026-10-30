@@ -33,9 +33,9 @@ describe("sessionIdFromHeaders", () => {
   });
 
   it("falls back to opencode's current session id when the root is absent", () => {
-    expect(
-      sessionIdFromHeaders({ "x-opencode-session-id": "ses_child" }),
-    ).toBe("ses_child");
+    expect(sessionIdFromHeaders({ "x-opencode-session-id": "ses_child" })).toBe(
+      "ses_child",
+    );
   });
 
   it("ignores ids that cannot be a trace directory", () => {

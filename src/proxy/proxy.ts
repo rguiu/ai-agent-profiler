@@ -167,8 +167,7 @@ function handle(
   // launches from collapsing into one pinned session. Bedrock keeps the pin
   // ahead of the header so `aap run claude` on Bedrock keeps its launcher id.
   const isExplicitPathPin =
-    route.sessionId !== null &&
-    pathname.startsWith(`/${route.sessionId}/`);
+    route.sessionId !== null && pathname.startsWith(`/${route.sessionId}/`);
   const explicitSessionId = isExplicitPathPin ? route.sessionId : null;
   const pinSessionId = isExplicitPathPin ? null : route.sessionId;
   const clientSessionId = route.provider === "ollama" ? headerSessionId : null;
