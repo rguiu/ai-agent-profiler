@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { Config } from "../config/index.js";
+import { detectRepo } from "../session/index.js";
 import { PARSE_MAX_ATTEMPTS, type Store } from "../store/index.js";
 import {
   computeCost,
@@ -22,6 +23,9 @@ export async function runParse(
 ): Promise<ParseSummary> {
   const targets = store.requestsToParse(opts.all);
   const toolResults: ParsedToolResult[] = [];
+  // Sessions whose location is already known (or just recovered), so a tick
+  // doesn't re-run git for every request in a session.
+  const located = new Set<string>();
   let parsed = 0;
   let failed = 0;
 
@@ -69,6 +73,17 @@ export async function runParse(
           store.updateSessionSummary(target.session_id, responseText);
       }
 
+      // A session that reached the proxy without a launcher has no cwd/repo.
+      // The system prompt carries the working directory, so recover it here —
+      // off the hot path — and the session becomes indistinguishable from one
+      // registered by `aap run`.
+      if (target.session_id && !located.has(target.session_id)) {
+        backfillLocation(store, target.session_id, result.context.cwd);
+        if (store.getSessionRow(target.session_id)?.cwd) {
+          located.add(target.session_id);
+        }
+      }
+
       parsed++;
       store.clearParseFailure(target.id);
     } catch (err) {
@@ -95,6 +110,20 @@ export async function runParse(
   }
 
   return { total: targets.length, parsed, failed };
+}
+
+/** Record cwd/repo for a session that arrived without one. No-op when the
+ * request didn't advertise a working directory (control-plane/title calls, or a
+ * provider whose system prompt has no `<env>` block). */
+function backfillLocation(
+  store: Store,
+  sessionId: string,
+  cwd: string | null,
+): void {
+  if (!cwd) return;
+  const row = store.getSessionRow(sessionId);
+  if (!row || row.cwd) return;
+  store.backfillSessionLocation(sessionId, cwd, detectRepo(cwd));
 }
 
 export async function readTraceEvents(file: string): Promise<TraceEvent[]> {

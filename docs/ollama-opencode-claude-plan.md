@@ -15,8 +15,10 @@ not yet confirmed against a real run), **todo**.
 | pi       | `ollama launch pi --model M`                                  | `OLLAMA_HOST=<proxy>`, no path prefix | unknown until verified (`/v1/*` or `/api/chat`) |
 
 Claude is the only agent with a per-session URL. opencode and pi send bare `/api/*` and
-`/v1/*` paths, so the proxy attributes them to the **single active ollama session**
-(`state.activeOllamaSession`, set when the session registers with `meta.ollama=1`).
+`/v1/*` paths. opencode advertises its own root session (`x-opencode-session`), so the
+proxy attributes each launch to that session. pi sends no session id, so it falls back to
+the **single active ollama session** (`state.activeOllamaSession`, set when the session
+registers with `meta.ollama=1`).
 
 ## 2. What is already in place
 
@@ -45,11 +47,15 @@ Claude is the only agent with a per-session URL. opencode and pi send bare `/api
 Exit criterion: one opencode session with at least one tool call shows tokens, tool calls
 and cost in the dashboard.
 
-### 3.2 Attribution when more than one session runs (todo)
+### 3.2 Attribution when more than one session runs (partly done)
 
-`activeOllamaSession` is one slot, so two concurrent `aap run ollama opencode|pi` runs
-(or a run plus `ollama-cli`) mix their traffic, and the last session to register wins.
-Options, cheapest first:
+**done** opencode: it sends `x-opencode-session` (root session, stable across subagents)
+and `x-opencode-session-id` (child); the proxy prefers the root header over the single
+active pin, so concurrent `ollama launch opencode` runs get one session each.
+
+Still open for pi: `activeOllamaSession` is one slot, so two concurrent
+`aap run ollama pi` runs (or a run plus `ollama-cli`) mix their traffic, and the last
+session to register wins. Options, cheapest first:
 
 1. Document it and warn on `aap run` if another ollama session is active.
 2. Route by `Host` header: launch with `OLLAMA_HOST=http://<sid>.localhost:<port>`

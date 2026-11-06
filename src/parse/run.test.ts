@@ -338,4 +338,75 @@ describe("runParse", () => {
     expect(row.result_bytes).toBe(Buffer.byteLength("RESULT-OUTPUT"));
     expect(row.result_tokens).toBe(Math.ceil("RESULT-OUTPUT".length / 4));
   });
+  it("backfills a launcher-less session's cwd from the system prompt", async () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    const cwd = tmpDir();
+    store.upsertSession({ id: "sess-cwd", startedAt: "t0" });
+    // A session that `aap run` registered already knows where it runs.
+    store.upsertSession({
+      id: "sess-run",
+      cwd: "/launcher/cwd",
+      startedAt: "t0",
+    });
+
+    const body = JSON.stringify({
+      model: "claude-3-5-sonnet-20241022",
+      system: [
+        "You are Claude Code.",
+        "<env>",
+        `Working directory: ${cwd}`,
+        "Is directory a git repo: no",
+        "</env>",
+      ].join("\n"),
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const traceFile = join(dir, "cwd.ndjson");
+    writeFileSync(
+      traceFile,
+      [
+        { type: "request", headers: {} },
+        { type: "request_body", data: Buffer.from(body).toString("base64") },
+        {
+          type: "response",
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+        {
+          type: "response_body",
+          data: Buffer.from(ANTHROPIC_SSE).toString("base64"),
+        },
+        { type: "end" },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n",
+    );
+
+    for (const sessionId of ["sess-cwd", "sess-run"]) {
+      const id = `req-${sessionId}`;
+      store.insertRequest({
+        id,
+        sessionId,
+        provider: "anthropic",
+        method: "POST",
+        path: "/x",
+        traceFile,
+        startedAt: "t0",
+      });
+      store.finishRequest(id, {
+        status: 200,
+        latencyMs: 1,
+        requestBytes: 1,
+        responseBytes: 1,
+        endedAt: "t1",
+        error: null,
+      });
+    }
+
+    await runParse(store, {}, { all: false });
+
+    expect(store.getSessionRow("sess-cwd")?.cwd).toBe(cwd);
+    expect(store.getSessionRow("sess-run")?.cwd).toBe("/launcher/cwd");
+    store.close();
+  });
 });

@@ -54,6 +54,14 @@ export class SessionRegistry {
     return [...this.sessions.values()].map((e) => e.info);
   }
 
+  /** Session that registered this Ollama alias hostname, if any. */
+  byOllamaAlias(host: string): SessionInfo | undefined {
+    for (const entry of this.sessions.values()) {
+      if (entry.info.meta?.alias === host) return entry.info;
+    }
+    return undefined;
+  }
+
   hydrate(rows: SessionInfo[], now: number = Date.now()): void {
     for (const row of rows) {
       if (!this.sessions.has(row.id)) {

@@ -1,11 +1,26 @@
 import type { ChildProcess } from "node:child_process";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join, dirname } from "node:path";
 import { loadConfig, type Config } from "../config/index.js";
 import { ensureHooksInstalled, hooksPath } from "../hook/install.js";
-import type { SessionInfo } from "../session/index.js";
+import {
+  autoModeEnv,
+  isFirstPartyAnthropic as isFirstPartyAnthropicEndpoint,
+  toolSearchEnv,
+} from "../routing/claude-env.js";
+import { lookup } from "node:dns/promises";
+import { ollamaAliasHostname, proxyOrigin } from "../routing/origin.js";
+import { withStandaloneArgs } from "../routing/opencode-service.js";
+import { detectRepo, type SessionInfo } from "../session/index.js";
 import { planOllamaLaunch } from "./run-ollama.js";
+
+export function isFirstPartyAnthropic(
+  config: Pick<Config, "providers">,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return isFirstPartyAnthropicEndpoint(config.providers, env);
+}
 
 const PROVIDER_ENV: Readonly<Record<string, string>> = {
   anthropic: "ANTHROPIC_BASE_URL",
@@ -18,6 +33,9 @@ export function buildProviderEnv(
   origin: string,
   sessionId: string,
   env?: NodeJS.ProcessEnv,
+  /** `OLLAMA_HOST` for the ollama CLI: the session's loopback alias when the
+   * proxy binds a wildcard address, otherwise the shared origin. */
+  hostOrigin: string = origin,
 ): Record<string, string> {
   if (agent === "opencode") {
     const provider: Record<string, { options: { baseURL: string } }> = {};
@@ -38,9 +56,10 @@ export function buildProviderEnv(
 
   // Ollama CLI talks to its native API and only honours OLLAMA_HOST (scheme+
   // host+port, no path). Point it at the proxy; requests are attributed to this
-  // session via meta.ollama (see run()), matched by path in parseRoute.
+  // session by the `<session>.localhost` name it dials (see run()), or by
+  // meta.ollama when that name doesn't resolve.
   if (agent === "ollama-cli" && config.providers.ollama) {
-    out.OLLAMA_HOST = origin;
+    out.OLLAMA_HOST = hostOrigin;
   }
 
   // Bedrock: Claude Code uses ANTHROPIC_BEDROCK_BASE_URL (not the AWS SDK env var).
@@ -67,93 +86,28 @@ function explicitlyNoTools(agentArgs: string[]): boolean {
   return false;
 }
 
-// Claude Code caches its tool definitions per ANTHROPIC_BASE_URL; routing it
-// through the proxy changes that URL and invalidates the cache, so every
-// request resends the full tool list. ENABLE_TOOL_SEARCH defers tool schemas
-// instead, keeping the cache valid. Default it on for Claude Code unless the
-// caller already set it explicitly — but only when the endpoint actually serves
-// a first-party Anthropic model. Deferred custom tools are only supported on
-// Anthropic models (upstream #89211); forcing ENABLE_TOOL_SEARCH=true for a
-// non-Anthropic endpoint (DeepSeek/Bedrock/Ollama/gateway) yields a 400.
+// Claude Code optimisations gated on the endpoint, shared with `aap route` so
+// the wrapper-free path writes the same values. The launcher-level rule is
+// only this one: a caller passing `--tools ""` asked for a tool-less call, so
+// deferring tool schemas is meaningless there.
 export function buildToolSearchEnv(
   agent: string,
   env: NodeJS.ProcessEnv,
   config: Pick<Config, "providers">,
   agentArgs: string[] = [],
 ): Record<string, string> {
-  if (
-    agent !== "claude" ||
-    env.ENABLE_TOOL_SEARCH !== undefined ||
-    explicitlyNoTools(agentArgs)
-  ) {
-    return {};
-  }
-  return isFirstPartyAnthropic(config, env)
-    ? { ENABLE_TOOL_SEARCH: "true" }
-    : {};
+  if (agent !== "claude" || explicitlyNoTools(agentArgs)) return {};
+  return toolSearchEnv(config.providers, env);
 }
 
-// Auto mode's classifier checks run server-side on Anthropic's API. Any other
-// backend (Ollama, DeepSeek, Bedrock, Vertex, a gateway) can't perform them, so
-// Claude Code nags about ineligibility on every session. Opt out up front there.
 export function buildAutoModeEnv(
   agent: string,
   env: NodeJS.ProcessEnv,
   config: Pick<Config, "providers">,
   forceNonAnthropic = false,
 ): Record<string, string> {
-  if (agent !== "claude" || env.CLAUDE_CODE_AUTO_MODE_SERVER !== undefined) {
-    return {};
-  }
-  return forceNonAnthropic || routesClaudeOffAnthropic(config, env)
-    ? { CLAUDE_CODE_AUTO_MODE_SERVER: "0" }
-    : {};
-}
-
-function envFlag(value: string | undefined): boolean {
-  return Boolean(value) && value !== "0";
-}
-
-// Without `[providers.anthropic]` aap doesn't set ANTHROPIC_BASE_URL, so
-// Claude Code keeps its own (first-party) endpoint unless a cloud backend is
-// selected in the env.
-function routesClaudeOffAnthropic(
-  config: Pick<Config, "providers">,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  if (
-    envFlag(env.CLAUDE_CODE_USE_BEDROCK) ||
-    envFlag(env.CLAUDE_CODE_USE_VERTEX)
-  ) {
-    return true;
-  }
-  if (!config.providers.anthropic) return false;
-  return !isFirstPartyAnthropic(config, env);
-}
-
-// True when Claude Code will be talking to a first-party Anthropic endpoint.
-// Bedrock is a distinct API (AWS), not the Anthropic messages endpoint, so it
-// is not first-party here. Otherwise we trust the `anthropic` provider's
-// upstream host: only api.anthropic.com (or an *.anthropic.com enterprise
-// endpoint) counts. A third-party gateway serving a real Anthropic model is
-// deliberately left "not first-party" — the safe default is to not force true.
-export function isFirstPartyAnthropic(
-  config: Pick<Config, "providers">,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const useBedrock =
-    env.CLAUDE_CODE_USE_BEDROCK && env.CLAUDE_CODE_USE_BEDROCK !== "0";
-  if (useBedrock) return false;
-
-  const upstream = config.providers.anthropic?.upstream;
-  if (!upstream) return false;
-
-  try {
-    const host = new URL(upstream).hostname.toLowerCase();
-    return host === "api.anthropic.com" || host.endsWith(".anthropic.com");
-  } catch {
-    return false;
-  }
+  if (agent !== "claude") return {};
+  return autoModeEnv(config.providers, env, forceNonAnthropic);
 }
 
 // A caller may pin the session id (e.g. a benchmark harness that needs to tag
@@ -231,8 +185,16 @@ export async function run(args: string[]): Promise<void> {
 
   const config = loadConfig();
   const sessionId = resolveSessionId(process.env);
-  const host = normalizeHost(config.server.host);
-  const origin = `http://${host}:${config.server.port}`;
+  const origin = proxyOrigin(config.server);
+  // OLLAMA_HOST cannot carry a session id in the path, so a launcher-started
+  // ollama agent dials `<session>.localhost`, which resolves to the same
+  // loopback address and differs only in the Host header. Fall back to the
+  // shared origin (and the session pin) where that name doesn't resolve.
+  const ollamaAlias = await usableOllamaAlias(sessionId);
+  const ollamaHostOrigin =
+    ollamaAlias === null
+      ? origin
+      : `http://${ollamaAlias}:${config.server.port}`;
   const cwd = process.cwd();
 
   // `aap run ollama`: pick model interactively and route Claude Code to the
@@ -245,6 +207,8 @@ export async function run(args: string[]): Promise<void> {
       config,
       origin,
       sessionId,
+      undefined,
+      ollamaHostOrigin,
     );
     if (!ollamaPlan) {
       process.exitCode = 1;
@@ -257,12 +221,25 @@ export async function run(args: string[]): Promise<void> {
 
   const overrides =
     ollamaPlan?.env ??
-    buildProviderEnv(agent, config, origin, sessionId, process.env);
+    buildProviderEnv(
+      agent,
+      config,
+      origin,
+      sessionId,
+      process.env,
+      ollamaHostOrigin,
+    );
   if (overrides.ANTHROPIC_BEDROCK_BASE_URL) {
     meta.bedrock = "1";
   }
   if (overrides.OLLAMA_HOST) {
-    meta.ollama = "1";
+    if (overrides.OLLAMA_HOST === origin) {
+      // The OS wouldn't resolve `<session>.localhost`, so the proxy falls back
+      // to pinning this session for prefix-less /api and /v1 paths.
+      meta.ollama = "1";
+    } else {
+      meta.alias = new URL(overrides.OLLAMA_HOST).hostname;
+    }
   }
   if (cacheTtl === "1h") {
     meta.cache_ttl = "1h";
@@ -318,7 +295,7 @@ export async function run(args: string[]): Promise<void> {
   }
   if (ollamaPlan?.binary === "ollama") {
     console.error(
-      `aap: ollama launch ${agent} via OLLAMA_HOST=${origin} (model ${ollamaPlan.model ?? "chosen by ollama"})`,
+      `aap: ollama launch ${agent} via OLLAMA_HOST=${ollamaPlan.env.OLLAMA_HOST ?? origin} (model ${ollamaPlan.model ?? "chosen by ollama"})`,
     );
   } else if (ollamaPlan) {
     console.error(
@@ -360,7 +337,13 @@ export async function run(args: string[]): Promise<void> {
 
   const binary =
     ollamaPlan?.binary ?? (agent === "ollama-cli" ? "ollama" : agent);
-  const child = spawn(binary, agentArgs, { stdio: "inherit", env });
+  const spawnArgs = withStandaloneArgs(agent, agentArgs);
+  if (spawnArgs !== agentArgs) {
+    console.error(
+      `aap: opencode runs with --standalone so this launch's routing applies`,
+    );
+  }
+  const child = spawn(binary, spawnArgs, { stdio: "inherit", env });
 
   // The keep-alive ping is Anthropic-shaped and targets prompt caching, which
   // Ollama doesn't have.
@@ -433,8 +416,35 @@ function addTerminationHandlers(
   });
 }
 
-function normalizeHost(host: string): string {
-  return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+/** Bounded so a resolver that doesn't know `.localhost` can't stall a launch. */
+const ALIAS_LOOKUP_TIMEOUT_MS = 300;
+
+/**
+ * `<session>.localhost` when this OS resolves it to loopback, else null.
+ *
+ * RFC 6761 reserves the TLD for loopback, but glibc without systemd-resolved
+ * doesn't implement it. Probing the resolver the agent itself will use keeps
+ * `aap run` from handing out a hostname that then fails to connect; the caller
+ * falls back to the shared origin and the session pin.
+ */
+async function usableOllamaAlias(sessionId: string): Promise<string | null> {
+  const host = ollamaAliasHostname(sessionId);
+  const timedOut = new Promise<null>((resolve) => {
+    setTimeout(() => resolve(null), ALIAS_LOOKUP_TIMEOUT_MS).unref();
+  });
+  try {
+    const addresses = await Promise.race([
+      lookup(host, { all: true }),
+      timedOut,
+    ]);
+    if (!addresses) return null;
+    const loopback = addresses.some(
+      ({ address }) => address.startsWith("127.") || address === "::1",
+    );
+    return loopback ? host : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolvePrimaryProvider(config: Config, agent: string): string {
@@ -496,25 +506,5 @@ export async function registerSession(
     console.error(
       `aap: could not reach proxy at ${origin} — is 'aap serve' running? (${(err as Error).message})`,
     );
-  }
-}
-
-function detectRepo(cwd: string): string | null {
-  return (
-    tryGit(["config", "--get", "remote.origin.url"], cwd) ??
-    tryGit(["rev-parse", "--show-toplevel"], cwd)
-  );
-}
-
-function tryGit(args: string[], cwd: string): string | null {
-  try {
-    const out = execFileSync("git", args, {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const value = out.toString().trim();
-    return value.length > 0 ? value : null;
-  } catch {
-    return null;
   }
 }

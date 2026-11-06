@@ -1,5 +1,6 @@
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import { redactSecrets } from "../capture/redact.js";
+import { extractWorkingDirectory } from "./env-block.js";
 
 export interface TraceEvent {
   type: string;
@@ -63,6 +64,8 @@ export interface ParsedContext {
   toolsDefined: number;
   toolsTokens: number;
   kind: RequestKind;
+  /** Working directory advertised in the system prompt's <env> block, if any. */
+  cwd: string | null;
 }
 
 export interface ParsedTrace {
@@ -826,6 +829,7 @@ function parseRequestBody(events: TraceEvent[]): {
       toolsDefined: 0,
       toolsTokens: 0,
       kind: "unknown" as RequestKind,
+      cwd: null,
     },
   };
 
@@ -950,6 +954,7 @@ function parseRequestBody(events: TraceEvent[]): {
     toolsDefined: tools.length,
     toolsTokens: tools.length > 0 ? estimateTokens(JSON.stringify(tools)) : 0,
     kind,
+    cwd: extractWorkingDirectory(systemText),
   };
   return { toolResults, context };
 }
