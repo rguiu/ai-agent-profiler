@@ -49,7 +49,12 @@ async function startStack(opts: { ollama?: boolean } = {}): Promise<Stack> {
   const upstreamPort = await listen(upstream);
 
   const config: Config = {
-    server: { port: 0, host: "127.0.0.1" },
+    server: {
+      port: 0,
+      host: "127.0.0.1",
+      connectTimeoutMs: 5_000,
+      upstreamTimeoutMs: 120_000,
+    },
     sessions: { idleTimeoutMs: 300_000 },
     storage: { dir },
     providers: { test: { upstream: `http://127.0.0.1:${upstreamPort}` } },
