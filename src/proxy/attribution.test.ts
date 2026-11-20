@@ -59,8 +59,10 @@ describe("clientFromHeaders", () => {
       ["claude-cli/2.1.13 (external, cli)", "claude"],
       ["opencode/1.0.42", "opencode"],
       ["pi/1.4.0", "pi"],
+      ["stackpilot/0.1.0", "stackpilot"],
       ["ollama/0.12.6 (aarch64 darwin)", "ollama-cli"],
       ["aws-sdk-js/3.600.0 ua/2.1 os/darwin", "aws-sdk"],
+      ["python-httpx/0.27.2", "httpx"],
     ];
     for (const [ua, client] of cases) {
       expect(clientFromHeaders({ "user-agent": ua })).toBe(client);

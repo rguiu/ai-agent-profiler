@@ -72,4 +72,60 @@ describe("Throttle", () => {
 
     expect(order).toEqual([1, 2]);
   });
+
+  it("reports inflight, queue depth and the oldest wait", async () => {
+    const t = new Throttle({
+      maxConcurrent: 1,
+      maxQueued: 10,
+      timeoutMs: 1000,
+    });
+    await t.acquire();
+    const queued = t.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const stats = t.stats();
+    expect(stats.inflight).toBe(1);
+    expect(stats.queued).toBe(1);
+    expect(stats.oldestQueuedMs).toBeGreaterThanOrEqual(20);
+    expect(stats.maxConcurrent).toBe(1);
+
+    t.release();
+    await queued;
+    expect(t.stats().queued).toBe(0);
+  });
+
+  it("drops a waiter when its client signal aborts", async () => {
+    const t = new Throttle({
+      maxConcurrent: 1,
+      maxQueued: 10,
+      timeoutMs: 60_000,
+    });
+    await t.acquire();
+
+    const abort = new AbortController();
+    const queued = t.acquire(abort.signal);
+    expect(t.pending).toBe(1);
+
+    abort.abort();
+    await expect(queued).rejects.toThrow("aborted");
+    // The place is gone immediately, not at the queue timeout.
+    expect(t.pending).toBe(0);
+
+    // And the slot handoff goes to the next request, not the dead one.
+    const next = t.acquire();
+    t.release();
+    await next;
+  });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    const t = new Throttle({
+      maxConcurrent: 1,
+      maxQueued: 10,
+      timeoutMs: 1000,
+    });
+    const abort = new AbortController();
+    abort.abort();
+    await expect(t.acquire(abort.signal)).rejects.toThrow("aborted");
+    expect(t.inflight).toBe(0);
+  });
 });

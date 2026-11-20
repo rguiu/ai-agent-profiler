@@ -190,7 +190,8 @@ GET /tools                     # global tool-usage totals
 GET /commands                  # shell-command breakdown (?session=<id> to scope)
 GET /search?q=...              # full-text search over indexed traces (&kind=&file=&errors=1)
 GET /search/status             # index health: requests indexed, chunks, failures
-GET /health
+GET /health                    # ok + live inflight/queued request counts
+GET /_control/inflight         # what the proxy is holding right now, oldest first
 ```
 
 Open **`http://localhost:8080/ui`** for the dashboard.
@@ -319,6 +320,25 @@ aap run ollama pi -- -p "hello"                # args after the agent go after `
 - The model list comes from the daemon; a blank answer lets `ollama launch` ask.
 - Sessions are tagged `provider=ollama`, `launcher=ollama-launch`.
 
+#### Any other tool that reads `OLLAMA_HOST`
+
+`aap run` hands `OLLAMA_HOST` to whatever binary it launches, so a tool that drives the
+daemon directly — the native `/api/...` API or the OpenAI-compatible `/v1/...` one — is
+profiled with no config file of its own and no knowledge that the profiler exists:
+
+```
+aap serve
+aap run risk-review 123 --engine ollama     # risk-review's runner reads OLLAMA_HOST
+```
+
+- Requires `[providers.ollama]` in the config. The proxy routes `/api/...` and `/v1/...`
+  by path, so the child needs no `/<session>/<provider>` prefix.
+- The session is registered under the binary's own name, and attribution follows the
+  launch path: the child dials `<session>.localhost`, which the proxy maps back.
+- Unlike `aap route --write ollama` this needs no shell edit, and it cannot disturb
+  `ollama serve`: `aap run` only sets the child's environment, and a launched
+  `ollama serve` is left alone because it reads `OLLAMA_HOST` as its bind address.
+
 ### Providers & known issues
 
 `aap` redirects each agent's provider base URL through the proxy. How that redirect
@@ -353,6 +373,37 @@ works — and its caveats — differ per provider:
 - The daemon streams newline-delimited JSON labelled `application/json` (not
   `x-ndjson`); `aap` detects and parses it. Token usage comes from
   `prompt_eval_count`/`eval_count`; Ollama reports no cache tokens.
+
+### When requests seem to hang
+
+If an agent reports a call hanging, or requests are captured but the model is
+never called, the proxy is holding them somewhere. Ask it directly instead of
+restarting:
+
+```bash
+curl -s localhost:8080/health | jq
+curl -s localhost:8080/_control/inflight | jq
+```
+
+`/health` gives the summary: `inflight`, `queued`, `oldestQueuedMs`, and the
+same numbers per provider. `/health` returning `inflight` at `maxConcurrent`
+with `queued` above zero is the state that looks like "aap accepted my request
+but never called the model": every slot is taken, so new requests wait.
+
+`/_control/inflight` lists what is held, oldest first, with the phase:
+
+| phase        | meaning                                                                |
+| ------------ | ---------------------------------------------------------------------- |
+| `queued`     | waiting for a provider slot — check `maxConcurrent` in `[throttle]`    |
+| `connecting` | TCP/TLS handshake to the upstream hasn't finished                      |
+| `upstream`   | connected and streaming; `streamingMs` is how long it has been running |
+| `finishing`  | being torn down (client gone, timeout, or error)                       |
+
+`aap serve` also prints a `[throttle] queueing …` line when a request has to
+wait, and a `[proxy] upstream connect timeout after …` line when a handshake is
+abandoned. Raise `[throttle] maxConcurrent` when several agents share one proxy,
+and lower `[server] connectTimeoutMs` if a flaky network leaves handshakes
+hanging.
 
 ### Self-introspection via MCP
 

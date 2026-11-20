@@ -22,9 +22,14 @@ import {
   sessionIdFromHeaders,
 } from "./attribution.js";
 import { LruMap } from "./lru.js";
+import { InflightTracker, type InflightHandle } from "./inflight.js";
 import { parseRoute, isOllamaControlPath } from "./route.js";
 import { needsShaping, shapeRequestBody } from "./shape.js";
-import { Throttle } from "./throttle.js";
+import {
+  Throttle,
+  ThrottleAbortedError,
+  type ThrottleStats,
+} from "./throttle.js";
 
 const HOP_BY_HOP: ReadonlySet<string> = new Set([
   "connection",
@@ -46,6 +51,12 @@ const MAX_PREV_BODIES = 256;
 export interface ProxyState {
   activeBedrockSession: string | null;
   activeOllamaSession: string | null;
+}
+
+/** Everything the control plane needs to explain a stuck proxy. */
+export interface ProxyDiagnostics {
+  inflight: InflightTracker;
+  throttleStats: () => Record<string, ThrottleStats>;
 }
 
 export function createProxyServer(
@@ -79,10 +90,40 @@ export function createProxyServer(
     activeOllamaSession: null,
   };
 
-  const throttle = new Throttle(config.throttle);
+  // One throttle per provider: a slow or wedged upstream (a long Anthropic
+  // stream, a stuck Bedrock socket) must not consume the slots that the other
+  // providers' agents need. Created lazily so newly configured providers get
+  // one without restarting.
+  const throttles = new Map<string, Throttle>();
+  const throttleFor = (provider: string): Throttle => {
+    let throttle = throttles.get(provider);
+    if (!throttle) {
+      throttle = new Throttle(config.throttle);
+      throttles.set(provider, throttle);
+    }
+    return throttle;
+  };
   // Bounded so long-lived/idle sessions can't accumulate full request bodies
   // in memory. Only feeds the [cache] diagnostic, so eviction is harmless.
   const prevBodies: PrevBodies = new LruMap(MAX_PREV_BODIES);
+  // Live table of what the proxy is currently holding and where it is stuck, so
+  // a wedged serve can be diagnosed over HTTP instead of by restart.
+  const inflight = new InflightTracker();
+  const diagnostics: ProxyDiagnostics = {
+    inflight,
+    // Report every configured provider, not just the ones that have served
+    // traffic yet, so /health shows the cap you are comparing against.
+    throttleStats: (): Record<string, ThrottleStats> => {
+      const out: Record<string, ThrottleStats> = {};
+      for (const provider of providers) {
+        out[provider] = throttleFor(provider).stats();
+      }
+      for (const [provider, throttle] of throttles) {
+        if (!out[provider]) out[provider] = throttle.stats();
+      }
+      return out;
+    },
+  };
 
   return http.createServer((req, res) => {
     handle(
@@ -95,11 +136,38 @@ export function createProxyServer(
       capture,
       store,
       logger,
-      throttle,
+      throttleFor,
       prevBodies,
       search,
+      diagnostics,
     );
   });
+}
+
+/** Rate limiter for the "queueing" warning: one line per 5s is enough to spot a
+ * backlog building without flooding the terminal. */
+const QUEUE_WARN_INTERVAL_MS = 5_000;
+let lastQueueWarnAt = 0;
+
+function warnQueued(pathname: string, stats: ThrottleStats): void {
+  const now = Date.now();
+  if (now - lastQueueWarnAt < QUEUE_WARN_INTERVAL_MS) return;
+  lastQueueWarnAt = now;
+  process.stderr.write(
+    `[throttle] queueing ${pathname} — inflight=${stats.inflight}/${stats.maxConcurrent} ` +
+      `queued=${stats.queued} oldest=${stats.oldestQueuedMs}ms\n`,
+  );
+}
+
+/** Run a callback at most once: exactly one slot release per acquire, whichever
+ * tear-down path gets there first. */
+function once(fn: () => void): () => void {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    fn();
+  };
 }
 
 function handle(
@@ -112,16 +180,29 @@ function handle(
   capture?: Capture,
   store?: Store,
   logger?: RequestLogger,
-  throttle?: Throttle,
+  throttleFor: (provider: string) => Throttle = () =>
+    new Throttle(config.throttle),
   prevBodies?: PrevBodies,
   searchStore?: SearchStore | null,
+  diagnostics?: ProxyDiagnostics,
 ): void {
   const rawUrl = req.url ?? "/";
   const queryStart = rawUrl.indexOf("?");
   const pathname = queryStart === -1 ? rawUrl : rawUrl.slice(0, queryStart);
   const search = queryStart === -1 ? "" : rawUrl.slice(queryStart);
 
-  if (handleControl(req, res, pathname, registry, state, capture, prevBodies))
+  if (
+    handleControl(
+      req,
+      res,
+      pathname,
+      registry,
+      state,
+      capture,
+      prevBodies,
+      diagnostics,
+    )
+  )
     return;
   if (handleUi(req, res, pathname)) return;
   if (store && handleApi(req, res, pathname, store, searchStore)) return;
@@ -142,6 +223,7 @@ function handle(
     sendError(res, 404, `Unknown provider "${route.provider}"`);
     return;
   }
+  const throttle = throttleFor(route.provider);
 
   const method = req.method ?? "GET";
   const isKeepAlive = req.headers["x-aap-keep-alive"] === "1";
@@ -195,6 +277,7 @@ function handle(
     });
   }
 
+  const requestId = randomUUID();
   let trace: RequestTrace | undefined;
   // Control-plane calls (model list, health/account probes, model management)
   // are forwarded but not traced: they have no prompt or response to profile.
@@ -207,7 +290,7 @@ function handle(
     trace = capture.begin({
       sessionId:
         sessionId ?? capture.nextUnattributedSession(Date.now(), client),
-      requestId: randomUUID(),
+      requestId,
       provider: route.provider,
       method,
       path: pathname + search,
@@ -218,6 +301,19 @@ function handle(
       client,
     });
   }
+
+  // Live diagnostics entry, created as soon as the request is accepted. A
+  // request held behind a busy provider is then visible (with its wait time)
+  // instead of looking like a call that was captured but never forwarded.
+  const tracking = diagnostics?.inflight.begin({
+    id: requestId,
+    sessionId: sessionId ?? null,
+    provider: route.provider,
+    method,
+    path: pathname + search,
+    upstream: provider.upstream,
+    client: client ?? null,
+  });
 
   const extraHeaders: Record<string, string> = {};
   let cacheTtlUpgrade = false;
@@ -231,7 +327,12 @@ function handle(
     }
   }
 
+  // Exactly one slot release per acquire, whichever teardown path fires first.
+  const releaseSlot = once(() => throttle.release());
+
   const doForward = (): void => {
+    tracking?.started();
+    tracking?.phase("connecting");
     // Bedrock requires SigV4 re-signing — the original signature is for the proxy host.
     if (route.provider === "bedrock") {
       const upstreamUrl = new URL(provider.upstream);
@@ -240,8 +341,9 @@ function handle(
       const finish = () => {
         if (finished) return;
         finished = true;
-        throttle?.release();
+        releaseSlot();
         trace?.finish();
+        tracking?.end();
       };
       forwardBedrock(req, res, {
         upstreamHost: upstreamUrl.hostname,
@@ -250,8 +352,10 @@ function handle(
         extraHeaders:
           Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
         onRequestChunk: (chunk) => trace?.requestChunk(chunk),
-        onResponse: (status, headers) =>
-          trace?.response(status, undefined, headers as Record<string, string>),
+        onResponse: (status, headers) => {
+          tracking?.phase("upstream");
+          trace?.response(status, undefined, headers as Record<string, string>);
+        },
         onResponseChunk: (chunk) => trace?.responseChunk(chunk),
         onFinish: finish,
       });
@@ -262,10 +366,13 @@ function handle(
       trace,
       logger,
       extraHeaders,
-      throttle,
+      release: releaseSlot,
+      tracking,
       sessionId,
       prevBodies,
       cacheTtlUpgrade,
+      connectTimeoutMs: config.server.connectTimeoutMs,
+      timeoutMs: config.server.upstreamTimeoutMs,
       meta: {
         sessionId,
         provider: route.provider,
@@ -275,15 +382,44 @@ function handle(
     });
   };
 
-  if (throttle) {
-    throttle.acquire().then(doForward, (err: Error) => {
-      sendError(res, 503, err.message);
-      trace?.error("throttle", err.message);
-      trace?.finish();
-    });
-  } else {
-    doForward();
+  const before = throttle.stats();
+  if (before.inflight >= before.maxConcurrent || before.queued > 0) {
+    warnQueued(pathname, before);
   }
+
+  // A client that gives up while still queued must drop its place immediately:
+  // otherwise the entry (and its unfinished trace) sits there until the queue
+  // timeout, which is far longer than any client's patience.
+  const abort = new AbortController();
+  const onClientGone = (): void => abort.abort();
+  res.once("close", onClientGone);
+  req.once("aborted", onClientGone);
+
+  throttle.acquire(abort.signal).then(
+    () => {
+      res.removeListener("close", onClientGone);
+      req.removeListener("aborted", onClientGone);
+      // Backstop: forward() releases too, but it cannot if it throws before
+      // wiring its own teardown.
+      res.once("close", releaseSlot);
+      doForward();
+    },
+    (err: Error) => {
+      res.removeListener("close", onClientGone);
+      req.removeListener("aborted", onClientGone);
+      tracking?.end();
+      if (err instanceof ThrottleAbortedError) {
+        trace?.error("throttle", "client disconnected while queued");
+        trace?.finish();
+        return;
+      }
+      const stats = throttle.stats();
+      const detail = `${err.message} (inflight=${stats.inflight}/${stats.maxConcurrent} queued=${stats.queued})`;
+      sendError(res, 503, detail);
+      trace?.error("throttle", detail);
+      trace?.finish();
+    },
+  );
 }
 
 function handleControl(
@@ -294,9 +430,41 @@ function handleControl(
   state: ProxyState,
   capture?: Capture,
   prevBodies?: PrevBodies,
+  diagnostics?: ProxyDiagnostics,
 ): boolean {
   if (pathname === "/health") {
-    sendJson(res, 200, { status: "ok" });
+    // Kept backward compatible (`status`) but now says whether the proxy is
+    // holding anything: inflight === capacity with requests queued behind it is
+    // exactly the "it accepted my request but never called the model" state.
+    const stats = diagnostics?.throttleStats() ?? {};
+    const inflight = Object.values(stats).reduce(
+      (sum, s) => sum + s.inflight,
+      0,
+    );
+    const queued = Object.values(stats).reduce((sum, s) => sum + s.queued, 0);
+    sendJson(res, 200, {
+      status: "ok",
+      uptimeMs: Math.round(process.uptime() * 1000),
+      inflight,
+      queued,
+      oldestQueuedMs: Math.max(
+        0,
+        ...Object.values(stats).map((s) => s.oldestQueuedMs),
+      ),
+      providers: stats,
+    });
+    return true;
+  }
+  // Everything currently held, oldest first, with the phase it is in. Use this
+  // when agents say a call is hanging: "queued" means the provider's slots are
+  // busy, "connecting" means the upstream handshake has not completed,
+  // "upstream" means we are streaming a response back.
+  if (pathname === "/_control/inflight" && req.method === "GET") {
+    sendJson(res, 200, {
+      now: new Date().toISOString(),
+      throttle: diagnostics?.throttleStats() ?? {},
+      requests: diagnostics?.inflight.snapshot() ?? [],
+    });
     return true;
   }
   if (pathname === "/_control/sessions") {
@@ -382,8 +550,11 @@ interface ForwardObs {
   trace?: RequestTrace;
   logger?: RequestLogger;
   extraHeaders?: Record<string, string>;
-  throttle?: Throttle;
+  /** Idempotent: called exactly once when the request leaves the proxy. */
+  release?: () => void;
+  tracking?: InflightHandle;
   timeoutMs?: number;
+  connectTimeoutMs?: number;
   sessionId?: string | null;
   prevBodies?: PrevBodies;
   cacheTtlUpgrade?: boolean;
@@ -404,14 +575,18 @@ function forward(
     trace,
     logger,
     extraHeaders,
-    throttle,
+    release,
+    tracking,
     timeoutMs,
+    connectTimeoutMs,
     sessionId,
     prevBodies,
     cacheTtlUpgrade,
     meta,
   } = obs;
   const startedAt = Date.now();
+  const idleTimeoutMs = timeoutMs ?? 120_000;
+  const connectMs = connectTimeoutMs ?? 15_000;
   let status: number | null = null;
   let responseBytes = 0;
   let errorMessage: string | undefined;
@@ -420,7 +595,9 @@ function forward(
   const emitFinish = (): void => {
     if (finished) return;
     finished = true;
-    throttle?.release();
+    clearConnectTimer();
+    release?.();
+    tracking?.end();
     if (logger) {
       logger({
         ...meta,
@@ -431,6 +608,36 @@ function forward(
       });
     }
   };
+
+  let upstreamReq: http.ClientRequest | null = null;
+  let connectTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearConnectTimer = (): void => {
+    if (connectTimer === undefined) return;
+    clearTimeout(connectTimer);
+    connectTimer = undefined;
+  };
+
+  // Teardown is registered before the body is buffered, not after: a client
+  // that aborts while still uploading never reaches sendUpstream, and its
+  // throttle slot must still be released or the provider slowly loses
+  // capacity. emitFinish's `finished` guard makes repeated calls harmless.
+  res.on("finish", () => {
+    trace?.finish();
+    emitFinish();
+  });
+  res.on("close", () => {
+    if (!res.writableFinished) upstreamReq?.destroy();
+    trace?.finish();
+    emitFinish();
+  });
+  req.on("error", (err) => {
+    errorMessage ??= err.message;
+    emitFinish();
+  });
+  req.on("aborted", () => {
+    errorMessage ??= "client aborted";
+    emitFinish();
+  });
 
   let base: URL;
   try {
@@ -461,11 +668,14 @@ function forward(
   const transport = isHttps ? https : http;
 
   const sendUpstream = (body?: Buffer): void => {
+    // The client may have gone away while the body was being buffered.
+    if (finished) return;
     if (body) {
       headers["content-length"] = body.length.toString();
       trace?.requestChunk(body);
     }
-    const upstreamReq = transport.request(
+    tracking?.phase("connecting");
+    const request = transport.request(
       {
         protocol: base.protocol,
         hostname: base.hostname,
@@ -478,9 +688,11 @@ function forward(
         // down the healthy stream and surfaces as "Connection lost
         // mid-response" on the client. See bedrock.ts's STREAM_IDLE_TIMEOUT_MS
         // for the same issue observed on that path.
-        timeout: timeoutMs ?? 120_000,
+        timeout: idleTimeoutMs,
       },
       (upstreamRes) => {
+        clearConnectTimer();
+        tracking?.phase("upstream");
         status = upstreamRes.statusCode ?? 502;
         const outHeaders: OutgoingHttpHeaders = { ...upstreamRes.headers };
         for (const name of HOP_BY_HOP) delete outHeaders[name];
@@ -497,13 +709,64 @@ function forward(
           trace?.error("upstream-read", err.message);
           res.destroy();
         });
-        res.writeHead(status, upstreamRes.statusMessage, outHeaders);
+        try {
+          res.writeHead(status, upstreamRes.statusMessage, outHeaders);
+        } catch (err) {
+          // An upstream header Node refuses to forward must not become an
+          // uncaught throw: fail this request, keep serving the others.
+          errorMessage = `invalid upstream headers: ${(err as Error).message}`;
+          trace?.error("upstream-headers", errorMessage);
+          process.stderr.write(`[proxy] ${errorMessage}\n`);
+          upstreamRes.destroy();
+          res.destroy();
+          return;
+        }
+        // Send the headers before the body: a thinking model can hold the first
+        // chunk for a minute, and a client (or its TTFB timeout) would otherwise
+        // see nothing at all during that time.
+        res.flushHeaders();
         upstreamRes.pipe(res);
       },
     );
 
-    upstreamReq.on("timeout", () => upstreamReq.destroy());
-    upstreamReq.on("error", (err) => {
+    upstreamReq = request;
+
+    // A stalled TCP/TLS handshake is what actually wedges a local proxy: the
+    // socket sits in SYN_SENT (or mid-TLS) holding a provider slot, and the
+    // request's inactivity timeout may not fire until the OS gives up. Fail it
+    // fast and say so, instead of losing a slot for a minute or more.
+    connectTimer = setTimeout(() => {
+      connectTimer = undefined;
+      process.stderr.write(
+        `[proxy] upstream connect timeout after ${connectMs}ms: ${base.host}${fullPath}\n`,
+      );
+      tracking?.phase("finishing");
+      request.destroy(
+        new Error(`upstream connect timeout after ${connectMs}ms`),
+      );
+    }, connectMs);
+    request.on("socket", (socket) => {
+      if (!socket.connecting) {
+        clearConnectTimer();
+        return;
+      }
+      socket.once(isHttps ? "secureConnect" : "connect", clearConnectTimer);
+      socket.once("close", clearConnectTimer);
+    });
+
+    // Name the timeout so a wedge is identifiable from the request log: an
+    // idle-kill and a real upstream error otherwise look identical.
+    request.on("timeout", () => {
+      process.stderr.write(
+        `[proxy] upstream idle timeout after ${idleTimeoutMs}ms: ${base.host}${fullPath}\n`,
+      );
+      tracking?.phase("finishing");
+      request.destroy(
+        new Error(`upstream idle timeout after ${idleTimeoutMs}ms`),
+      );
+    });
+    request.on("error", (err) => {
+      clearConnectTimer();
       errorMessage = err.message;
       trace?.error("upstream", err.message);
       if (!res.headersSent) {
@@ -513,21 +776,11 @@ function forward(
       }
     });
 
-    res.on("finish", () => {
-      trace?.finish();
-      emitFinish();
-    });
-    res.on("close", () => {
-      if (!res.writableFinished) upstreamReq.destroy();
-      trace?.finish();
-      emitFinish();
-    });
-
     if (body) {
-      upstreamReq.end(body);
+      request.end(body);
     } else {
       if (trace) req.on("data", (chunk: Buffer) => trace.requestChunk(chunk));
-      req.pipe(upstreamReq);
+      req.pipe(request);
     }
   };
 
@@ -585,7 +838,7 @@ function forward(
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  if (res.headersSent) {
+  if (res.headersSent || res.writableEnded) {
     res.destroy();
     return;
   }
