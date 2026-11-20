@@ -320,6 +320,25 @@ aap run ollama pi -- -p "hello"                # args after the agent go after `
 - The model list comes from the daemon; a blank answer lets `ollama launch` ask.
 - Sessions are tagged `provider=ollama`, `launcher=ollama-launch`.
 
+#### Any other tool that reads `OLLAMA_HOST`
+
+`aap run` hands `OLLAMA_HOST` to whatever binary it launches, so a tool that drives the
+daemon directly — the native `/api/...` API or the OpenAI-compatible `/v1/...` one — is
+profiled with no config file of its own and no knowledge that the profiler exists:
+
+```
+aap serve
+aap run risk-review 123 --engine ollama     # risk-review's runner reads OLLAMA_HOST
+```
+
+- Requires `[providers.ollama]` in the config. The proxy routes `/api/...` and `/v1/...`
+  by path, so the child needs no `/<session>/<provider>` prefix.
+- The session is registered under the binary's own name, and attribution follows the
+  launch path: the child dials `<session>.localhost`, which the proxy maps back.
+- Unlike `aap route --write ollama` this needs no shell edit, and it cannot disturb
+  `ollama serve`: `aap run` only sets the child's environment, and a launched
+  `ollama serve` is left alone because it reads `OLLAMA_HOST` as its bind address.
+
 ### Providers & known issues
 
 `aap` redirects each agent's provider base URL through the proxy. How that redirect
