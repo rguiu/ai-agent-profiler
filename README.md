@@ -14,8 +14,9 @@ dashboard, not an enterprise proxy. See [`VISION.md`](VISION.md).
 On top of profiling, there are **shell hooks** that filter tool output before it
 enters context — `git status`, `grep`, `ls`, `find`, `node --test`, `npm test`.
 Unlike request rewriting (which destroys the provider's prompt cache), hooks never
-touch the API request body. Enable per session with `aap run --hooks`.
-See `aap hook help` for details.
+touch the API request body. Install them with `aap hook install` and put
+`~/.aap/bin` on your `PATH` (see
+[Shell hooks](#shell-hooks-tool-output-filtering)).
 
 **Live demo:** explore real captured sessions in a static, read-only clone of the
 dashboard — no install required: **https://rguiu.github.io/ai-agent-profiler/**
@@ -48,7 +49,7 @@ resolves a model id to a provider that must exist in its own config, so without 
 entry `ollama-cloud/<model>` — a model opencode knows from its catalog — is sent
 straight to ollama.com and the run is real but untraced. Clients that advertise no
 session id (pi, the Ollama CLI) are grouped per client and split after
-`[sessions].idleTimeoutMs` of silence.
+`[sessions].idleTimeoutMs` of silence. None of this metadata is ever sent to the LLM.
 
 `ollama launch <agent>` is the exception: it ignores those config files, because at
 launch time it hands the agent an inline config whose base URL is `OLLAMA_HOST + "/v1"`
@@ -59,27 +60,12 @@ marked block to `~/.zshrc` (or `~/.bashrc`) that defines a small `ollama` functi
 `ollama serve`, which uses `OLLAMA_HOST` as its bind address — runs untouched.
 Re-open the shell after writing, and `aap route --undo` removes only that block.
 
-A launch started by `aap run ollama …` is attributed per launch: `OLLAMA_HOST` can't
-carry a session ID in a path, so `aap run` dials `<session>.localhost` — a name RFC 6761
-reserves for loopback, so it needs no resolver or root — and the proxy maps that Host
-header back to the session it registered. A launch started from your own shell has no
-alias, so it is attributed by the agent's own session header when it sends one —
-opencode's `x-opencode-session`, stable across its subagents, keeps each launch in its
-own session. Agents that send none (pi, the Ollama CLI) land in a per-client
-`unattributed-pi-…` bucket instead of joining someone else's session.
-
-The optimisations `aap run` used to apply as child-process env survive routing: the
-`env` block it writes also carries `ENABLE_TOOL_SEARCH` (deferred tool schemas —
+The `env` block `aap route` writes also carries the Claude Code optimisations
+that used to be launcher-only: `ENABLE_TOOL_SEARCH` (deferred tool schemas —
 first-party Anthropic only), `CLAUDE_CODE_AUTO_MODE_SERVER=0` (off first-party
 Anthropic) and, with `aap route --write --cache-1h`, Claude Code's native one-hour
-prompt-cache TTL. Values you already export are respected; the same gating lives in
-`src/routing/claude-env.ts` for both paths.
-
-`aap run <agent>` still exists for the cases a config file can't express — an explicit
-session id in the base URL (benchmark pinning), `--meta` tags, the keep-alive ping, and
-the proxy-side cache-TTL rewrite for non-Claude clients — and it wins over the inferred
-attribution. `aap run ollama` remains the way to launch Claude Code on Ollama cloud,
-which ollama's own launcher cannot route. None of this metadata is ever sent to the LLM.
+prompt-cache TTL. Values you already export are respected; the same gating lives
+in `src/routing/claude-env.ts`.
 
 ## Features
 
@@ -160,8 +146,9 @@ cp config.example.toml ~/.aap/config.toml   # edit providers / pricing / storage
 ```
 aap install           # first-run: seeds ~/.aap/config.toml (safe to re-run)
 aap serve             # start the proxy + read API (prints a line per request)
-aap run <agent>       # launch an agent through the profiler, e.g. aap run claude
-                     #   tag a run: aap run --meta task=explain --meta iter=1 opencode
+aap route --write     # point claude/opencode/pi configs and ollama's launcher at the proxy
+                      #   then just run: claude / opencode / ollama launch opencode
+aap route --undo      # restore the backed-up originals
 aap parse [--all]    # derive token/cost/tool metrics from captured traces
 aap index [--all]    # build the full-text search index from captured traces
 aap import           # import agent-native transcripts (Claude Code, opencode) into search
@@ -211,28 +198,29 @@ inputPerMTok = 0.435
 outputPerMTok = 0.87
 ```
 
-Then launch opencode through the wrapper — no `opencode.json` edits needed:
+Then route opencode's config once and launch it normally:
 
 ```
 aap serve                       # terminal 1
-aap run opencode                # terminal 2, from your project
+aap route --write opencode      # once
+opencode                        # terminal 2, from your project
 ```
 
-`aap run opencode` injects an `OPENCODE_CONFIG_CONTENT` that routes each configured
-provider through the proxy. opencode still supplies the API key itself; the proxy only
-forwards it and redacts it from stored traces. If a provider's base path isn't `/v1`,
-set `apiPath` on its `[providers.<name>]` entry.
+`aap route --write opencode` writes each configured provider's `baseURL` into
+`~/.config/opencode/opencode.json`. opencode still supplies the API key itself; the
+proxy only forwards it and redacts it from stored traces. If a provider's base path
+isn't `/v1`, set `apiPath` on its `[providers.<name>]` entry.
 
-It also passes `--standalone`, because opencode 2.x otherwise attaches to a shared
-background service (`opencode serve --service`) that keeps the config and environment of
-whichever launch started it — the new launch's routing and chosen model would be
-silently ignored, and its traffic attributed to the old session. The trade-off is a
-private server per launch.
+opencode 2.x may attach to a shared background service (`opencode serve --service`)
+that keeps the config and environment of whichever launch started it, so the new
+launch's routing and chosen model can be silently ignored. `aap route` warns when it
+detects such a service, or an `OPENCODE_CONFIG_CONTENT` in the current environment
+(either one overrides the config file). If routing seems ignored, stop it from a
+clean shell:
 
-When you stop using `aap run` and rely on `aap route` instead, stop any service still
-holding a launcher's routing: `opencode service stop` from a clean shell. `aap route`
-warns when it detects such a service, or an `OPENCODE_CONFIG_CONTENT` in the current
-environment (either one overrides the config file).
+```
+opencode service stop
+```
 
 **Token & cost capture.** OpenAI-compatible providers omit the `usage` block from
 streaming responses unless the request opts in, which otherwise leaves token counts —
@@ -255,114 +243,60 @@ daemon handles model routing and (for cloud models) authentication:
 upstream = "http://127.0.0.1:11434"
 ```
 
-Then start the daemon and launch through the wrapper (`aap run ollama-cli` wraps the native `ollama` CLI; `aap run ollama` is the Claude Code launcher below):
+Then start the daemon, route `ollama launch`, and use it normally:
 
 ```
 ollama serve                    # local daemon on 127.0.0.1:11434
 aap serve                       # terminal 1
-aap run ollama-cli              # terminal 2 — pins the active ollama session
+aap route --write ollama        # once; then re-open the shell
+ollama launch opencode          # terminal 2 — traffic goes through the profiler
 ```
 
-`aap run ollama-cli` sets `OLLAMA_HOST` to the proxy and marks the session as the active
-Ollama session, so `/api/...` traffic is attributed to it. This works for both local
-models and cloud models (`*:cloud`) — the daemon relays cloud requests to `ollama.com`
-and authenticates via `~/.ollama/id_ed25519`. Pointing the upstream directly at
-`https://ollama.com` returns **401** (the CLI sends no cloud credentials to what it
-treats as a local daemon). See [Ollama specifics](#ollama-specifics) below for
-attribution and parsing caveats.
+`aap route --write ollama` adds a scoped `ollama` function to your shell profile, so
+`launch` runs with `OLLAMA_HOST` pointed at the proxy while `ollama serve` and other
+subcommands keep their own bind address. This works for both local models and cloud
+models (`*:cloud`) — the daemon relays cloud requests to `ollama.com` and authenticates
+via `~/.ollama/id_ed25519`. Pointing the upstream directly at `https://ollama.com`
+returns **401** (the CLI sends no cloud credentials to what it treats as a local
+daemon). See [Ollama specifics](#ollama-specifics) below for attribution and parsing
+caveats.
 
-### Claude Code + Ollama cloud
+#### `ollama launch` for pi and opencode
 
-`aap run ollama` launches Claude Code against Ollama cloud through the profiler, asking
-for the model the way `ollama launch claude` does:
-
-```
-export OLLAMA_API_KEY=...       # e.g. in ~/.zshrc; never written to config or disk
-aap serve                       # terminal 1
-aap run ollama                  # terminal 2 — lists your models, then starts Claude Code
-```
-
-- No config edit is needed: `ollama-cloud` (`https://ollama.com`) is a built-in provider.
-  Define `[providers.ollama-cloud]` yourself to override the upstream. Restart
-  `aap serve` after upgrading so it picks the built-in provider up.
-- Skip the prompt with `aap run ollama --model gpt-oss:120b`. Without a TTY (CI,
-  benchmarks) `--model` is required. Extra args go to Claude Code:
-  `aap run ollama --model gpt-oss:120b claude -p "hello"`.
-- If `OLLAMA_API_KEY` is unset, you're asked for it (hidden input, this run only).
-- All Claude model tiers (opus/sonnet/haiku) are pinned to the chosen model, and
-  `ENABLE_TOOL_SEARCH` is not forced on (Anthropic-only).
-- Sessions are tagged `provider=ollama-cloud` and `model=<name>`. Add a `[pricing.*]`
-  table for the model if you want cost estimates; otherwise cost stays empty.
-- `claude` goes straight to Ollama cloud; `pi` and `opencode` use the real launcher (below).
-
-#### pi / opencode via `ollama launch`
-
-There are two ways to route `ollama launch`. Without a wrapper, `aap route --write ollama`
-adds the scoped `ollama` function to your shell profile (see [How it works](#how-it-works)):
+`ollama launch` ignores the config files above: it builds the agent's inline config
+from `OLLAMA_HOST` at launch time, which also overrides the opencode/pi entries
+`aap route` writes. `aap route --write ollama` handles that by adding the scoped
+`ollama` function to your shell profile (see [How it works](#how-it-works)):
 
 ```
 aap route --write ollama   # once; then re-open the shell
 ollama launch opencode     # traffic goes through the profiler
 ```
 
-`aap run ollama pi` and `aap run ollama opencode` do the same for one launch, with
-`OLLAMA_HOST` pointed at the profiler only in the child's environment — useful when you
-don't want a profile edit, or want to pin the model from the command line:
-
-```
-aap run ollama pi                              # pick a model, then `ollama launch pi`
-aap run ollama --model gpt-oss:120b opencode   # skip the prompt
-aap run ollama pi -- -p "hello"                # args after the agent go after `--`
-```
-
 - Requires `[providers.ollama]` pointing at your local daemon (`ollama serve`); no
   `OLLAMA_API_KEY` is needed because the daemon authenticates cloud models itself.
-- The model list comes from the daemon; a blank answer lets `ollama launch` ask.
-- Sessions are tagged `provider=ollama`, `launcher=ollama-launch`.
-
-#### Any other tool that reads `OLLAMA_HOST`
-
-`aap run` hands `OLLAMA_HOST` to whatever binary it launches, so a tool that drives the
-daemon directly — the native `/api/...` API or the OpenAI-compatible `/v1/...` one — is
-profiled with no config file of its own and no knowledge that the profiler exists:
-
-```
-aap serve
-aap run risk-review 123 --engine ollama     # risk-review's runner reads OLLAMA_HOST
-```
-
-- Requires `[providers.ollama]` in the config. The proxy routes `/api/...` and `/v1/...`
-  by path, so the child needs no `/<session>/<provider>` prefix.
-- The session is registered under the binary's own name, and attribution follows the
-  launch path: the child dials `<session>.localhost`, which the proxy maps back.
-- Unlike `aap route --write ollama` this needs no shell edit, and it cannot disturb
-  `ollama serve`: `aap run` only sets the child's environment, and a launched
-  `ollama serve` is left alone because it reads `OLLAMA_HOST` as its bind address.
+- The function is scoped to `launch`, so `ollama serve` keeps its own bind address.
+- `ollama launch claude` is not routed this way; use opencode or pi for Ollama models.
 
 ### Providers & known issues
 
 `aap` redirects each agent's provider base URL through the proxy. How that redirect
 works — and its caveats — differ per provider:
 
-| Provider      | Routing                                                                                                                                                                     | Known issues                                                                                                                                                                      |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Anthropic** | `ANTHROPIC_BASE_URL` → `/<session>/anthropic`                                                                                                                               | —                                                                                                                                                                                 |
-| **OpenAI**    | `OPENAI_BASE_URL` → `/<session>/openai`                                                                                                                                     | —                                                                                                                                                                                 |
-| **DeepSeek**  | opencode only, via `OPENCODE_CONFIG_CONTENT`                                                                                                                                | Not routed for non-opencode agents (no base-URL env). Base path is `/v1`; set `apiPath` if different.                                                                             |
-| **Bedrock**   | Host-based `/model/...` (no session prefix); attributed to the active `meta.bedrock` session                                                                                | Requires SigV4 re-signing, so AWS creds / `AWS_PROFILE` must be available to `aap serve`. Concurrent Bedrock sessions can mis-attribute (routing is host-based, not per-session). |
-| **Ollama**    | Host-based `/api/...` and `/v1/...` (no session prefix); attributed to the active `meta.ollama` session. `aap route --write ollama` scopes `OLLAMA_HOST` to `ollama launch` | See below.                                                                                                                                                                        |
+| Provider      | Routing                                                                                                                    | Known issues                                                                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Anthropic** | `~/.claude/settings.json` `env.ANTHROPIC_BASE_URL` → `/anthropic`                                                          | —                                                                                                                                                              |
+| **OpenAI**    | `~/.claude/settings.json` `env.OPENAI_BASE_URL` → `/openai`                                                                | —                                                                                                                                                              |
+| **DeepSeek**  | opencode only, via `~/.config/opencode/opencode.json`                                                                      | Not routed for non-opencode agents (no base-URL env). Base path is `/v1`; set `apiPath` if different.                                                          |
+| **Bedrock**   | Host-based `/model/...` (no provider path); `aap route` writes `ANTHROPIC_BEDROCK_BASE_URL` with `[providers.bedrock]`     | Requires SigV4 re-signing, so AWS creds / `AWS_PROFILE` must be available to `aap serve`. Sessions are attributed by Claude Code's `x-claude-code-session-id`. |
+| **Ollama**    | Host-based `/api/...` and `/v1/...` (no provider path); `aap route --write ollama` scopes `OLLAMA_HOST` to `ollama launch` | See below.                                                                                                                                                     |
 
 #### Ollama specifics
 
-- `OLLAMA_HOST` accepts only scheme+host+port (no path), so requests can't carry a
-  `/<session>/` prefix. `aap run ollama …` gives each launch its own
-  `<session>.localhost` name and registers it as the session's `meta.alias`; the proxy
-  attributes a prefix-less `/api` or `/v1` request to the Host it dialled. RFC 6761
-  reserves that TLD for loopback, and `aap run` probes it first — where the OS resolver
-  doesn't implement it, `aap` falls back to pinning the session (`meta.ollama`) for the
-  next prefix-less request, which is ambiguous when two agents run at once. Either way,
-  traffic with no alias — a plain `ollama launch …` — is grouped per client, like the
-  other launcher-less agents.
+- `OLLAMA_HOST` accepts only scheme+host+port (no path), so those requests can't carry
+  a `/<session>/` prefix. They are attributed by the agent's own session header when it
+  sends one (Claude Code, opencode); pi and the Ollama CLI send none, so their traffic
+  is grouped per client and split after `[sessions].idleTimeoutMs`.
 - `ollama launch <agent>` builds the agent's base URL from `OLLAMA_HOST` when it starts,
   overriding the provider entries `aap route` writes for opencode/pi. That is why
   `aap route --write ollama` writes a shell function instead of a config file, and why
@@ -431,20 +365,21 @@ Add it to `opencode.json`:
 ## Shell hooks (tool output filtering)
 
 Path-based wrappers in `~/.aap/bin/` that filter tool output before it enters the
-agent context. Never touches the API request body or the prompt cache. Hooks are
-on/off per session — pass `--hooks` to `aap run` to activate.
+agent context. Never touches the API request body or the prompt cache.
 
 ```
-aap hook install          # install 7 wrappers (git, ls, grep, node, find, cat, npm)
+aap hook install          # install 8 wrappers (git, ls, grep, node, find, cat, npm, cargo)
+echo 'export PATH="$HOME/.aap/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 aap hook status           # show installed hooks
 ```
 
-When hooks are active (`aap run --hooks` or `AAP_HOOK_MODE=true`), `~/.aap/bin`
-is prepended to PATH. The wrappers filter output:
+Open a new shell, and the wrappers are active for every command in that shell. They
+filter output:
 
 - **git** — `status` (short), `diff` (tail -80), `log` (oneline -15), `show` (stat)
 - **node** — `--test` strips passing tests, keeps failure details + diagnostics
 - **npm** — `test`/`run build`/`run lint`/`run typecheck` → errors only, tail -10 on failure
+- **cargo** — `test`/`build`/`check` → errors and failures only
 - **grep/rg** — tail -40 lines
 - **ls, find, cat** — truncated output (head -40 / head -60)
 
@@ -452,19 +387,18 @@ is prepended to PATH. The wrappers filter output:
 
 **1h cache TTL (via `--cache-1h`).** Claude Code always requests the 5-minute
 cache. Costs 2× input on write vs 1.25× for 5m but survives 12× longer — wins when
-idle gaps fall between 5 min and 1 hour. There are two ways to get it:
+idle gaps fall between 5 min and 1 hour. Write it into Claude Code's own settings:
 
-- `aap route --write --cache-1h claude` writes Claude Code's own `promptCacheTtl` and
-  `subagentPromptCacheTtl` settings — no launcher, and the bytes are the client's.
-- `aap run claude --cache-1h` sets `meta.cache_ttl=1h` and the proxy rewrites
-  `cache_control` markers to 1h before forwarding (the only option for non-Claude
-  clients, and for Claude Code versions without the settings key).
+```
+aap route --write --cache-1h claude
+```
 
-**Keep-alive.** `AAP_KEEP_ALIVE=1 aap run claude` replays the last request with
-`max_tokens: 1` to prevent cache expiry during idle. Best with `--cache-1h` (pings
-every 48 min vs every 4 min).
+That sets `promptCacheTtl` and `subagentPromptCacheTtl`, so the request bytes stay the
+client's own and subagents, compaction and title requests match the main conversation.
+`aap route` leaves an already-routed client untouched, so run `aap route --undo` first
+if you routed it before enabling the TTL.
 
-These are the only proxy-level optimizations. An earlier effort to rewrite request
+This is the only proxy-level optimization. An earlier effort to rewrite request
 bodies (stripping tools, summarising history, collapsing system prompts) was found
 to be counterproductive on cached providers — any edit to the byte prefix forces an
 expensive cache rebuild. The design is documented for reference:
