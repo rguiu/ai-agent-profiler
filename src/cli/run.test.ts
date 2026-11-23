@@ -124,15 +124,31 @@ describe("buildProviderEnv", () => {
     expect(env.OLLAMA_HOST).toBeUndefined();
   });
 
-  it("does not set OLLAMA_HOST for non-ollama agents", () => {
+  it("hands OLLAMA_HOST to any launched tool, not just the ollama CLI", () => {
     const withOllama: Pick<Config, "providers"> = {
-      providers: { ollama: { upstream: "https://ollama.com" } },
+      providers: { ollama: { upstream: "http://127.0.0.1:11434" } },
     };
     const env = buildProviderEnv(
-      "claude",
+      "risk-review",
       withOllama,
       "http://localhost:8080",
       "sid1",
+    );
+    expect(env.OLLAMA_HOST).toBe("http://localhost:8080");
+  });
+
+  it("leaves ollama serve on its own OLLAMA_HOST, which is its bind address", () => {
+    const withOllama: Pick<Config, "providers"> = {
+      providers: { ollama: { upstream: "http://127.0.0.1:11434" } },
+    };
+    const env = buildProviderEnv(
+      "ollama-cli",
+      withOllama,
+      "http://localhost:8080",
+      "sid1",
+      undefined,
+      "http://localhost:8080",
+      ["serve"],
     );
     expect(env.OLLAMA_HOST).toBeUndefined();
   });

@@ -38,14 +38,26 @@ const upstreamHandler: http.RequestListener = (req, res) => {
     }, 10);
     return;
   }
+  if (req.url === "/hold") {
+    // Headers now, body never: holds the provider's throttle slot until the
+    // test ends the response.
+    heldResponse = res;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.flushHeaders();
+    return;
+  }
   res.writeHead(404);
   res.end("nope");
 };
+
+let heldResponse: http.ServerResponse | null = null;
 
 async function startStack(
   logger?: (entry: RequestLogEntry) => void,
   options: {
     providers?: (upstreamPort: number) => Config["providers"];
+    throttle?: Config["throttle"];
+    connectTimeoutMs?: number;
     store?: Store;
   } = {},
 ): Promise<{ proxyPort: number }> {
@@ -53,7 +65,12 @@ async function startStack(
   const upstreamPort = await listen(upstream);
   servers.push(upstream);
 
-  const config = buildConfig(upstreamPort, options.providers?.(upstreamPort));
+  const config = buildConfig(
+    upstreamPort,
+    options.providers?.(upstreamPort),
+    options.throttle,
+    options.connectTimeoutMs,
+  );
   const proxy = createProxyServer(
     config,
     new SessionRegistry(),
@@ -69,16 +86,27 @@ async function startStack(
 function buildConfig(
   upstreamPort: number,
   providers?: Config["providers"],
+  throttle?: Config["throttle"],
+  connectTimeoutMs?: number,
 ): Config {
   return {
-    server: { port: 0, host: "127.0.0.1" },
+    server: {
+      port: 0,
+      host: "127.0.0.1",
+      connectTimeoutMs: connectTimeoutMs ?? 5_000,
+      upstreamTimeoutMs: 120_000,
+    },
     sessions: { idleTimeoutMs: 300_000 },
     storage: { dir: "data" },
     providers: providers ?? {
       test: { upstream: `http://127.0.0.1:${upstreamPort}` },
     },
     pricing: {},
-    throttle: { maxConcurrent: 8, maxQueued: 64, timeoutMs: 180000 },
+    throttle: throttle ?? {
+      maxConcurrent: 8,
+      maxQueued: 64,
+      timeoutMs: 180000,
+    },
     search: { enabled: false, intervalMs: 5000, batchSize: 50 },
   };
 }
@@ -295,5 +323,233 @@ describe("control endpoint", () => {
     const res = await fetch(`http://127.0.0.1:${proxyPort}/health`);
     expect(res.status).toBe(200);
     expect(((await res.json()) as { status: string }).status).toBe("ok");
+  });
+});
+
+describe("slots", () => {
+  const twoProviders = (upstreamPort: number): Config["providers"] => ({
+    slow: { upstream: `http://127.0.0.1:${upstreamPort}` },
+    fast: { upstream: `http://127.0.0.1:${upstreamPort}` },
+  });
+
+  it("keeps a held stream on one provider from blocking another", async () => {
+    const { proxyPort } = await startStack(undefined, {
+      providers: twoProviders,
+      throttle: { maxConcurrent: 1, maxQueued: 4, timeoutMs: 2000 },
+    });
+
+    const holding = new Promise<void>((resolve) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port: proxyPort,
+          path: "/slow/hold",
+          method: "POST",
+        },
+        (res) => {
+          res.resume();
+          resolve();
+        },
+      );
+      req.on("error", () => resolve());
+      req.end("{}");
+    });
+    await holding;
+
+    const started = Date.now();
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/fast/echo`, {
+      method: "POST",
+      body: "x",
+    });
+    expect(await res.text()).toContain("path=/echo");
+    expect(Date.now() - started).toBeLessThan(1000);
+
+    heldResponse?.end();
+    heldResponse = null;
+  });
+
+  it("releases the slot when a client aborts a shaped upload", async () => {
+    const { proxyPort } = await startStack(undefined, {
+      providers: (upstreamPort) => ({
+        openai: { upstream: `http://127.0.0.1:${upstreamPort}` },
+      }),
+      throttle: { maxConcurrent: 1, maxQueued: 4, timeoutMs: 1000 },
+    });
+
+    // Shaped routes buffer the body before contacting the upstream. Abort while
+    // the upload is still in flight so sendUpstream is never reached.
+    await new Promise<void>((resolve) => {
+      const req = http.request({
+        host: "127.0.0.1",
+        port: proxyPort,
+        path: "/openai/v1/chat/completions",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": "1000",
+        },
+      });
+      req.on("error", () => resolve());
+      req.write('{"stream":true,');
+      setTimeout(() => {
+        req.destroy();
+        resolve();
+      }, 50);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/openai/echo`, {
+      method: "POST",
+      body: "x",
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("diagnostics", () => {
+  it("reports throttle pressure and the held request over /health", async () => {
+    const { proxyPort } = await startStack(undefined, {
+      providers: (upstreamPort) => ({
+        slow: { upstream: `http://127.0.0.1:${upstreamPort}` },
+      }),
+      throttle: { maxConcurrent: 1, maxQueued: 4, timeoutMs: 5000 },
+    });
+
+    await new Promise<void>((resolve) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port: proxyPort,
+          path: "/slow/hold",
+          method: "POST",
+        },
+        (res) => {
+          res.resume();
+          resolve();
+        },
+      );
+      req.on("error", () => resolve());
+      req.end("{}");
+    });
+
+    const health = (await (
+      await fetch(`http://127.0.0.1:${proxyPort}/health`)
+    ).json()) as {
+      status: string;
+      inflight: number;
+      queued: number;
+      providers: Record<string, { inflight: number; maxConcurrent: number }>;
+    };
+    expect(health.status).toBe("ok");
+    expect(health.inflight).toBe(1);
+    expect(health.queued).toBe(0);
+    expect(health.providers.slow?.maxConcurrent).toBe(1);
+
+    const detail = (await (
+      await fetch(`http://127.0.0.1:${proxyPort}/_control/inflight`)
+    ).json()) as {
+      requests: Array<{ phase: string; path: string; ageMs: number }>;
+    };
+    expect(detail.requests).toHaveLength(1);
+    expect(detail.requests[0]?.phase).toBe("upstream");
+    expect(detail.requests[0]?.path).toBe("/slow/hold");
+    expect(detail.requests[0]?.ageMs).toBeGreaterThanOrEqual(0);
+
+    heldResponse?.end();
+    heldResponse = null;
+  });
+
+  it("drops a queued request when its client disconnects", async () => {
+    const { proxyPort } = await startStack(undefined, {
+      providers: (upstreamPort) => ({
+        slow: { upstream: `http://127.0.0.1:${upstreamPort}` },
+      }),
+      // Long queue timeout: without abort handling the slot stays taken.
+      throttle: { maxConcurrent: 1, maxQueued: 4, timeoutMs: 60_000 },
+    });
+
+    // Occupy the only slot.
+    await new Promise<void>((resolve) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port: proxyPort,
+          path: "/slow/hold",
+          method: "POST",
+        },
+        (res) => {
+          res.resume();
+          resolve();
+        },
+      );
+      req.on("error", () => resolve());
+      req.end("{}");
+    });
+
+    // Queue a second request, then abandon it while it waits.
+    const queued = http.request({
+      host: "127.0.0.1",
+      port: proxyPort,
+      path: "/slow/echo",
+      method: "POST",
+    });
+    queued.on("error", () => {});
+    queued.end("{}");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const during = (await (
+      await fetch(`http://127.0.0.1:${proxyPort}/_control/inflight`)
+    ).json()) as { requests: Array<{ phase: string }> };
+    expect(during.requests.some((r) => r.phase === "queued")).toBe(true);
+
+    queued.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const after = (await (
+      await fetch(`http://127.0.0.1:${proxyPort}/_control/inflight`)
+    ).json()) as { throttle: Record<string, { queued: number }> };
+    expect(after.throttle.slow?.queued).toBe(0);
+
+    heldResponse?.end();
+    heldResponse = null;
+  });
+
+  it("fails a stalled TLS handshake instead of holding the slot", async () => {
+    // Accept the TCP connection but never answer the TLS handshake, so the
+    // socket sits mid-handshake exactly like a black-holed upstream.
+    const net = await import("node:net");
+    const blackhole = net.createServer(() => {
+      /* never write */
+    });
+    const blackholePort = await new Promise<number>((resolve) =>
+      blackhole.listen(0, "127.0.0.1", () =>
+        resolve((blackhole.address() as AddressInfo).port),
+      ),
+    );
+
+    try {
+      const { proxyPort } = await startStack(undefined, {
+        providers: () => ({
+          tls: { upstream: `https://127.0.0.1:${blackholePort}` },
+        }),
+        connectTimeoutMs: 200,
+      });
+
+      const started = Date.now();
+      const res = await fetch(`http://127.0.0.1:${proxyPort}/tls/v1/chat`, {
+        method: "POST",
+        body: "{}",
+      });
+      expect(res.status).toBe(502);
+      expect(Date.now() - started).toBeLessThan(3000);
+      expect(await res.text()).toContain("connect timeout");
+
+      const health = (await (
+        await fetch(`http://127.0.0.1:${proxyPort}/health`)
+      ).json()) as { inflight: number };
+      expect(health.inflight).toBe(0);
+    } finally {
+      blackhole.close();
+    }
   });
 });

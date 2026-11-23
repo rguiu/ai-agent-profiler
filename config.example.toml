@@ -5,6 +5,13 @@
 [server]
 port = 8080
 host = "127.0.0.1"
+# Fail a stalled upstream TCP/TLS handshake fast (ms). A black-holed connection
+# otherwise holds a concurrency slot until the OS gives up, and enough of them
+# make the proxy look hung: requests are accepted and captured but never sent.
+connectTimeoutMs = 15000
+# Socket-inactivity cap once the request is streaming (ms). Long enough for
+# extended thinking and large tool-use payloads to pause between chunks.
+upstreamTimeoutMs = 120000
 
 [sessions]
 # Start a new "unattributed" session after this many ms of inactivity
@@ -14,6 +21,20 @@ idleTimeoutMs = 300000
 [storage]
 # Directory for the SQLite index (aap.sqlite) and raw NDJSON traces (traces/).
 dir = "data"
+
+[throttle]
+# Per-provider concurrency cap. Every request holds a slot for the whole
+# response stream, so this is what bounds how many agents can talk at once
+# without the proxy queueing them. Raise it when several agents share one
+# proxy; keep it at or below what the upstream account allows (public Ollama
+# plans cap simultaneous requests per account, for example).
+maxConcurrent = 8
+# Requests that may wait for a slot before the proxy answers 503 backpressure.
+maxQueued = 64
+# How long a request may wait for a slot before it fails with 503 (ms).
+timeoutMs = 180000
+# When this starts to matter, `aap serve` prints a `[throttle] queueing ...`
+# line, and GET /health plus GET /_control/inflight show what is held and why.
 
 [search]
 # Full-text search index over captured traces (search.sqlite, FTS5).

@@ -8,6 +8,13 @@ export const providerSchema = z.object({
 export const serverSchema = z.object({
   port: z.number().int().positive().default(8080),
   host: z.string().default("127.0.0.1"),
+  // A stalled TCP/TLS handshake used to hold an upstream slot until the OS gave
+  // up (~75s) or the request timeout fired (120s). Failed handshakes are routine
+  // on flaky/VPN networks, so fail them fast and free the slot.
+  connectTimeoutMs: z.number().int().positive().default(15_000),
+  // Socket inactivity cap once the request is on the wire. Extended thinking and
+  // large tool-use payloads can pause well over a minute before the next chunk.
+  upstreamTimeoutMs: z.number().int().positive().default(120_000),
 });
 
 export const sessionsSchema = z.object({
@@ -26,6 +33,10 @@ export const modelPricingSchema = z.object({
 });
 
 export const throttleSchema = z.object({
+  // Per-provider concurrency cap. Every request holds a slot for the whole
+  // response stream, so this bounds how many agents can talk at once before the
+  // proxy starts queueing them. Several agents sharing one proxy routinely
+  // exceed the default, so raise it (the proxy logs when it queues).
   maxConcurrent: z.number().int().positive().default(8),
   maxQueued: z.number().int().positive().default(64),
   timeoutMs: z.number().int().positive().default(180_000),

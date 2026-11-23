@@ -27,15 +27,21 @@ const PROVIDER_ENV: Readonly<Record<string, string>> = {
   openai: "OPENAI_BASE_URL",
 };
 
+/** `ollama serve` reads `OLLAMA_HOST` as its bind address, not its upstream. */
+function isOllamaDaemon(agent: string, agentArgs: string[]): boolean {
+  return agent === "ollama-cli" && agentArgs[0] === "serve";
+}
+
 export function buildProviderEnv(
   agent: string,
   config: Pick<Config, "providers">,
   origin: string,
   sessionId: string,
   env?: NodeJS.ProcessEnv,
-  /** `OLLAMA_HOST` for the ollama CLI: the session's loopback alias when the
-   * proxy binds a wildcard address, otherwise the shared origin. */
+  /** `OLLAMA_HOST` for the child: the session's loopback alias when the proxy
+   * binds a wildcard address, otherwise the shared origin. */
   hostOrigin: string = origin,
+  agentArgs: string[] = [],
 ): Record<string, string> {
   if (agent === "opencode") {
     const provider: Record<string, { options: { baseURL: string } }> = {};
@@ -54,11 +60,13 @@ export function buildProviderEnv(
     if (varName) out[varName] = `${origin}/${sessionId}/${name}`;
   }
 
-  // Ollama CLI talks to its native API and only honours OLLAMA_HOST (scheme+
-  // host+port, no path). Point it at the proxy; requests are attributed to this
-  // session by the `<session>.localhost` name it dials (see run()), or by
-  // meta.ollama when that name doesn't resolve.
-  if (agent === "ollama-cli" && config.providers.ollama) {
+  // Ollama takes its base URL from OLLAMA_HOST (scheme+host+port, no path) — the
+  // native API and the OpenAI-compatible /v1 alike — so it is the only lever for
+  // a client that can't carry a provider prefix. That covers the CLI, `ollama
+  // launch`, and a tool driving the daemon itself, so hand it to every child.
+  // Requests are attributed to this session by the `<session>.localhost` name it
+  // dials (see run()), or by meta.ollama when that name doesn't resolve.
+  if (config.providers.ollama && !isOllamaDaemon(agent, agentArgs)) {
     out.OLLAMA_HOST = hostOrigin;
   }
 
@@ -228,11 +236,16 @@ export async function run(args: string[]): Promise<void> {
       sessionId,
       process.env,
       ollamaHostOrigin,
+      agentArgs,
     );
   if (overrides.ANTHROPIC_BEDROCK_BASE_URL) {
     meta.bedrock = "1";
   }
-  if (overrides.OLLAMA_HOST) {
+  // Every child now receives OLLAMA_HOST, but only an ollama-flavoured launch
+  // asserts that it is the session a prefix-less request belongs to. Anything
+  // else is attributed by the `<session>.localhost` alias it dials.
+  const ollamaLauncher = ollamaPlan !== null || agent === "ollama-cli";
+  if (overrides.OLLAMA_HOST && ollamaLauncher) {
     if (overrides.OLLAMA_HOST === origin) {
       // The OS wouldn't resolve `<session>.localhost`, so the proxy falls back
       // to pinning this session for prefix-less /api and /v1 paths.

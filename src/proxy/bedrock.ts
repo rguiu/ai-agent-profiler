@@ -51,7 +51,9 @@ async function resolveCredentials(profile?: string): Promise<Credentials> {
 
   const args = ["configure", "export-credentials", "--format", "process"];
   if (profile) args.push("--profile", profile);
-  const { stdout } = await execFileAsync("aws", args);
+  // A wedged SSO/keychain prompt here would otherwise block the whole Bedrock
+  // path: no request is sent, so nothing else times it out.
+  const { stdout } = await execFileAsync("aws", args, { timeout: 10_000 });
   const parsed = JSON.parse(stdout) as {
     AccessKeyId: string;
     SecretAccessKey: string;

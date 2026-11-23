@@ -64,8 +64,10 @@ const USER_AGENT_CLIENTS: ReadonlyArray<[RegExp, string]> = [
   [/^claude-(cli|code)/i, "claude"],
   [/^opencode\//i, "opencode"],
   [/^pi(-coding-agent)?\//i, "pi"],
+  [/^stackpilot\//i, "stackpilot"],
   [/^ollama\//i, "ollama-cli"],
   [/^aws-sdk-/i, "aws-sdk"],
+  [/^python-httpx\//i, "httpx"],
 ];
 
 function clientFromUserAgent(userAgent: string | null): string | null {
