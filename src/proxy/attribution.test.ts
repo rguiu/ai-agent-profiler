@@ -23,6 +23,24 @@ describe("sessionIdFromHeaders", () => {
     ).toBe("benchmark-run-1");
   });
 
+  it("can ignore the generic x-aap-session channel", () => {
+    expect(
+      sessionIdFromHeaders(
+        {
+          "x-aap-session": "some-internal-app-122",
+          "x-opencode-session": "ses_root",
+        },
+        { includeExplicit: false },
+      ),
+    ).toBe("ses_root");
+    expect(
+      sessionIdFromHeaders(
+        { "x-aap-session": "some-internal-app-122" },
+        { includeExplicit: false },
+      ),
+    ).toBeNull();
+  });
+
   it("reads opencode's root session id, not the subagent child", () => {
     expect(
       sessionIdFromHeaders({
@@ -81,6 +99,18 @@ describe("clientFromHeaders", () => {
         "user-agent": "claude-cli/2.1.13 (external, cli)",
       }),
     ).toBe("pi");
+  });
+
+  it("can ignore the generic x-aap-client channel", () => {
+    expect(
+      clientFromHeaders(
+        {
+          "x-aap-client": "some-internal-app",
+          "user-agent": "python-httpx/0.28.1",
+        },
+        { includeExplicit: false },
+      ),
+    ).toBe("httpx");
   });
 
   it("rejects an unsafe x-aap-client value instead of storing it", () => {

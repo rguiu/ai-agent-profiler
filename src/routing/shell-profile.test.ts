@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   OLLAMA_BLOCK_BEGIN,
   OLLAMA_BLOCK_END,
+  ollamaBaseUrl,
   ollamaShellBlock,
   ollamaShellState,
   removeOllamaBlock,
@@ -35,6 +36,13 @@ describe("ollamaShellBlock", () => {
     expect(block).not.toMatch(/^\s*export\s+OLLAMA_HOST=/m);
     expect(block.startsWith(OLLAMA_BLOCK_BEGIN)).toBe(true);
     expect(block.endsWith(OLLAMA_BLOCK_END)).toBe(true);
+  });
+
+  it("exports the /v1 base URL for clients that build their own request", () => {
+    expect(ollamaShellBlock(ORIGIN)).toContain(
+      `export OLLAMA_BASE_URL='${ORIGIN}/v1'`,
+    );
+    expect(ollamaBaseUrl(`${ORIGIN}/`)).toBe(`${ORIGIN}/v1`);
   });
 });
 
@@ -94,13 +102,32 @@ describe("removeOllamaBlock", () => {
 });
 
 describe("ollamaShellState", () => {
-  it("reports the origin in the managed block", () => {
+  it("reports the origin and base URL in the managed block", () => {
     const text = upsertOllamaBlock("export EDITOR=vim\n", ORIGIN);
     expect(ollamaShellState(text)).toEqual({
       managed: true,
       managedOrigin: ORIGIN,
+      managedBaseUrl: `${ORIGIN}/v1`,
       exportedOrigin: null,
     });
+  });
+
+  it("reports a block written before OLLAMA_BASE_URL was exported", () => {
+    const legacy = [
+      OLLAMA_BLOCK_BEGIN,
+      "ollama() {",
+      '  if [ "$1" = "launch" ]; then',
+      `    OLLAMA_HOST='${ORIGIN}' command ollama "$@"`,
+      "  else",
+      '    command ollama "$@"',
+      "  fi",
+      "}",
+      OLLAMA_BLOCK_END,
+    ].join("\n");
+    const state = ollamaShellState(legacy);
+
+    expect(state.managedOrigin).toBe(ORIGIN);
+    expect(state.managedBaseUrl).toBeNull();
   });
 
   it("spots a user's own export outside the block", () => {
@@ -108,6 +135,7 @@ describe("ollamaShellState", () => {
     expect(ollamaShellState(text)).toEqual({
       managed: false,
       managedOrigin: null,
+      managedBaseUrl: null,
       exportedOrigin: OTHER,
     });
   });

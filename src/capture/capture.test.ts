@@ -256,6 +256,27 @@ describe("FileCapture end-to-end", () => {
     expect(readSession(dbPath, "ses_root1")?.client).toBe("opencode");
   });
 
+  it("records a direct Ollama client as an Ollama session, not under its own name", async () => {
+    const { proxyPort, dbPath } = await startStack({ ollama: true });
+
+    await (
+      await fetch(`http://127.0.0.1:${proxyPort}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "x-aap-client": "some-internal-app",
+          "x-aap-session": "some-internal-app-122",
+          "user-agent": "python-httpx/0.28.1",
+        },
+        body: "{}",
+      })
+    ).text();
+
+    const row = await waitFor(() => readFinishedRequest(dbPath));
+    expect(row.session_id.startsWith("unattributed-ollama-")).toBe(true);
+    expect(row.session_id).not.toContain("some-internal-app");
+    expect(readSession(dbPath, row.session_id)?.client).toBe("ollama");
+  });
+
   it("keeps concurrent opencode launches in separate sessions", async () => {
     const { proxyPort, dbPath } = await startStack({ ollama: true });
 

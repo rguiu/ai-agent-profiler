@@ -24,6 +24,7 @@ import {
   opencodeServiceProbe,
 } from "../routing/opencode-service.js";
 import {
+  ollamaBaseUrl,
   ollamaShellState,
   removeOllamaBlock,
   shellProfilePath,
@@ -224,22 +225,29 @@ function printOpenCodeRoutingHazards(
 }
 
 /**
- * Route `ollama launch <agent>`. Unlike Claude Code, opencode and pi, ollama
- * takes no config file of its own for this: it builds the agent's inline config
- * from `OLLAMA_HOST` at launch time, which overrides the provider entries
- * `aap route` writes for opencode/pi. The only lever is the environment, so the
- * managed block lives in the login profile and scopes the redirect to `launch`.
+ * Route `ollama launch <agent>` and the direct HTTP clients. Unlike Claude
+ * Code, opencode and pi, ollama takes no config file of its own for this: it
+ * builds the agent's inline config from `OLLAMA_HOST` at launch time, which
+ * overrides the provider entries `aap route` writes for opencode/pi. The only
+ * lever is the environment, so the managed block lives in the login profile and
+ * scopes the redirect to `launch`. `OLLAMA_BASE_URL` is exported alongside it
+ * because clients that build the request themselves read that variable and
+ * never run `ollama launch`.
  *
  * Returns the profile path when this run changed it.
  */
 function routeOllama(origin: string, write: boolean): string | null {
   const home = homedir();
   const path = shellProfilePath(home, process.env);
+  const baseUrl = ollamaBaseUrl(origin);
   console.log(
     `\n${label("ollama")}  ${path === null ? `(unsupported $SHELL "${process.env.SHELL ?? ""}")` : displayPath(path)}`,
   );
 
-  const block = `ollama() { … OLLAMA_HOST='${origin}' command ollama "$@" … }  # \`launch\` only`;
+  const block = [
+    `export OLLAMA_BASE_URL='${baseUrl}'  # HTTP clients`,
+    `ollama() { … OLLAMA_HOST='${origin}' command ollama "$@" … }  # \`launch\` only`,
+  ].join("  +  ");
   if (path === null) {
     console.log(`  state:  not routed`);
     console.log(`  patch:  ${block}`);
@@ -252,7 +260,7 @@ function routeOllama(origin: string, write: boolean): string | null {
   const text = existsSync(path) ? readFileSync(path, "utf8") : "";
   const state = ollamaShellState(text);
   const routed = state.managed
-    ? state.managedOrigin === origin
+    ? state.managedOrigin === origin && state.managedBaseUrl === baseUrl
     : state.exportedOrigin === origin;
   console.log(`  state:  ${ollamaStateLabel(state, origin, routed)}`);
   console.log(`  patch:  ${block}`);
@@ -296,7 +304,10 @@ function ollamaStateLabel(
       : `routed (OLLAMA_HOST exported in this file)`;
   }
   if (state.managed) {
-    return `routed to ${state.managedOrigin ?? "an unreadable value"} — not ${origin} (will be updated)`;
+    if (state.managedOrigin !== origin) {
+      return `routed to ${state.managedOrigin ?? "an unreadable value"} — not ${origin} (will be updated)`;
+    }
+    return `missing OLLAMA_BASE_URL=${ollamaBaseUrl(origin)} (will be updated)`;
   }
   if (state.exportedOrigin) {
     return `not routed — OLLAMA_HOST is exported to ${state.exportedOrigin}`;

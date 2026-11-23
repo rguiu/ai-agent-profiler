@@ -48,6 +48,17 @@ type PrevBodies = LruMap<string, { body: string; path: string }>;
 /** Cap on distinct sessions holding a cached previous body in memory. */
 const MAX_PREV_BODIES = 256;
 
+/** Clients that keep their own name for Ollama traffic. Everything else — a
+ * plain HTTP client, or an app that declares itself through `x-aap-client` —
+ * is recorded as an Ollama session instead of surfacing the app's name. */
+const OLLAMA_NAMED_CLIENTS: ReadonlySet<string> = new Set([
+  "claude",
+  "opencode",
+  "pi",
+  "stackpilot",
+  "ollama-cli",
+]);
+
 export interface ProxyState {
   activeBedrockSession: string | null;
   activeOllamaSession: string | null;
@@ -232,16 +243,29 @@ function handle(
   // alias) wins, then the id the client advertises itself, then the single
   // active Bedrock/Ollama pin. That is what lets a client reach the proxy with
   // a constant base URL and no launcher — see `aap route`.
-  const client = clientFromHeaders(req.headers);
-  const headerSessionId = sessionIdFromHeaders(req.headers);
+  const isOllama =
+    route.provider === "ollama" || route.provider === "ollama-cloud";
+  const detectedClient = clientFromHeaders(req.headers, {
+    includeExplicit: !isOllama,
+  });
+  // Direct `/v1` and `/api` clients are recorded as Ollama sessions. A client
+  // that names itself through `x-aap-client` cannot turn its app name into an
+  // AAP session; known agents keep their own label so `ollama launch
+  // opencode/pi/claude` still looks like that agent.
+  const client =
+    isOllama && (!detectedClient || !OLLAMA_NAMED_CLIENTS.has(detectedClient))
+      ? "ollama"
+      : detectedClient;
+  const headerSessionId = sessionIdFromHeaders(req.headers, {
+    includeExplicit: !isOllama,
+  });
   // A launcher-started ollama agent dials `<session>.localhost`; that name is
   // the session id OLLAMA_HOST cannot carry in a path. It beats the pin, so a
   // second launch never merges into whichever session `aap run` started earlier.
-  const aliasSessionId =
-    route.provider === "ollama"
-      ? (registry.byOllamaAlias(sessionAliasFromHeaders(req.headers) ?? "")
-          ?.id ?? null)
-      : null;
+  const aliasSessionId = isOllama
+    ? (registry.byOllamaAlias(sessionAliasFromHeaders(req.headers) ?? "")?.id ??
+      null)
+    : null;
   // route.sessionId is either an explicit path pin (benchmarking, `aap run`) or
   // one of the single-slot pins (Bedrock, Ollama). A pin is only a fallback: an
   // agent that advertises its own id (opencode's x-opencode-session) has finer
@@ -252,7 +276,7 @@ function handle(
     route.sessionId !== null && pathname.startsWith(`/${route.sessionId}/`);
   const explicitSessionId = isExplicitPathPin ? route.sessionId : null;
   const pinSessionId = isExplicitPathPin ? null : route.sessionId;
-  const clientSessionId = route.provider === "ollama" ? headerSessionId : null;
+  const clientSessionId = isOllama ? headerSessionId : null;
   const sessionId =
     explicitSessionId ??
     aliasSessionId ??

@@ -24,6 +24,14 @@ const EXPORTED_OLLAMA_HOST_RE =
 /** Origin the managed block assigns, when there is one. */
 const MANAGED_ORIGIN_RE = /OLLAMA_HOST=(?:"([^"]+)"|'([^']+)')/;
 
+/** Base URL the block exports for clients that build their own HTTP request. */
+const MANAGED_BASE_URL_RE = /OLLAMA_BASE_URL=(?:"([^"]+)"|'([^']+)')/;
+
+/** OpenAI-compatible base URL for a proxy origin (`OLLAMA_HOST` carries no path). */
+export function ollamaBaseUrl(origin: string): string {
+  return `${origin.replace(/\/+$/, "")}/v1`;
+}
+
 /** Login profile for `$SHELL`, or null for a shell we can't edit safely. */
 export function shellProfilePath(
   home: string,
@@ -47,6 +55,9 @@ export function ollamaShellBlock(origin: string): string {
     "# it starts, so the provider entries `aap route` writes for opencode and pi",
     "# never apply. Scoped to `launch`: `ollama serve` reads OLLAMA_HOST for its",
     "# bind address and has to keep its own.",
+    "# Clients that build the HTTP request themselves only read OLLAMA_BASE_URL,",
+    "# so the proxy's `/v1` is exported too.",
+    `export OLLAMA_BASE_URL='${ollamaBaseUrl(origin)}'`,
     "ollama() {",
     '  if [ "$1" = "launch" ]; then',
     `    OLLAMA_HOST='${origin}' command ollama "$@"`,
@@ -63,6 +74,9 @@ export interface OllamaShellState {
   managed: boolean;
   /** Origin the managed block assigns (null when absent or unparseable). */
   managedOrigin: string | null;
+  /** `OLLAMA_BASE_URL` the managed block exports (null when absent — an
+   *  older block, written before that export existed). */
+  managedBaseUrl: string | null;
   /** Origin of the user's own `export OLLAMA_HOST=…`, if the profile has one. */
   exportedOrigin: string | null;
 }
@@ -84,6 +98,7 @@ export function ollamaShellState(text: string): OllamaShellState {
   return {
     managed: managed !== null,
     managedOrigin: managed === null ? null : managedOriginIn(managed.body),
+    managedBaseUrl: managed === null ? null : managedBaseUrlIn(managed.body),
     exportedOrigin,
   };
 }
@@ -147,5 +162,10 @@ function managedRange(text: string): ManagedRange | null {
 
 function managedOriginIn(body: string): string | null {
   const match = MANAGED_ORIGIN_RE.exec(body);
+  return match?.[1] ?? match?.[2] ?? null;
+}
+
+function managedBaseUrlIn(body: string): string | null {
+  const match = MANAGED_BASE_URL_RE.exec(body);
   return match?.[1] ?? match?.[2] ?? null;
 }

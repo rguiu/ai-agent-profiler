@@ -42,11 +42,21 @@ function headerValue(
   return trimmed.length > 0 ? trimmed : null;
 }
 
-/** Session id advertised by the client, or null when it doesn't send one. */
+/** Session id advertised by the client, or null when it doesn't send one.
+ *
+ * `includeExplicit: false` drops the generic `x-aap-session` channel and keeps
+ * only the ids real agents advertise. Ollama uses that: a plain `/v1` client
+ * should be recorded as an Ollama session, not under whatever name the app
+ * decided to put in a header. */
 export function sessionIdFromHeaders(
   headers: IncomingHttpHeaders,
+  opts: { includeExplicit?: boolean } = {},
 ): string | null {
-  for (const name of SESSION_HEADERS) {
+  const names =
+    opts.includeExplicit === false
+      ? SESSION_HEADERS.filter((name) => name !== "x-aap-session")
+      : SESSION_HEADERS;
+  for (const name of names) {
     const value = headerValue(headers, name);
     if (
       value &&
@@ -87,15 +97,22 @@ function clientFromUserAgent(userAgent: string | null): string | null {
   return null;
 }
 
-/** Which agent is talking: `x-aap-client` when set, else derived from the UA. */
-export function clientFromHeaders(headers: IncomingHttpHeaders): string | null {
-  const explicit = headerValue(headers, "x-aap-client");
-  if (
-    explicit &&
-    explicit.length <= MAX_CLIENT_LEN &&
-    SAFE_CLIENT_RE.test(explicit)
-  ) {
-    return explicit;
+/** Which agent is talking: `x-aap-client` when set, else derived from the UA.
+ * `includeExplicit: false` ignores `x-aap-client` and trusts only the user
+ * agent, so an app cannot name the Ollama session it happens to open. */
+export function clientFromHeaders(
+  headers: IncomingHttpHeaders,
+  opts: { includeExplicit?: boolean } = {},
+): string | null {
+  if (opts.includeExplicit !== false) {
+    const explicit = headerValue(headers, "x-aap-client");
+    if (
+      explicit &&
+      explicit.length <= MAX_CLIENT_LEN &&
+      SAFE_CLIENT_RE.test(explicit)
+    ) {
+      return explicit;
+    }
   }
   return clientFromUserAgent(headerValue(headers, "user-agent"));
 }
