@@ -81,8 +81,8 @@ export function buildProviderEnv(
 }
 
 // A caller passing `--tools ""` (or `--tools=`) to claude wants a genuinely
-// tool-less, non-agentic call (e.g. risk-review's single schema-validated
-// review pass). ENABLE_TOOL_SEARCH defers tool *schemas*, which is meaningless
+// tool-less, non-agentic call (e.g. a single schema-validated pass).
+// ENABLE_TOOL_SEARCH defers tool *schemas*, which is meaningless
 // — and was observed to still push the full tool-definition block into the
 // request — when the caller has already asked for zero tools.
 function explicitlyNoTools(agentArgs: string[]): boolean {

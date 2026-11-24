@@ -129,7 +129,7 @@ describe("buildProviderEnv", () => {
       providers: { ollama: { upstream: "http://127.0.0.1:11434" } },
     };
     const env = buildProviderEnv(
-      "risk-review",
+      "my-agent",
       withOllama,
       "http://localhost:8080",
       "sid1",

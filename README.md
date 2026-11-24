@@ -49,7 +49,10 @@ resolves a model id to a provider that must exist in its own config, so without 
 entry `ollama-cloud/<model>` — a model opencode knows from its catalog — is sent
 straight to ollama.com and the run is real but untraced. Clients that advertise no
 session id (pi, the Ollama CLI) are grouped per client and split after
-`[sessions].idleTimeoutMs` of silence. None of this metadata is ever sent to the LLM.
+`[sessions].idleTimeoutMs` of silence. Direct clients of the Ollama endpoint are
+recorded as `unattributed-ollama-…`: the generic `x-aap-client` / `x-aap-session`
+headers are not used there, so an unrelated app's name never becomes an AAP
+session. None of this metadata is ever sent to the LLM.
 
 `ollama launch <agent>` is the exception: it ignores those config files, because at
 launch time it hands the agent an inline config whose base URL is `OLLAMA_HOST + "/v1"`
@@ -57,8 +60,11 @@ launch time it hands the agent an inline config whose base URL is `OLLAMA_HOST +
 setting the environment for the `ollama` process, so `aap route --write ollama` adds a
 marked block to `~/.zshrc` (or `~/.bashrc`) that defines a small `ollama` function:
 `launch` runs with `OLLAMA_HOST` pointed at the proxy, everything else — notably
-`ollama serve`, which uses `OLLAMA_HOST` as its bind address — runs untouched.
-Re-open the shell after writing, and `aap route --undo` removes only that block.
+`ollama serve`, which uses `OLLAMA_HOST` as its bind address — runs untouched. The same
+block exports `OLLAMA_BASE_URL` (the proxy's `/v1`), because clients that build the HTTP
+request themselves rather than going through `ollama launch` read that variable instead,
+and it cannot disturb the daemon's bind address. Re-open the shell after writing, and
+`aap route --undo` removes only that block.
 
 The `env` block `aap route` writes also carries the Claude Code optimisations
 that used to be launcher-only: `ENABLE_TOOL_SEARCH` (deferred tool schemas —
@@ -254,7 +260,9 @@ ollama launch opencode          # terminal 2 — traffic goes through the profil
 
 `aap route --write ollama` adds a scoped `ollama` function to your shell profile, so
 `launch` runs with `OLLAMA_HOST` pointed at the proxy while `ollama serve` and other
-subcommands keep their own bind address. This works for both local models and cloud
+subcommands keep their own bind address. The same block exports `OLLAMA_BASE_URL` at the
+proxy's `/v1`, which is how clients that make the HTTP call themselves are routed as
+well. This works for both local models and cloud
 models (`*:cloud`) — the daemon relays cloud requests to `ollama.com` and authenticates
 via `~/.ollama/id_ed25519`. Pointing the upstream directly at `https://ollama.com`
 returns **401** (the CLI sends no cloud credentials to what it treats as a local
@@ -283,13 +291,13 @@ ollama launch opencode     # traffic goes through the profiler
 `aap` redirects each agent's provider base URL through the proxy. How that redirect
 works — and its caveats — differ per provider:
 
-| Provider      | Routing                                                                                                                    | Known issues                                                                                                                                                   |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Anthropic** | `~/.claude/settings.json` `env.ANTHROPIC_BASE_URL` → `/anthropic`                                                          | —                                                                                                                                                              |
-| **OpenAI**    | `~/.claude/settings.json` `env.OPENAI_BASE_URL` → `/openai`                                                                | —                                                                                                                                                              |
-| **DeepSeek**  | opencode only, via `~/.config/opencode/opencode.json`                                                                      | Not routed for non-opencode agents (no base-URL env). Base path is `/v1`; set `apiPath` if different.                                                          |
-| **Bedrock**   | Host-based `/model/...` (no provider path); `aap route` writes `ANTHROPIC_BEDROCK_BASE_URL` with `[providers.bedrock]`     | Requires SigV4 re-signing, so AWS creds / `AWS_PROFILE` must be available to `aap serve`. Sessions are attributed by Claude Code's `x-claude-code-session-id`. |
-| **Ollama**    | Host-based `/api/...` and `/v1/...` (no provider path); `aap route --write ollama` scopes `OLLAMA_HOST` to `ollama launch` | See below.                                                                                                                                                     |
+| Provider      | Routing                                                                                                                                                                          | Known issues                                                                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Anthropic** | `~/.claude/settings.json` `env.ANTHROPIC_BASE_URL` → `/anthropic`                                                                                                                | —                                                                                                                                                              |
+| **OpenAI**    | `~/.claude/settings.json` `env.OPENAI_BASE_URL` → `/openai`                                                                                                                      | —                                                                                                                                                              |
+| **DeepSeek**  | opencode only, via `~/.config/opencode/opencode.json`                                                                                                                            | Not routed for non-opencode agents (no base-URL env). Base path is `/v1`; set `apiPath` if different.                                                          |
+| **Bedrock**   | Host-based `/model/...` (no provider path); `aap route` writes `ANTHROPIC_BEDROCK_BASE_URL` with `[providers.bedrock]`                                                           | Requires SigV4 re-signing, so AWS creds / `AWS_PROFILE` must be available to `aap serve`. Sessions are attributed by Claude Code's `x-claude-code-session-id`. |
+| **Ollama**    | Host-based `/api/...` and `/v1/...` (no provider path); `aap route --write ollama` scopes `OLLAMA_HOST` to `ollama launch` and exports `OLLAMA_BASE_URL` for direct HTTP clients | See below.                                                                                                                                                     |
 
 #### Ollama specifics
 
@@ -302,6 +310,11 @@ works — and its caveats — differ per provider:
   `aap route --write ollama` writes a shell function instead of a config file, and why
   the block is scoped to `launch`: `ollama serve` reads `OLLAMA_HOST` to pick its bind
   address and must keep using its own.
+- A client that builds the HTTP request itself never runs `ollama launch`, so
+  `OLLAMA_HOST` alone would not reach it. The block therefore also exports
+  `OLLAMA_BASE_URL` at the proxy's `/v1`; any HTTP client that honours that variable is
+  traced with no wrapper and no per-command prefix. The Ollama CLI ignores it, so
+  `serve`/`pull`/`run` are unaffected.
 - `aap route` writes the loopback form (`127.0.0.1`) even when `[server].host` is a
   wildcard (`0.0.0.0`), because a bind address is not something an agent can dial.
 - The daemon streams newline-delimited JSON labelled `application/json` (not

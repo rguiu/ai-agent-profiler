@@ -209,7 +209,7 @@ describe("aap route", () => {
 describe("aap route ollama", () => {
   const profile = (): string => join(home, ".zshrc");
 
-  it("routes `ollama launch` from the login profile and undoes just its block", async () => {
+  it("routes `ollama launch` and direct HTTP clients, and undoes just its block", async () => {
     writeFileSync(profile(), "export EDITOR=vim\n");
 
     await route(["--write", "ollama"]);
@@ -217,11 +217,36 @@ describe("aap route ollama", () => {
     expect(written).toContain("export EDITOR=vim");
     expect(written).toContain("ollama() {");
     expect(written).toContain("OLLAMA_HOST='http://127.0.0.1:1'");
+    // Clients that build their own request read this variable instead, so the
+    // daemon route is traced too.
+    expect(written).toContain("export OLLAMA_BASE_URL='http://127.0.0.1:1/v1'");
     // A bare export would also move `ollama serve`'s bind address.
     expect(written).not.toMatch(/^\s*export\s+OLLAMA_HOST=/m);
 
     await route(["--undo"]);
     expect(readFileSync(profile(), "utf8")).toBe("export EDITOR=vim\n");
+  });
+
+  it("upgrades a block written before OLLAMA_BASE_URL was exported", async () => {
+    const legacy = [
+      "# >>> aap route: ollama >>>",
+      "ollama() {",
+      '  if [ "$1" = "launch" ]; then',
+      "    OLLAMA_HOST='http://127.0.0.1:1' command ollama \"$@\"",
+      "  else",
+      '    command ollama "$@"',
+      "  fi",
+      "}",
+      "# <<< aap route: ollama <<<",
+      "",
+    ].join("\n");
+    writeFileSync(profile(), legacy);
+
+    await route(["--write", "ollama"]);
+    const written = readFileSync(profile(), "utf8");
+
+    expect(written).toContain("export OLLAMA_BASE_URL='http://127.0.0.1:1/v1'");
+    expect(written.match(/aap route: ollama >>>/g)).toHaveLength(1);
   });
 
   it("is idempotent", async () => {
